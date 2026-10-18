@@ -49,6 +49,12 @@ enum class TileMenuCommand : UINT {
     // 用「基址 + 下标」而不是给每页一个固定 ID：页数不限，
     // 固定 ID 表根本写不全。
     MoveToTabBase = 3040,
+
+    // ---- 复制到其他标签页 ----
+    //
+    // 与移动同一条「基址 + 目标页下标」规则；基址必须离开移动段的
+    // 32 个 ID（kMaxTabMenuEntries），否则 app 层的区间解码会串线。
+    CopyToTabBase = 3080,
 };
 
 // 弹出磁贴右键菜单，返回用户选择的命令。

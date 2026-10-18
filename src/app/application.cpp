@@ -37,6 +37,11 @@ constexpr UINT kTrayMenuShowHide = 2001;
 constexpr UINT kTrayMenuStartup = 2002;
 constexpr UINT kTrayMenuExit = 2003;
 constexpr UINT kTrayMenuSettings = 2004;
+
+// 磁贴菜单「移动/复制到其他页面」子菜单的最大条目数。
+// 必须与 tile_context_menu.cpp 的 kMaxTabMenuEntries 一致 ——
+// app 层按「基址 + 这么多条」解码命令 ID 区间。
+constexpr std::size_t kTileMenuTabEntries = 32;
 constexpr UINT kTrayMenuAbout = 2005;
 
 HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
@@ -552,6 +557,9 @@ bool Application::initializeWindow() {
     launcherWindow_->setAlwaysShowTileLabels(
         config_.appearance.alwaysShowTileLabels);
     launcherWindow_->setTabBarAtBottom(config_.appearance.tabBarAtBottom);
+    // 图标统一缩放（首次显示前生效）
+    launcherWindow_->setTileIconScalePercent(
+        static_cast<int>(config_.appearance.iconScalePercent));
 
     // 窗口出现位置：策略 + 上次拖动坐标（「上一次的位置」用）。
     // 必须在首次 show() 之前设好，否则第一次唤出会按默认策略摆。
@@ -708,11 +716,19 @@ void Application::handleItemContextMenu(const HWND owner,
     const ui::TileMenuCommand command =
         ui::showTileContextMenu(owner, cursor, item, tabNames, activeTab);
 
-    // ---- 「移动到其他页面」：命令 ID = 基址 + 目标页下标 ----
+    // ---- 「移动到其他页面 / 复制到其他页面」：命令 ID = 各自基址 + 目标页下标。
+    // 两个区间必须显式判断边界 —— 只判 >= moveBase 会把复制段也吞进移动。
     const auto moveBase = static_cast<std::size_t>(ui::TileMenuCommand::MoveToTabBase);
+    const auto copyBase = static_cast<std::size_t>(ui::TileMenuCommand::CopyToTabBase);
     const auto commandId = static_cast<std::size_t>(command);
-    if (commandId >= moveBase) {
+    if (commandId >= moveBase &&
+        commandId < moveBase + kTileMenuTabEntries) {
         applyItemMoveToTab(itemIndex, commandId - moveBase);
+        return;
+    }
+    if (commandId >= copyBase &&
+        commandId < copyBase + kTileMenuTabEntries) {
+        applyItemCopyToTab(itemIndex, commandId - copyBase);
         return;
     }
 
@@ -850,6 +866,35 @@ void Application::applyItemMoveToTab(const std::size_t itemIndex,
     persistItems();
 }
 
+void Application::applyItemCopyToTab(const std::size_t itemIndex,
+                                     const std::size_t targetTab) {
+    if (!launcherWindow_) {
+        return;
+    }
+
+    const std::size_t activeTab = launcherWindow_->activeTabIndex();
+    core::ItemsDocument updated = launcherWindow_->document();
+
+    // 复制件必须是全新身份：生成新 id（失败回落 fallback-tick-seq，
+    // 与手工添加项目同一套兜底）。
+    std::string newId = platform::win32::createGuidString();
+    if (newId.empty()) {
+        newId = "copy-" + std::to_string(GetTickCount64()) + "-" +
+                std::to_string(itemIndex);
+    }
+    if (!core::copyItemToTab(updated, activeTab, itemIndex, targetTab,
+                             newId)) {
+        return;  // 同页 / 下标越界：什么都不做
+    }
+
+    launcherWindow_->setDocument(std::move(updated));
+    launcherWindow_->recomputeLayout();
+    launcherWindow_->refresh();
+
+    document_ = launcherWindow_->document();
+    persistItems();
+}
+
 void Application::applyItemEdit(const HWND owner,
                                 const std::size_t itemIndex,
                                 const core::LaunchItem& item) {
@@ -875,6 +920,7 @@ void Application::applyItemEdit(const HWND owner,
     initial.runAsAdministrator = item.runAsAdministrator;
     initial.tileSize = item.tileSize;
     initial.labelMode = item.labelMode;
+    initial.iconScalePercent = item.iconScalePercent;
     // 初值 = 当前所在页：用户在哪一页上右键，改的就是哪一页的东西。
     initial.tabIndex = launcherWindow_->activeTabIndex();
 
@@ -889,7 +935,8 @@ void Application::applyItemEdit(const HWND owner,
     ui::ItemEditorFields result;
     if (!ui::showItemEditorDialog(
             owner, tabNames, initial.tabIndex, initial,
-            launcherWindow_->alwaysShowTileLabels(), &result)) {
+            launcherWindow_->alwaysShowTileLabels(),
+            static_cast<int>(config_.appearance.iconScalePercent), &result)) {
         return;  // 用户取消
     }
 
@@ -907,6 +954,7 @@ void Application::applyItemEdit(const HWND owner,
     fields.runAsAdministrator = result.runAsAdministrator;
     fields.tileSize = result.tileSize;
     fields.labelMode = result.labelMode;
+    fields.iconScalePercent = result.iconScalePercent;
 
     const std::size_t activeTab = launcherWindow_->activeTabIndex();
 
@@ -965,7 +1013,8 @@ void Application::applyItemAdd(const HWND owner,
     ui::ItemEditorFields result;
     if (!ui::showItemEditorDialog(
             owner, tabNames, initial.tabIndex, initial,
-            launcherWindow_->alwaysShowTileLabels(), &result,
+            launcherWindow_->alwaysShowTileLabels(),
+            static_cast<int>(config_.appearance.iconScalePercent), &result,
             ui::ItemEditorMode::Create)) {
         return;  // 用户取消
     }
@@ -1221,6 +1270,9 @@ void Application::openSettings() {
     preview.tileOpacityChanged = [this](const int percent) {
         launcherWindow_->setTileOpacityPercent(percent);
     };
+    preview.iconScaleChanged = [this](const int percent) {
+        launcherWindow_->setTileIconScalePercent(percent);
+    };
 
     // ---- 统计当前布局实际占用的行列，用于「缩小网格」的提示 ----
     //
@@ -1258,6 +1310,7 @@ void Application::openSettings() {
         // 这里换成皮肤实际的 alpha 百分比，滑块才停在观感对应的位置。
         launcherWindow_->windowOpacityPercent(),
         launcherWindow_->effectiveTileOpacityPercent(),
+        static_cast<int>(config_.appearance.iconScalePercent),
         columnsInUse,
         rowsInUse,
         &result,
@@ -1284,6 +1337,8 @@ void Application::openSettings() {
             static_cast<int>(config_.appearance.windowOpacityPercent));
         launcherWindow_->setTileOpacityPercent(
             static_cast<int>(config_.appearance.tileOpacityPercent));
+        launcherWindow_->setTileIconScalePercent(
+            static_cast<int>(config_.appearance.iconScalePercent));
         return;
     }
 
@@ -1430,6 +1485,14 @@ void Application::openSettings() {
     if (result.tileOpacityPercent.has_value()) {
         config_.appearance.tileOpacityPercent = *result.tileOpacityPercent;
         launcherWindow_->setTileOpacityPercent(*result.tileOpacityPercent);
+        configChanged = true;
+    }
+
+    // ---- 图标统一缩放 ----
+    // 只改绘制矩形，下一帧重绘即生效，布局与窗口尺寸都不动。
+    if (result.iconScalePercent.has_value()) {
+        config_.appearance.iconScalePercent = *result.iconScalePercent;
+        launcherWindow_->setTileIconScalePercent(*result.iconScalePercent);
         configChanged = true;
     }
 

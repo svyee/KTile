@@ -106,6 +106,10 @@ struct ItemEditFields {
     // 同样用 optional：没有值时不动原设置，避免别的调用方顺手构造
     // ItemEditFields 时把用户单独设过的「移入时显示」悄悄重置成默认值。
     std::optional<TileLabelMode> labelMode;
+
+    // 图标相对磁贴的显示比例（%）。0 = 跟随全局设置；
+    // 50~100 = 本项覆盖。nullopt 时不动原值。
+    std::optional<int> iconScalePercent;
 };
 
 // 把对话框提交的字段写回某个磁贴。

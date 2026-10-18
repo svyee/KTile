@@ -64,6 +64,14 @@ constexpr int kLabelModeComboX = 88;
 constexpr int kLabelModeComboY = 262;
 constexpr int kLabelModeComboWidth = 112;
 
+// 图标大小（每块磁贴独立覆盖全局设置）。放在「标题显示」下面，
+// 同属「这块磁贴长什么样」的一组；滑块初值跟随全局，勾选「按统一设置」
+// 时置灰。
+constexpr int kIconScaleCheckY = 294;
+constexpr int kIconScaleSliderY = 318;
+constexpr int kIconScaleSliderWidth = 64;   // 88..152，别越过右列 x=212
+constexpr int kIconScaleValueX = 158;
+
 // 右列
 constexpr int kLabelX = 212;
 constexpr int kLabelWidth = 78;
@@ -98,6 +106,9 @@ constexpr int kResetIconId = 1014;   // 「重置图标」
 // 1015 原为「类型」只读提示行 —— 已按反馈移除，类型本来就不需要用户关心
 constexpr int kLabelModeId = 1016;   // 标题显示方式下拉
 constexpr int kBuiltinPickId = 1017; // 「系统项...」— 选内置命令/系统位置
+constexpr int kIconScaleCheckId = 1018;  // 「按统一设置」勾选框
+constexpr int kIconScaleSliderId = 1019; // 图标大小滑块（50~100）
+constexpr int kIconScaleValueId = 1020;  // 图标大小数值显示
 // 保存/取消直接用 IDOK / IDCANCEL：IsDialogMessageW 处理回车/Esc 时
 // 对普通窗口发送的就是这两个 ID，按钮点击也发同 ID，一套处理两处来源。
 
@@ -389,6 +400,10 @@ struct EditorDialogState {
     core::TileLabelMode labelMode = core::TileLabelMode::FollowGlobal;
     bool globalAlwaysShowLabels = true;
 
+    // 图标大小：本项覆盖值（0 = 按统一设置）+ 设置里的全局值（%）。
+    int iconScalePercent = 0;
+    int globalIconScale = 90;
+
     // 已解码的图标像素 + 供 AlphaBlend 使用的预乘 DIB。
     // pixelsKey 记录这些像素来自哪个来源，避免每次重绘都重新解码
     // （解码要走 WIC 开文件，几十毫秒级，放在 WM_PAINT 里会拖慢重绘）。
@@ -540,6 +555,25 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                      reinterpret_cast<LPARAM>(core::tileLabelModeName(
                          core::tileLabelModeFromIndex(index))));
     }
+
+    // ---- 左列：图标大小（每块磁贴单独覆盖全局设置）----
+    addControl(dialog, L"BUTTON", L"按统一设置", BS_AUTOCHECKBOX | WS_TABSTOP,
+               kPreviewX, kIconScaleCheckY, kResetIconWidth, 20,
+               kIconScaleCheckId, font);
+    addControl(dialog, L"STATIC", L"图标大小：", 0, kPreviewX,
+               kIconScaleSliderY + 3, 68, kLabelHeight, 0, font);
+    HWND scaleSlider = addControl(dialog, L"msctls_trackbar32", L"",
+                                  WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+                                  kSizeComboX, kIconScaleSliderY,
+                                  kIconScaleSliderWidth, 24,
+                                  kIconScaleSliderId, font);
+    SendMessageW(scaleSlider, TBM_SETRANGE, TRUE,
+                 MAKELPARAM(50, 100));  // 50% ~ 100%，与设置窗口同一范围
+    SendMessageW(scaleSlider, TBM_SETLINESIZE, 0, 5);
+    SendMessageW(scaleSlider, TBM_SETPAGESIZE, 0, 10);
+    addControl(dialog, L"STATIC", L"", 0, kIconScaleValueX,
+               kIconScaleSliderY + 3, 44, kLabelHeight,
+               kIconScaleValueId, font);
 
     // ---- 右列：名称 ----
     label(L"名称：", kLabelX, 20, kLabelWidth);
@@ -928,6 +962,24 @@ void updateResetIconButton(HWND dialog, const EditorDialogState* state) {
 
 // ---------------------------------------------------------------- 交互
 
+// 图标大小行的联动：勾选「按统一设置」→ 滑块置灰、数值显示全局值；
+// 取消勾选 → 滑块恢复本项覆盖值（初值取全局，避免从 50 起步吓人）。
+void syncIconScaleControls(HWND dialog, EditorDialogState* state) {
+    const bool followGlobal =
+        SendMessageW(GetDlgItem(dialog, kIconScaleCheckId), BM_GETCHECK, 0,
+                     0) == BST_CHECKED;
+    const int shown = followGlobal ? state->globalIconScale
+                                   : state->iconScalePercent;
+    EnableWindow(GetDlgItem(dialog, kIconScaleSliderId),
+                 followGlobal ? FALSE : TRUE);
+    SendMessageW(GetDlgItem(dialog, kIconScaleSliderId), TBM_SETPOS, TRUE,
+                 static_cast<LPARAM>(std::clamp(shown, 50, 100)));
+    wchar_t text[16] = {};
+    swprintf_s(text, L"%d%%", shown);
+    SetDlgItemTextW(dialog, kIconScaleValueId, text);
+}
+
+
 void pickCustomIcon(HWND dialog, EditorDialogState* state) {
     const std::wstring selected = browseForFile(
         dialog, L"选择图标图片",
@@ -988,6 +1040,16 @@ void populateControls(HWND dialog, EditorDialogState* state) {
                                                    : BST_UNCHECKED,
                  0);
 
+    // 图标大小：0 = 按统一设置（勾选）；非 0 = 本项覆盖（滑块用它）
+    const bool followGlobal = state->initial.iconScalePercent <= 0;
+    SendMessageW(GetDlgItem(dialog, kIconScaleCheckId), BM_SETCHECK,
+                 followGlobal ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (!followGlobal) {
+        state->iconScalePercent =
+            std::clamp(state->initial.iconScalePercent, 50, 100);
+    }
+    syncIconScaleControls(dialog, state);
+
     updateResetIconButton(dialog, state);
     refreshPreview(dialog, state);
 }
@@ -1025,6 +1087,17 @@ bool saveDialog(HWND dialog, EditorDialogState* state) {
         BST_CHECKED;
     state->result.tileSize = state->previewSize;
     state->result.labelMode = state->labelMode;
+
+    // 图标大小：勾选「按统一设置」→ 0（跟随全局）；否则取滑块值
+    const bool followGlobal =
+        SendMessageW(GetDlgItem(dialog, kIconScaleCheckId), BM_GETCHECK, 0,
+                     0) == BST_CHECKED;
+    state->result.iconScalePercent =
+        followGlobal
+            ? 0
+            : static_cast<int>(SendMessageW(GetDlgItem(dialog,
+                                                        kIconScaleSliderId),
+                                            TBM_GETPOS, 0, 0));
 
     const LRESULT tabSelection =
         SendMessageW(GetDlgItem(dialog, kTabId), CB_GETCURSEL, 0, 0);
@@ -1171,6 +1244,19 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     }
                     return 0;
                 }
+                case kIconScaleCheckId:
+                    if (state != nullptr) {
+                        // 取消勾选瞬间，滑块从全局值起步（state 里已是全局值，
+                        // 若本项有覆盖值则 populateControls 已还原）
+                        if (SendMessageW(GetDlgItem(hwnd, kIconScaleCheckId),
+                                         BM_GETCHECK, 0, 0) == BST_UNCHECKED &&
+                            state->initial.iconScalePercent > 0) {
+                            state->iconScalePercent = std::clamp(
+                                state->initial.iconScalePercent, 50, 100);
+                        }
+                        syncIconScaleControls(hwnd, state);
+                    }
+                    return 0;
                 case kNameId:
                     // 名字边打边反映到预览的标题上
                     if (notification == EN_CHANGE) {
@@ -1197,6 +1283,18 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
             }
             break;
         }
+
+        case WM_HSCROLL:
+            // 滑块只有一个，来源必是图标大小（TRACKBAR 用 WM_HSCROLL 报位置）
+            if (state != nullptr &&
+                reinterpret_cast<HWND>(lParam) ==
+                    GetDlgItem(hwnd, kIconScaleSliderId)) {
+                state->iconScalePercent = static_cast<int>(
+                    SendMessageW(GetDlgItem(hwnd, kIconScaleSliderId),
+                                 TBM_GETPOS, 0, 0));
+                syncIconScaleControls(hwnd, state);
+            }
+            return 0;
 
         case WM_CLOSE:
             DestroyWindow(hwnd);
@@ -1265,6 +1363,7 @@ bool showItemEditorDialog(HWND owner,
                           const std::size_t initialTab,
                           const ItemEditorFields& initial,
                           const bool globalAlwaysShowLabels,
+                          const int globalIconScale,
                           ItemEditorFields* outResult,
                           const ItemEditorMode mode) {
     if (outResult == nullptr || tabNames.empty()) {
@@ -1282,6 +1381,7 @@ bool showItemEditorDialog(HWND owner,
     state.previewSize = initial.tileSize;
     state.labelMode = initial.labelMode;
     state.globalAlwaysShowLabels = globalAlwaysShowLabels;
+    state.globalIconScale = std::clamp(globalIconScale, 50, 100);
     state.mode = mode;
     state.title = (mode == ItemEditorMode::Create) ? L"添加项目" : L"修改项目";
 

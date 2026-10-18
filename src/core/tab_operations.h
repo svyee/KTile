@@ -56,6 +56,16 @@ bool moveTab(ItemsDocument& document, std::size_t from, std::size_t to);
 bool moveItemToTab(ItemsDocument& document, std::size_t fromTab,
                    std::size_t itemIndex, std::size_t toTab);
 
+// 把一个磁贴复制到另一个标签页（追加到目标页末尾），源页不动。
+//
+// 复制件的所有内容与源相同，但 id 必须是新的 —— id 是跨会话的稳定
+// 标识（图标缓存、启动统计都靠它），两个磁贴共用一个 id 会互相串。
+// newId 由调用方生成（core 层不碰平台 UUID API）；传入空串视为拒绝。
+// 网格坐标同样保留，冲突时由布局引擎就近避让。
+bool copyItemToTab(ItemsDocument& document, std::size_t fromTab,
+                   std::size_t itemIndex, std::size_t toTab,
+                   const std::string& newId);
+
 // 规范化标签页名字：裁首尾空白 + 超长截断。供 UI 层预览/校验用。
 std::string normalizeTabName(const std::string& rawName);
 

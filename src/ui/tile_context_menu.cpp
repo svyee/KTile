@@ -147,6 +147,32 @@ TileMenuCommand showTileContextMenu(HWND owner,
         }
     }
 
+    // ---- 复制到其他页面子菜单 ----
+    //
+    // 与「移动」并列放在它下面：目标页与条件完全一致（只有一页时无处
+    // 可放，当前页不出现在列表里），但语义不同 —— 移动是搬家，复制是
+    // 克隆一份（原磁贴留在本页，目标页多出一个内容相同的新磁贴）。
+    if (tabNames.size() > 1) {
+        std::vector<PopupMenuEntry> copyEntries;
+        const std::size_t targetCount = (std::min)(tabNames.size(), kMaxTabMenuEntries);
+        for (std::size_t index = 0; index < targetCount; ++index) {
+            if (index == activeTabIndex) {
+                continue;
+            }
+            std::wstring label = tabNames[index];
+            if (label.size() > 24) {
+                label = label.substr(0, 23) + L"...";
+            }
+            copyEntries.push_back(PopupMenuEntry::action(
+                static_cast<UINT>(TileMenuCommand::CopyToTabBase) + index,
+                std::move(label)));
+        }
+        if (!copyEntries.empty()) {
+            entries.push_back(PopupMenuEntry::parent(L"复制到其他页面",
+                                                     std::move(copyEntries)));
+        }
+    }
+
     entries.push_back(PopupMenuEntry::separator());
 
     entries.push_back(PopupMenuEntry::action(
@@ -159,12 +185,13 @@ TileMenuCommand showTileContextMenu(HWND owner,
 
     const UINT command = showPopupMenu(owner, entries, screenPosition);
 
-    // 「移动到其他页面」一支：命令 ID 是基址 + 目标页下标，直接放过去
-    //（app 层按同一条规则解码）。上限保护：万一下标越界（页在菜单
-    // 弹出期间被别处删掉），当成 None 处理，不做任何事。
+    // 「移动到其他页面 / 复制到其他页面」两支：命令 ID 是各自基址 +
+    // 目标页下标，直接放过去（app 层按同一条规则解码）。上限保护：
+    // 万一下标越界（页在菜单弹出期间被别处删掉），当成 None 处理。
     const UINT moveBase = static_cast<UINT>(TileMenuCommand::MoveToTabBase);
-    if (command >= moveBase &&
-        command < moveBase + kMaxTabMenuEntries) {
+    const UINT copyBase = static_cast<UINT>(TileMenuCommand::CopyToTabBase);
+    if ((command >= moveBase && command < moveBase + kMaxTabMenuEntries) ||
+        (command >= copyBase && command < copyBase + kMaxTabMenuEntries)) {
         return static_cast<TileMenuCommand>(command);
     }
 

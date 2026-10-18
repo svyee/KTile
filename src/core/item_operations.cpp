@@ -211,6 +211,9 @@ bool editItem(ItemsDocument& document,
         fields.tileSize.has_value() && *fields.tileSize != item.tileSize;
     const bool labelModeChanged =
         fields.labelMode.has_value() && *fields.labelMode != item.labelMode;
+    const bool iconScaleChanged =
+        fields.iconScalePercent.has_value() &&
+        *fields.iconScalePercent != item.iconScalePercent;
 
     const bool changed =
         item.name != name ||
@@ -220,6 +223,7 @@ bool editItem(ItemsDocument& document,
         item.runAsAdministrator != fields.runAsAdministrator ||
         tileSizeChanged ||
         labelModeChanged ||
+        iconScaleChanged ||
         item.workingDirectory.has_value() != !workingDirectory.empty() ||
         (item.workingDirectory.has_value() &&
          *item.workingDirectory != workingDirectory) ||
@@ -253,6 +257,13 @@ bool editItem(ItemsDocument& document,
         item.icon.reset();
     } else {
         item.icon = icon;
+    }
+    if (fields.iconScalePercent.has_value()) {
+        // 0 = 跟随全局；否则夹进 50~100（与设置窗口同一范围）
+        item.iconScalePercent =
+            std::clamp(*fields.iconScalePercent, 0, 100) <= 0
+                ? 0
+                : std::clamp(*fields.iconScalePercent, 50, 100);
     }
     return true;
 }

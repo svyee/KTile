@@ -135,5 +135,28 @@ bool moveItemToTab(ItemsDocument& document, const std::size_t fromTab,
     return true;
 }
 
+bool copyItemToTab(ItemsDocument& document, const std::size_t fromTab,
+                   const std::size_t itemIndex, const std::size_t toTab,
+                   const std::string& newId) {
+    if (newId.empty()) {
+        return false;  // 没有 id 就没有身份，拒绝复制
+    }
+    if (fromTab >= document.tabs.size() || toTab >= document.tabs.size()) {
+        return false;
+    }
+    if (fromTab == toTab) {
+        return false;  // 复制到本页没有意义
+    }
+    const auto& sourceItems = document.tabs[fromTab].items;
+    if (itemIndex >= sourceItems.size()) {
+        return false;
+    }
+
+    LaunchItem copy = sourceItems[itemIndex];  // 值拷贝：源磁贴原地不动
+    copy.id = newId;
+    document.tabs[toTab].items.push_back(std::move(copy));
+    return true;
+}
+
 }  // namespace core
 }  // namespace ktile

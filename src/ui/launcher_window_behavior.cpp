@@ -1371,6 +1371,25 @@ void LauncherWindow::setPinned(const bool pinned) {
     }
 }
 
+void LauncherWindow::setTilesLocked(const bool locked) {
+    if (tilesLocked_ == locked) {
+        return;
+    }
+    tilesLocked_ = locked;
+
+    // 锁定时若已处于拖拽中途：取消本次拖拽、磁贴弹回原位。
+    // （锁只会在非拖拽状态被点到，这里纯防御，与 setPinned 同一策略。）
+    if (locked && dragActive_) {
+        dragActive_ = false;
+        dragSource_.reset();
+        dropspotPreview_.reset();
+        animateBackToLayout();
+    }
+    if (hwnd_ != nullptr) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
 bool LauncherWindow::hideIfUnpinned() {
     // 钉住 = 常驻面板，外部点击不收起
     if (pinned_) {

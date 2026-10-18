@@ -61,6 +61,8 @@ struct SettingsResult {
     std::optional<int> windowOpacityPercent;
     // 磁贴背景不透明度（0~100；-1 = 跟随皮肤）
     std::optional<int> tileOpacityPercent;
+    // 图标相对磁贴内框的统一缩放（50~100）
+    std::optional<int> iconScalePercent;
 };
 
 // 实时预览回调（可选）。
@@ -87,6 +89,8 @@ struct SettingsPreviewHooks {
     std::function<void(int percent)> windowOpacityChanged;
     // 磁贴背景不透明度（0~100）。-1 表示「跟随皮肤」。
     std::function<void(int percent)> tileOpacityChanged;
+    // 图标统一缩放（50~100）。拖动滑块过程中就会连续回调。
+    std::function<void(int percent)> iconScaleChanged;
 };
 
 // 显示设置窗口（模态）。用户点「确定」返回 true 并填充 out；
@@ -106,6 +110,7 @@ struct SettingsPreviewHooks {
 //   currentHotkeyPreset  当前唤醒快捷键预设
 //   currentWindowOpacity 当前主窗口整体不透明度（50~100）
 //   currentTileOpacity   当前磁贴背景不透明度（0~100；-1 = 跟随皮肤）
+//   currentIconScale     当前图标统一缩放（50~100）
 //   columnsInUse         当前布局已占用的最大列数（用于提示「缩小会挤掉磁贴」）
 //   rowsInUse            当前布局已占用的最大行数
 //   out                  结果输出
@@ -123,6 +128,7 @@ bool showSettingsWindow(HWND owner,
                         core::HotkeyPreset currentHotkeyPreset,
                         int currentWindowOpacity,
                         int currentTileOpacity,
+                        int currentIconScale,
                         std::uint16_t columnsInUse,
                         std::uint16_t rowsInUse,
                         SettingsResult* out,

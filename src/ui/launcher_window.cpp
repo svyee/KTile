@@ -77,6 +77,12 @@ constexpr float kFallbackBaseFontSize = 24.0F;
 // 区分开：没有阈值的话，手抖一两像素就会把启动操作变成排序。
 constexpr float kDragThresholdDip = 6.0F;
 
+// 标签跑马灯：33ms 一帧（≈30fps）、每帧 0.8 DIP（约 24 DIP/秒）、
+// 滚到两端各停 18 帧（约 600ms）让用户看清头尾。
+constexpr UINT kMarqueeIntervalMs = 33;
+constexpr float kMarqueeStepDip = 0.8F;
+constexpr int kMarqueePauseTicks = 18;
+
 // 落点防抖（毫秒）。
 //
 // 鼠标停在两格交界附近时，命中测试结果会在相邻磁贴间反复切换，
@@ -130,7 +136,11 @@ constexpr float kPinGlyphBox = 17.5F;
 constexpr float kPinGlyphScale = kPinGlyphBox / 24.0F;
 constexpr float kPinStrokeWidth = 2.0F * kPinGlyphScale;
 
-// 标题带内控件（搜索框 / 钉子）距标题带顶部的固定留白。
+// 锁定按钮（防误拖磁贴）：钉子左侧的小锁，尺寸/线宽/命中容差全部沿用
+// 钉子的常量 —— 两个按钮并排，视觉密度必须一致。
+constexpr float kLockButtonGap = 4.0F;  // 与钉子的间距
+
+// 标题带内控件（搜索框 / 锁 / 钉子）距标题带顶部的固定留白。
 //
 // 刻意不用「垂直居中」：headerHeight 特意比控件高，多出来的空间全给下方，
 // 这样搜索框上方的窗口边距可以收窄，而它与磁贴之间又能拉开距离。
@@ -477,12 +487,18 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             dragCurrentPoint_.x = GET_X_LPARAM(lParam);
             dragCurrentPoint_.y = GET_Y_LPARAM(lParam);
 
-            // ---- 钉子悬停高亮 ----
-            // 拖拽中不高亮钉子（此时光标即使扫过标题带也不该有反馈）
+            // ---- 钉子/锁悬停高亮 ----
+            // 拖拽中不高亮（此时光标即使扫过标题带也不该有反馈）
             const bool onPin = !dragActive_ &&
                 hitTestPin(x / scale, y / scale);
             if (onPin != pinHovered_) {
                 pinHovered_ = onPin;
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
+            const bool onLock = !dragActive_ &&
+                hitTestLock(x / scale, y / scale);
+            if (onLock != lockHovered_) {
+                lockHovered_ = onLock;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
 
@@ -508,7 +524,9 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             // 阈值存在的意义：区分「点击启动」与「拖动排序」。若不加阈值，
             // 手抖 1~2px 就会把一次启动变成一次排序，体验很差。
             // 阈值按 DPI 缩放，保证高 DPI 下手感一致。
-            if (pressedItem_.has_value() && !dragActive_) {
+            // 磁贴锁定时禁止升级为拖拽：按下仍记录（点击启动/键盘同步
+            // 不受影响），但位移只会被忽略 —— 想整理布局先解锁。
+            if (pressedItem_.has_value() && !dragActive_ && !tilesLocked_) {
                 const float threshold = kDragThresholdDip * scale;
                 const float dx = static_cast<float>(
                     dragCurrentPoint_.x - dragStartPoint_.x);
@@ -662,6 +680,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             // 用户点的是控件，不是标题栏。
             if (yDip < metrics_.outerPadding + metrics_.headerHeight &&
                 !hitTestPin(xDip, yDip) &&
+                !hitTestLock(xDip, yDip) &&
                 !hitTestSearchBox(xDip, yDip)) {
                 ReleaseCapture();
                 SendMessageW(hwnd_, WM_NCLBUTTONDOWN, HTCAPTION, 0);
@@ -672,6 +691,14 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             // 放在钉子与搜索框之前虽然顺序上无所谓（三者矩形不重叠），
             // 但放前面更符合「越靠近内容的东西越先生效」的直觉。
             if (handleTabBarClick(xDip, yDip)) {
+                return 0;
+            }
+
+            // ---- 锁定开关优先：命中小锁就不进入磁贴的点击/拖拽流程 ----
+            if (hitTestLock(xDip, yDip)) {
+                lockPressed_ = true;
+                SetCapture(hwnd_);
+                InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
             }
 
@@ -724,6 +751,18 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             const float xDip = x / scale;
             const float yDip = y / scale;
             auto hit = hitTestItem(xDip, yDip);
+
+            // ---- 锁：抬起时仍落在锁上才算一次点击 ----
+            if (lockPressed_) {
+                lockPressed_ = false;
+                const bool stillOnLock = hitTestLock(xDip, yDip);
+                ReleaseCapture();
+                if (stillOnLock) {
+                    setTilesLocked(!tilesLocked_);
+                }
+                InvalidateRect(hwnd_, nullptr, FALSE);
+                return 0;
+            }
 
             // ---- 钉子：抬起时仍落在钉子上才算一次点击 ----
             if (pinPressed_) {
@@ -913,6 +952,10 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
         }
 
         case WM_TIMER: {
+            if (wParam == kMarqueeTimerId) {
+                advanceLabelMarquee();
+                return 0;
+            }
             if (wParam == kStartupTrimTimerId) {
                 KillTimer(hwnd_, kStartupTrimTimerId);
                 trimWorkingSet();
@@ -1753,6 +1796,7 @@ void LauncherWindow::paintTiles() {
     // 钉子位于标题带，本就与磁贴不重叠；放在最后是防止将来标题带高度
     // 调小或磁贴越界时被遮住（宁可钉子盖住内容，也不能让用户点不到）。
     paintPinButton();
+    paintLockButton();
 
     // ---- 搜索框：与钉子同在标题带，紧随其后绘制 ----
     // 两者矩形互不重叠（搜索框右边界 = 钉子左边界 − 间距），
@@ -2400,16 +2444,99 @@ void LauncherWindow::paintPinButton() {
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
+D2D1_RECT_F LauncherWindow::lockButtonRect() const {
+    // 钉子左侧相邻：尺寸与垂直位置完全对齐钉子（同一套常量）
+    const D2D1_RECT_F pinRect = pinButtonRect();
+    const float right = pinRect.left - kLockButtonGap;
+    const float left = right - kPinButtonSize;
+    const float top = pinRect.top;
+    return D2D1::RectF(left, top, left + kPinButtonSize, top + kPinButtonSize);
+}
+
+bool LauncherWindow::hitTestLock(const float xDip, const float yDip) const {
+    const D2D1_RECT_F rect = lockButtonRect();
+    const float pad = kPinHitPadding;
+    return xDip >= rect.left - pad && xDip < rect.right + pad &&
+           yDip >= rect.top - pad && yDip < rect.bottom + pad;
+}
+
+void LauncherWindow::ensureLockGeometry() {
+    if (lockGeometry_ || !d2dFactory_.valid()) {
+        return;
+    }
+    const float offset = (kPinButtonSize - kPinGlyphBox) / 2.0F;
+    platform::win32::SvgGlyph outline;
+    if (!platform::win32::buildSvgGlyph(
+            d2dFactory_.get(), core::lucideBuiltinMarkup(L"lock"),
+            kPinGlyphScale, offset, offset, &outline)) {
+        return;
+    }
+    // 实心版单独建：D2D 的 FillGeometry 跳过 HOLLOW 起始的图元
+    platform::win32::SvgGlyph solid;
+    platform::win32::buildSvgGlyph(d2dFactory_.get(),
+                                   core::lucideBuiltinMarkup(L"lock"),
+                                   kPinGlyphScale, offset, offset, &solid,
+                                   true);
+    lockGeometry_ = outline.strokeGeometry;
+    lockFillGeometry_ = solid.fillGeometry;
+    lockStrokeStyle_ =
+        platform::win32::createRoundStrokeStyle(d2dFactory_.get());
+}
+
+// 绘制锁定按钮。
+//
+// 状态语言与钉子刻意相反方向：钉子「激活=亮」，锁「锁定=亮」。
+// 解锁 = 暗色空心（常态，不抢注意力）；锁定 = 亮色实心 + 底衬常显
+//（锁定是一种「保持中的状态」，必须一直看得见，不能只靠悬停发现）。
+void LauncherWindow::paintLockButton() {
+    if (!renderTarget_ || !brush_ || !borderBrush_) {
+        return;
+    }
+
+    const D2D1_RECT_F rect = lockButtonRect();
+    ensureLockGeometry();
+
+    renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+
+    if (tilesLocked_ || lockHovered_) {
+        const D2D1_ROUNDED_RECT back = D2D1::RoundedRect(
+            D2D1::RectF(rect.left - 1.0F, rect.top - 1.0F,
+                        rect.right + 1.0F, rect.bottom + 1.0F),
+            3.0F, 3.0F);
+        brush_->SetColor(colorFromArgb(
+            tilesLocked_ ? theme_.pinActiveBackdrop()
+                         : theme_.pinHoverBackdrop()));
+        renderTarget_->FillRoundedRectangle(back, brush_.get());
+    }
+
+    if (lockGeometry_) {
+        borderBrush_->SetColor(colorFromArgb(
+            tilesLocked_ ? theme_.pinActive() : theme_.pinIdle()));
+        renderTarget_->SetTransform(
+            D2D1::Matrix3x2F::Translation(rect.left, rect.top));
+        if (tilesLocked_ && lockFillGeometry_) {
+            // 锁定时把锁体填实：与钉子的「钉住=实心」同一视觉语言
+            renderTarget_->FillGeometry(lockFillGeometry_.get(),
+                                        borderBrush_.get(), nullptr);
+        }
+        renderTarget_->DrawGeometry(lockGeometry_.get(), borderBrush_.get(),
+                                    kPinStrokeWidth, lockStrokeStyle_.get());
+    }
+
+    renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
 // ================================================================ 搜索框
 
 // 搜索框矩形（客户区 DIP）。
 //
-// 位置：标题带内，钉子左侧，两者之间留 kSearchBoxRightGap 的间距。
+// 位置：标题带内，锁定按钮左侧，两者之间留 kSearchBoxRightGap 的间距。
 // 左边界与内容区左边缘对齐（= outerPadding），与磁贴同一起始线。
 // 绘制与命中测试共用本函数，保证「看到的位置」=「可点的位置」。
 D2D1_RECT_F LauncherWindow::searchBoxRect() const {
-    const D2D1_RECT_F pinRect = pinButtonRect();
-    const float right = pinRect.left - kSearchBoxRightGap;
+    // 右边界顶到锁定按钮（不再直接顶到钉子）—— 否则两控件重叠
+    const D2D1_RECT_F lockRect = lockButtonRect();
+    const float right = lockRect.left - kSearchBoxRightGap;
     const float left = metrics_.outerPadding;
     const float top = metrics_.outerPadding + kHeaderContentTopInset;
     return D2D1::RectF(left, top, right, top + kSearchBoxHeight);
@@ -2857,14 +2984,25 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         item.icon.has_value() &&
         platform::win32::isManagedIconPath(base::utf8ToWide(*item.icon));
 
+    // ---- 图标缩放系数 ----
+    //
+    // 每个磁贴可单独覆盖图标相对内框的比例（iconScalePercent，50~100）；
+    // 未覆盖（<=0）时用全局统一值。100% = 现状（内框铺满，两侧共留 4px），
+    // 缩小后仍按可用区居中。用户导入的整图（fillTile）铺满语义不变。
+    int iconScaleValue = item.iconScalePercent > 0
+        ? item.iconScalePercent
+        : tileIconScalePercent_;
+    iconScaleValue = std::clamp(iconScaleValue, 50, 100);
+    const float iconFactor = static_cast<float>(iconScaleValue) / 100.0F;
+
     if (fillTile) {
         iconRect = D2D1::RectF(left + 2.0F, top + 2.0F,
                                left + width - 2.0F, top + height - 2.0F);
         labelTop = bottomLabelTop;
     } else if (isWide) {
         // 横向磁贴 (2x1)：图标上下居中，标签悬停时贴底浮出。
-        const float side = std::max(12.0F,
-            std::min(height - iconTopGap * 2.0F, width - 8.0F));
+        const float base = std::min(height - iconTopGap * 2.0F, width - 8.0F);
+        const float side = std::max(12.0F, base * iconFactor);
         const float iconLeft = left + (width - side) / 2.0F;
         const float iconTopPos = top + (height - side) / 2.0F;
         iconRect = D2D1::RectF(iconLeft, iconTopPos,
@@ -2873,17 +3011,21 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     } else if (isSmall) {
         // 小磁贴 (1x1)：图标铺满内框，标签悬浮其上（悬停才显示）。
         // 标签位置与 2x2 对齐 —— 同样贴磁贴底边，而不是更靠上。
-        const float side = std::max(12.0F, std::min(width, height) - 4.0F);
-        iconRect = D2D1::RectF(left + 2.0F, top + 2.0F,
-                               left + 2.0F + side, top + 2.0F + side);
+        const float base = std::min(width, height) - 4.0F;
+        const float side = std::max(12.0F, base * iconFactor);
+        // 缩小后居中：100% 时 (width-side)/2 == 2，与旧的固定 +2 一致
+        const float iconLeft = left + (width - side) / 2.0F;
+        const float iconTopPos = top + (height - side) / 2.0F;
+        iconRect = D2D1::RectF(iconLeft, iconTopPos,
+                               iconLeft + side, iconTopPos + side);
         labelTop = bottomLabelTop;
     } else if (isTall) {
         // 纵向磁贴 (1x2)：图标上下居中、横向居中，
         // 标签常驻贴底（与 2x2 基线一致）。
-        const float side = std::max(12.0F,
-            std::min(width - 8.0F,
+        const float base = std::min(width - 8.0F,
                      height - bottomInset - labelHeight - iconLabelGap
-                         - iconTopGap));
+                         - iconTopGap);
+        const float side = std::max(12.0F, base * iconFactor);
         const float iconLeft = left + (width - side) / 2.0F;
         const float iconTopPos = top + iconTopGap +
             (height - iconTopGap - bottomInset - labelHeight -
@@ -2896,8 +3038,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         // 图标从顶部起、横向居中，标签紧贴图标底边。
         const float maxIconHeight =
             height - iconTopGap - iconLabelGap - labelHeight - bottomInset;
-        const float side = std::max(12.0F,
-            std::min(width - 8.0F, maxIconHeight));
+        const float base = std::min(width - 8.0F, maxIconHeight);
+        const float side = std::max(12.0F, base * iconFactor);
         iconRect = D2D1::RectF(left + (width - side) / 2.0F, top + iconTopGap,
                                left + (width + side) / 2.0F,
                                top + iconTopGap + side);
@@ -2978,14 +3120,70 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
                         left + width - 1.0F, scrimBottom),
             brush_.get());
 
-        renderTarget_->DrawTextW(
-            label.c_str(),
-            static_cast<UINT32>(label.size()),
-            format,
-            D2D1::RectF(left + 4.0F, labelTop, left + width - 4.0F,
-                        scrimBottom),
-            textBrush_.get(),
-            D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        // ---- 超宽滚动（跑马灯）----
+        // 先测完整文本宽度：放得下就照旧；放不下且正在悬停，这块磁贴
+        // 就接管跑马灯（同一时刻只有一块在滚）。测量只在悬停期间发生，
+        // 每帧一次 CreateTextLayout 与标签条测宽同一成本，可接受。
+        const float textLeft = left + 4.0F;
+        const float textRight = left + width - 4.0F;
+        const float textAvailable = std::max(1.0F, textRight - textLeft);
+
+        float fullTextWidth = 0.0F;
+        if (dwriteFactory_.get() != nullptr) {
+            platform::win32::ComPtr<IDWriteTextLayout> layout;
+            if (SUCCEEDED(dwriteFactory_->CreateTextLayout(
+                    label.c_str(), static_cast<UINT32>(label.size()), format,
+                    4096.0F, labelHeight, layout.put()))) {
+                DWRITE_TEXT_METRICS metrics{};
+                if (SUCCEEDED(layout->GetMetrics(&metrics))) {
+                    fullTextWidth = metrics.widthIncludingTrailingWhitespace;
+                }
+            }
+        }
+        const bool overflow = fullTextWidth > textAvailable + 0.5F;
+
+        float drawOffset = 0.0F;
+        if (marqueeItemIndex_.has_value() &&
+            *marqueeItemIndex_ == placement.itemIndex) {
+            if (!hovered || !overflow) {
+                stopLabelMarquee();  // 悬停离开 / 文本变短：停
+            } else {
+                drawOffset = marqueeOffset_;
+            }
+        } else if (hovered && overflow) {
+            // 接管跑马灯：从自然位置起步，先停一拍再往左滚
+            marqueeItemIndex_ = placement.itemIndex;
+            marqueeOverflow_ = fullTextWidth - textAvailable;
+            marqueeOffset_ = 0.0F;
+            marqueeDirection_ = 1.0F;
+            marqueePause_ = kMarqueePauseTicks;
+            SetTimer(hwnd_, kMarqueeTimerId, kMarqueeIntervalMs, nullptr);
+        }
+
+        if (drawOffset > 0.0F) {
+            // 滚动中：裁剪到标签文字区，文本矩形随偏移左移
+            renderTarget_->PushAxisAlignedClip(
+                D2D1::RectF(textLeft, labelTop, textRight, scrimBottom),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            renderTarget_->DrawTextW(
+                label.c_str(),
+                static_cast<UINT32>(label.size()),
+                format,
+                D2D1::RectF(textLeft - drawOffset, labelTop,
+                            textLeft - drawOffset + fullTextWidth + 8.0F,
+                            scrimBottom),
+                textBrush_.get(),
+                D2D1_DRAW_TEXT_OPTIONS_NONE);
+            renderTarget_->PopAxisAlignedClip();
+        } else {
+            renderTarget_->DrawTextW(
+                label.c_str(),
+                static_cast<UINT32>(label.size()),
+                format,
+                D2D1::RectF(textLeft, labelTop, textRight, scrimBottom),
+                textBrush_.get(),
+                D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
     }
 
     // 还原变换，避免影响下一块磁贴
@@ -2995,6 +3193,45 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     if (layerPushed) {
         renderTarget_->PopLayer();
     }
+}
+
+// 停掉跑马灯：清状态 + 杀定时器。悬停离开、文本变短、磁贴被
+// 删除/重排时都会走到（paint 每帧自检，无需在各处散落清理）。
+void LauncherWindow::stopLabelMarquee() {
+    if (!marqueeItemIndex_.has_value()) {
+        return;
+    }
+    marqueeItemIndex_.reset();
+    marqueeOffset_ = 0.0F;
+    marqueeDirection_ = 1.0F;
+    marqueeOverflow_ = 0.0F;
+    marqueePause_ = 0;
+    KillTimer(hwnd_, kMarqueeTimerId);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+// 跑马灯一帧：ping-pong 滚动，端点各停 kMarqueePauseTicks 帧让用户
+// 看清头尾。整窗失效即可 —— 面板小，30fps 全量重绘成本可忽略。
+void LauncherWindow::advanceLabelMarquee() {
+    if (!marqueeItemIndex_.has_value()) {
+        KillTimer(hwnd_, kMarqueeTimerId);
+        return;
+    }
+    if (marqueePause_ > 0) {
+        --marqueePause_;
+    } else {
+        marqueeOffset_ += marqueeDirection_ * kMarqueeStepDip;
+        if (marqueeOffset_ >= marqueeOverflow_) {
+            marqueeOffset_ = marqueeOverflow_;
+            marqueeDirection_ = -1.0F;
+            marqueePause_ = kMarqueePauseTicks;
+        } else if (marqueeOffset_ <= 0.0F) {
+            marqueeOffset_ = 0.0F;
+            marqueeDirection_ = 1.0F;
+            marqueePause_ = kMarqueePauseTicks;
+        }
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 // 图标缺失时的兜底绘制：居中首字（CJK 取第一个汉字/字符）

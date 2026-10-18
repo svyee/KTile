@@ -6,6 +6,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace ktile {
@@ -116,6 +117,8 @@ std::string ConfigStore::serializeItems(const core::ItemsDocument& document) {
                     writeOptionalUint32(writer, "tileColor", item.tileColor);
                     writer.member("labelMode",
                                   core::tileLabelModeKey(item.labelMode));
+                    // 0 = 跟随全局（写出去保持键集合稳定，便于手改对照）
+                    writer.member("iconScalePercent", item.iconScalePercent);
                     writeOptionalUint16(writer, "gridColumn", item.gridColumn);
                     writeOptionalUint16(writer, "gridRow", item.gridRow);
 
@@ -167,6 +170,7 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     writer.member("windowOpacityPercent",
                   config.appearance.windowOpacityPercent);
     writer.member("tileOpacityPercent", config.appearance.tileOpacityPercent);
+    writer.member("iconScalePercent", config.appearance.iconScalePercent);
     writeOptionalUint32(writer, "accentColor", config.appearance.accentColor);
     // 上次所在页（存 id）。空串代表还没有记录 —— 照样写出去，
     // 保持 config.json 的键集合稳定，便于用户手改对照。
@@ -294,6 +298,16 @@ ConfigStore::deserializeItems(const std::string& text) {
                             core::tileLabelModeFromKey(labelMode.asString());
                     }
 
+                    // 图标缩放（缺失/非法 → 0 = 跟随全局统一设置）
+                    const JsonValue& iconScale =
+                        itemNode.find("iconScalePercent");
+                    item.iconScalePercent =
+                        iconScale.isNumber() ? iconScale.asInt(0) : 0;
+                    if (item.iconScalePercent != 0) {
+                        item.iconScalePercent = std::clamp(
+                            item.iconScalePercent, 50, 100);
+                    }
+
                     const JsonValue& column = itemNode.find("gridColumn");
                     if (column.isNumber()) {
                         item.gridColumn = static_cast<std::uint16_t>(
@@ -416,6 +430,12 @@ ConfigStore::deserializeConfig(const std::string& text) {
                 config.tileOpacityPercent =
                     tileOpacity > 100 ? 100 : tileOpacity;
             }
+
+            // 图标缩放（老配置没有 → 90%。读入后仍夹一次范围）
+            const int iconScale =
+                appearance.find("iconScalePercent").asInt(90);
+            config.iconScalePercent =
+                iconScale < 50 ? 50 : (iconScale > 100 ? 100 : iconScale);
         }
 
         const JsonValue& accent = appearance.find("accentColor");

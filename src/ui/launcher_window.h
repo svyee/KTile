@@ -27,6 +27,7 @@
 #include <d2d1.h>
 #include <dwrite.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -190,6 +191,14 @@ public:
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
     bool showTileLabels() const noexcept { return showTileLabels_; }
+
+    // 图标相对磁贴内框的统一缩放百分比（50~100，默认 90）。
+    // 单项可在编辑对话框里覆盖（LaunchItem.iconScalePercent）。
+    // 只改绘制矩形，不动磁贴布局与图标位图缓存 —— 无需重算布局。
+    void setTileIconScalePercent(const int percent) {
+        tileIconScalePercent_ = std::clamp(percent, 50, 100);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
 
     // 标题是否「默认显示」。
     //
@@ -433,6 +442,14 @@ public:
         pinnedChangedHandler_ = std::move(handler);
     }
 
+    // ---- 磁贴锁定（防误拖） ----
+    //
+    // 语义：锁定时磁贴不可拖拽排序，点击启动不受影响。与「钉住」是
+    // 两件事 —— 钉住管窗口会不会收起，锁定管磁贴能不能被拖动。
+    // 会话级状态（不落盘）：每次唤出默认解锁，符合「先解锁才整理」的直觉。
+    bool tilesLocked() const noexcept { return tilesLocked_; }
+    void setTilesLocked(bool locked);
+
     // 供 app 层调用：按当前钉子状态决定是否响应「点击窗口外」
     // 返回 true 表示已隐藏
     bool hideIfUnpinned();
@@ -579,6 +596,12 @@ private:
     void paintPinButton();
     // 命中测试：坐标是否落在钉子上
     bool hitTestPin(float xDip, float yDip) const;
+
+    // ---- 锁定按钮（防误拖磁贴） ----
+    // 钉子左侧的小锁。绘制与命中测试共用同一处几何（与钉子同一套路）。
+    D2D1_RECT_F lockButtonRect() const;
+    void paintLockButton();
+    bool hitTestLock(float xDip, float yDip) const;
 
     // ---- 搜索框 ----
     // 搜索框占据的矩形（标题带内、钉子左侧）。绘制与命中测试共用。
@@ -771,6 +794,18 @@ private:
     std::optional<std::size_t> hoveredItem_;
     std::optional<std::size_t> pressedItem_;
 
+    // ---- 标签跑马灯（超宽滚动）----
+    // 鼠标悬停且标签超出可绘宽度时启动：先停一拍，向左滚到末尾，
+    // 停一拍再滚回来（ping-pong）。只挂一块磁贴，悬停离开即停，
+    // 不落盘、不参与布局。
+    std::optional<std::size_t> marqueeItemIndex_;  // 正在滚动的磁贴（当前页下标）
+    float marqueeOffset_ = 0.0F;    // 已滚出的宽度（DIP）
+    float marqueeDirection_ = 1.0F; // 1 = 向左滚，-1 = 回滚
+    float marqueeOverflow_ = 0.0F;  // 文本超出可用宽度的量（DIP）
+    int marqueePause_ = 0;          // 端点停顿剩余 tick
+    void stopLabelMarquee();
+    void advanceLabelMarquee();
+
     // ---- 拖拽状态 ----
     //
     // 拖拽分两阶段：
@@ -813,6 +848,8 @@ private:
 
     // 是否显示磁贴文字标签（设置窗口可控）
     bool showTileLabels_ = true;
+    // 图标相对磁贴内框的统一缩放百分比（50~100，默认 90）
+    int tileIconScalePercent_ = 90;
 
     // 标题是否默认显示（false = 仅鼠标移入时浮出）
     bool alwaysShowTileLabels_ = true;
@@ -852,6 +889,10 @@ private:
     bool pinned_ = false;
     bool pinHovered_ = false;
     bool pinPressed_ = false;
+    // 锁定按钮（与钉子同一套三态：悬停/按下/锁定）
+    bool tilesLocked_ = false;
+    bool lockHovered_ = false;
+    bool lockPressed_ = false;
 
     // 钉子图形（Lucide pin）的 D2D 几何缓存。
     // 几何以「按钮左上角」为原点、用 DIP 建一次，绘制时整体平移 ——
@@ -862,6 +903,11 @@ private:
     platform::win32::ComPtr<ID2D1PathGeometry> pinFillGeometry_;
     platform::win32::ComPtr<ID2D1StrokeStyle> pinStrokeStyle_;
     void ensurePinGeometry();
+    // 锁定按钮的几何（Lucide lock，与钉子同一套路：描边 + 实心两份）
+    platform::win32::ComPtr<ID2D1PathGeometry> lockGeometry_;
+    platform::win32::ComPtr<ID2D1PathGeometry> lockFillGeometry_;
+    platform::win32::ComPtr<ID2D1StrokeStyle> lockStrokeStyle_;
+    void ensureLockGeometry();
 
     // 模态交互保护（设置窗口打开期间为 true，见 setModalGuard）
     bool modalGuard_ = false;
@@ -947,6 +993,7 @@ private:
     // 用延迟定时器而不是直接调：启动末尾还有消息泵里的首次渲染会把页
     // 立刻换回来，白裁。
     static constexpr UINT_PTR kStartupTrimTimerId = 5;
+    static constexpr UINT_PTR kMarqueeTimerId = 6;
     static constexpr UINT kStartupTrimDelayMs = 3000;
     void trimWorkingSet();
 

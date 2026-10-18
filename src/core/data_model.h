@@ -226,6 +226,13 @@ struct LaunchItem {
     // 标题显示方式（每项覆盖全局设置，见 TileLabelMode）
     TileLabelMode labelMode = TileLabelMode::FollowGlobal;
 
+    // 图标相对磁贴内框的缩放百分比（50~100）。
+    // 0 = 跟随全局统一设置（appearance.iconScalePercent，新项目默认）。
+    // 100% = 内框铺满（两侧共留 4px），越小图标越内敛。
+    // 注意：只影响「系统提取的方框图标」；用户导入的整图（铺满磁贴）
+    // 不受它约束 —— 那类图的价值就在于铺满。
+    int iconScalePercent = 0;
+
     // 网格坐标。使用行/列定位，比线性 slot 更适合二维跨度布局。
     // 为空表示尚未分配位置，由布局引擎自动安置。
     std::optional<std::uint16_t> gridColumn;
@@ -426,6 +433,12 @@ struct AppearanceConfig {
     //   观感走形。用户一旦拖动过滑块，就按他的值来，不再跟皮肤。
     std::int32_t windowOpacityPercent = 100;
     std::int32_t tileOpacityPercent = -1;
+
+    // 图标相对磁贴内框的统一缩放百分比，50~100（默认 90）。
+    // 100% = 图标铺满内框（与未引入该设置前一致）；单项可在
+    // 编辑对话框里覆盖（LaunchItem.iconScalePercent，0=跟随这里）。
+    // 格子尺寸不变，只改格子里的图标 —— 磁贴布局完全不受影响。
+    std::int32_t iconScalePercent = 90;
 
     // 上次显示的是哪一个标签页（存 Tab 的 id，不是下标）。
     //

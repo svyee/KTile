@@ -29,7 +29,7 @@ constexpr int kDialogWidth = 330;
 //   启动与唤醒 开机自启(26) + 唤醒方式(62)
 // 每个分组的标题另占 24，非首组再加 14 的分隔线间距。
 // 改任何一行的行高都要回来重算这个数，否则底部按钮会压到内容上。
-constexpr int kDialogHeight = 556;
+constexpr int kDialogHeight = 586;  // 556 + 图标大小一行（30）
 
 constexpr int kMargin = 16;          // 左右页边距
 constexpr int kRowGap = 12;          // 行间垂直间距
@@ -86,6 +86,8 @@ constexpr int kWindowPlacementComboId = 1140;
 constexpr int kWindowOpacitySliderId = 1150;    // 整体不透明度滑块
 constexpr int kWindowOpacityValueId = 1151;     // 整体不透明度数值
 constexpr int kTileOpacitySliderId = 1152;      // 磁贴背景不透明度滑块
+constexpr int kIconScaleSliderId = 1154;        // 图标统一缩放滑块
+constexpr int kIconScaleValueId = 1155;         // 图标统一缩放数值
 constexpr int kTileOpacityValueId = 1153;       // 磁贴背景不透明度数值
 constexpr int kHotkeyAltSpaceRadioId = 1141;    // 唤醒快捷键：Alt+Space
 constexpr int kHotkeyCtrlSpaceRadioId = 1142;   // 唤醒快捷键：Ctrl+Space
@@ -136,6 +138,8 @@ struct SettingsDialogState {
     int initialTileOpacity = 24;
     bool windowOpacityTouched = false;
     bool tileOpacityTouched = false;
+    int initialIconScale = 90;
+    bool iconScaleTouched = false;
 
     // 皮肤与背景图
     std::wstring initialThemeName;      // 当前皮肤显示名（空 = 默认）
@@ -481,6 +485,33 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                             kMargin + kLabelWidth + 162, y + 5, 44, 18,
                             kTileOpacityValueId);
+            }
+            y += 30;
+
+            // ---- 图标大小 ----
+            //
+            // 图标相对磁贴内框的统一缩放（50~100）。格子尺寸完全不变，
+            // 只改格子里的图标 —— 喜欢留白多就调小，喜欢图标大就调满。
+            // 单个磁贴还可以在「修改项目」里单独覆盖这一值。
+            makeLabel(L"图标大小", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            HWND iconScaleSlider = makeControl(
+                TRACKBAR_CLASSW, L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
+                0, kMargin + kLabelWidth, y - 2, 156, 26,
+                kIconScaleSliderId);
+            if (iconScaleSlider != nullptr) {
+                SendMessageW(iconScaleSlider, TBM_SETRANGE, TRUE,
+                             MAKELONG(50, 100));
+                SendMessageW(iconScaleSlider, TBM_SETPOS, TRUE,
+                             static_cast<LPARAM>(state->initialIconScale));
+            }
+            {
+                const std::wstring text =
+                    std::to_wstring(state->initialIconScale) + L"%";
+                makeControl(L"STATIC", text.c_str(),
+                            WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                            kMargin + kLabelWidth + 162, y + 5, 44, 18,
+                            kIconScaleValueId);
             }
             y += 30;
 
@@ -995,6 +1026,16 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                             }
                         }
                     }
+                    if (state->iconScaleTouched) {
+                        HWND slider = GetDlgItem(hwnd, kIconScaleSliderId);
+                        if (slider != nullptr) {
+                            const int percent = static_cast<int>(
+                                SendMessageW(slider, TBM_GETPOS, 0, 0));
+                            if (percent != state->initialIconScale) {
+                                state->result.iconScalePercent = percent;
+                            }
+                        }
+                    }
 
                     state->accepted = true;
                 }
@@ -1081,16 +1122,19 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             const int controlId = GetDlgCtrlID(control);
             if (controlId != kWindowOpacitySliderId &&
-                controlId != kTileOpacitySliderId) {
+                controlId != kTileOpacitySliderId &&
+                controlId != kIconScaleSliderId) {
                 break;
             }
 
             const int percent =
                 static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
-            HWND value = GetDlgItem(
-                hwnd, controlId == kWindowOpacitySliderId
-                          ? kWindowOpacityValueId
-                          : kTileOpacityValueId);
+            const int valueId = controlId == kWindowOpacitySliderId
+                ? kWindowOpacityValueId
+                : controlId == kTileOpacitySliderId
+                      ? kTileOpacityValueId
+                      : kIconScaleValueId;
+            HWND value = GetDlgItem(hwnd, valueId);
             if (value != nullptr) {
                 const std::wstring text = std::to_wstring(percent) + L"%";
                 SetWindowTextW(value, text.c_str());
@@ -1103,11 +1147,17 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         state->preview->windowOpacityChanged) {
                         state->preview->windowOpacityChanged(percent);
                     }
-                } else {
+                } else if (controlId == kTileOpacitySliderId) {
                     state->tileOpacityTouched = true;
                     if (state->preview != nullptr &&
                         state->preview->tileOpacityChanged) {
                         state->preview->tileOpacityChanged(percent);
+                    }
+                } else {
+                    state->iconScaleTouched = true;
+                    if (state->preview != nullptr &&
+                        state->preview->iconScaleChanged) {
+                        state->preview->iconScaleChanged(percent);
                     }
                 }
             }
@@ -1310,6 +1360,7 @@ bool showSettingsWindow(HWND owner,
                         const core::HotkeyPreset currentHotkeyPreset,
                         const int currentWindowOpacity,
                         const int currentTileOpacity,
+                        const int currentIconScale,
                         const std::uint16_t columnsInUse,
                         const std::uint16_t rowsInUse,
                         SettingsResult* out,
@@ -1350,6 +1401,7 @@ bool showSettingsWindow(HWND owner,
     state.initialHotkeyPreset = currentHotkeyPreset;
     state.initialWindowOpacity = currentWindowOpacity;
     state.initialTileOpacity = currentTileOpacity;
+    state.initialIconScale = currentIconScale;
     state.columnsInUse = columnsInUse;
     state.rowsInUse = rowsInUse;
     state.preview = preview;

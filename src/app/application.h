@@ -156,6 +156,7 @@ private:
                        const core::LaunchItem& item);
     // 把当前页的某个磁贴搬到目标页（追加到目标页末尾，保留网格坐标）
     void applyItemMoveToTab(std::size_t itemIndex, std::size_t targetTab);
+    void applyItemCopyToTab(std::size_t itemIndex, std::size_t targetTab);
     // 添加项目（复用同一个编辑对话框，新建模式 + 落盘）
     void applyItemAdd(HWND owner, const std::wstring& initialTarget);
     // 把拖进来的东西加进面板（文件/文件夹直接建磁贴；链接建成网址项目）
