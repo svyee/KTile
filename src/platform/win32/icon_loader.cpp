@@ -31,6 +31,149 @@ int pixelSizeForHint(const IconSizeHint hint) {
     return 64;
 }
 
+// ---- 应用执行别名（AppExecLink）解引用 ----
+//
+// 商店应用（Windows 终端、计算器、截图工具……）在文件系统上的入口是
+// %LOCALAPPDATA%\Microsoft\WindowsApps\ 下的 0 字节「应用执行别名」：
+// 一个 AppExecLink 重解析点，本身既不是 PE 模块也没有图标资源。
+// 直接对它提图标，PrivateExtractIconsW 必然失败，退到 SHGetFileInfo
+// 只能拿到「通用空白程序」图标 —— 铺到磁贴上就是一张白纸。
+//
+// 重解析数据里存着包内真实 exe 的完整路径（实测 Windows Terminal）：
+//   Microsoft.WindowsTerminal_8wekyb3d8bbwe              ← 包族名
+//   Microsoft.WindowsTerminal_8wekyb3d8bbwe!App           ← AUMID
+//   C:\Program Files\WindowsApps\Microsoft.Windows...\wt.exe  ← 要的就是它
+//   Desktop App                                            ← 应用类型
+//
+// 该结构没有官方公开定义（[MS-FSCC] 未收录），也**没有 StringCount 字段**
+// —— 4 字节 Version 之后紧跟着就是 NULL 分隔的宽字符串。若个别系统版本
+// 多塞了一个计数字段，取值会整体错位；所以解析完必须校验「像绝对路径
+// 且文件真实存在」，不成立就换备用偏移再试一次。
+//
+// 顺带处理真正的符号链接（tag 0xA000000C）——开发期手工建的别名走它。
+constexpr DWORD kFsctlGetReparsePoint = 0x000900A8;
+constexpr ULONG kReparseTagMountPoint = 0xA0000003;
+constexpr ULONG kReparseTagSymlink = 0xA000000C;
+constexpr ULONG kReparseTagAppExecLink = 0x8000001B;
+
+// 绝对路径 + 真实存在的普通文件（WindowsApps 目录不许列举，
+// 但按完整路径访问单个文件是允许的 —— 实测可读）。
+bool isAbsoluteExistingFile(const std::wstring& path) {
+    if (path.size() < 3) {
+        return false;
+    }
+    const bool driveAbsolute =
+        path[1] == L':' && (path[2] == L'\\' || path[2] == L'/');
+    const bool uncPath = path[0] == L'\\' && path[1] == L'\\';
+    if (!driveAbsolute && !uncPath) {
+        return false;
+    }
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+           (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+// 把重解析数据段按「NULL 分隔的宽字符串」切开，取第 index 个。
+std::wstring reparseStringAt(const std::vector<unsigned char>& buffer,
+                             const std::size_t dataBytes,
+                             const std::size_t stringsOffset,
+                             const std::size_t index) {
+    if (dataBytes <= stringsOffset) {
+        return std::wstring();
+    }
+    const std::size_t charCount =
+        (dataBytes - stringsOffset) / sizeof(wchar_t);
+    const std::wstring text(
+        reinterpret_cast<const wchar_t*>(buffer.data() + stringsOffset),
+        charCount);
+
+    std::size_t current = 0;
+    std::size_t position = 0;
+    while (position < text.size()) {
+        std::size_t end = position;
+        while (end < text.size() && text[end] != L'\0') {
+            ++end;
+        }
+        if (current == index) {
+            return text.substr(position, end - position);
+        }
+        ++current;
+        position = end + 1;
+    }
+    return std::wstring();
+}
+
+// 若 path 是应用执行别名或符号链接，返回它指向的真实文件路径；否则返回空。
+std::wstring resolveAliasTarget(const std::wstring& path) {
+    const HANDLE handle = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING,
+        // OPEN_REPARSE_POINT：拿到链接本身而不是顺着它走，
+        // 否则 DeviceIoControl 会因为「目标不可访问」而失败。
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return std::wstring();
+    }
+
+    std::vector<unsigned char> buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+    DWORD returned = 0;
+    const BOOL ok = DeviceIoControl(
+        handle, kFsctlGetReparsePoint, nullptr, 0, buffer.data(),
+        static_cast<DWORD>(buffer.size()), &returned, nullptr);
+    CloseHandle(handle);
+    if (ok == FALSE || returned < 12) {
+        return std::wstring();
+    }
+
+    const ULONG tag = *reinterpret_cast<const ULONG*>(buffer.data());
+
+    if (tag == kReparseTagAppExecLink) {
+        // 第 2 串（0 起算）就是包内 exe 的完整路径
+        std::wstring executable = reparseStringAt(buffer, returned, 12, 2);
+        if (isAbsoluteExistingFile(executable)) {
+            return executable;
+        }
+        // 备用布局：Version 后多一个 StringCount
+        executable = reparseStringAt(buffer, returned, 16, 2);
+        if (isAbsoluteExistingFile(executable)) {
+            return executable;
+        }
+        return std::wstring();
+    }
+
+    if (tag == kReparseTagSymlink || tag == kReparseTagMountPoint) {
+        constexpr std::size_t kHeaderBytes = 8;
+        if (returned < kHeaderBytes + 8) {
+            return std::wstring();
+        }
+        const auto* fields =
+            reinterpret_cast<const USHORT*>(buffer.data() + kHeaderBytes);
+        const std::size_t substituteOffset = fields[0];
+        const std::size_t substituteBytes = fields[1];
+        // 符号链接多一个 ULONG Flags，路径缓冲区起点比挂载点晚 4 字节
+        const std::size_t pathStart =
+            kHeaderBytes + (tag == kReparseTagSymlink ? 12 : 8);
+        if (pathStart + substituteOffset + substituteBytes > returned) {
+            return std::wstring();
+        }
+        std::wstring target(substituteBytes / sizeof(wchar_t), L'\0');
+        if (!target.empty()) {
+            std::memcpy(&target[0],
+                        buffer.data() + pathStart + substituteOffset,
+                        substituteBytes);
+        }
+        // "\??\C:\..." → "C:\..."
+        if (target.compare(0, 4, L"\\??\\") == 0) {
+            target.erase(0, 4);
+        }
+        if (isAbsoluteExistingFile(target)) {
+            return target;
+        }
+    }
+    return std::wstring();
+}
+
 // 判断扩展名是否为 PE 模块（exe/dll/ico 可直接 ExtractIconEx）
 bool hasIconBearingExtension(const std::wstring& path) {
     const std::size_t dot = path.find_last_of(L'.');
@@ -361,6 +504,14 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
         return UniqueHIcon();
     }
 
+    // 应用执行别名 / 符号链接先解到真实文件：
+    // 别名本身是 0 字节重解析点，没有任何图标资源可提（见上方长注释）。
+    // 解不出来（普通文件、权限不足）就原样用传入路径。
+    std::wstring path = resolveAliasTarget(filePath);
+    if (path.empty()) {
+        path = filePath;
+    }
+
     const int desired = pixelSizeForHint(hint);
 
     // ---- 方式零：位图文件（png / jpg / jpeg / bmp / gif / tif / ico）----
@@ -368,9 +519,9 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
     // 这类文件不在 PE 资源里，ExtractIconEx 拿不到，shell 关联给的又是
     // 「图片文件」的通用图标 —— 必须自己解码。.ico 也一并交给 WIC：
     // 它会把多尺寸 ico 里最大的那一帧拿出来，比 ExtractIconEx 的 32px 强。
-    if (isDecodableImageFile(filePath)) {
+    if (isDecodableImageFile(path)) {
         ImagePixels image;
-        if (decodeImageFile(filePath, &image)) {
+        if (decodeImageFile(path, &image)) {
             HICON icon = iconFromPixels(image);
             if (icon != nullptr) {
                 return UniqueHIcon(icon);
@@ -387,8 +538,8 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
     // （实测 i_view64.exe 内容占比仅 3.5%，Bandicam 同样中招），
     // 铺到磁贴上就是一小点。PrivateExtractIconsW 则总能给出铺满画布
     // 的图标（见 extractScaledPeIcon 注释与验证/目录的 icon_probe 实测）。
-    if (hasIconBearingExtension(filePath)) {
-        HICON peIcon = extractScaledPeIcon(filePath, desired);
+    if (hasIconBearingExtension(path)) {
+        HICON peIcon = extractScaledPeIcon(path, desired);
         if (peIcon != nullptr) {
             return UniqueHIcon(peIcon);
         }
@@ -398,16 +549,16 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
     //
     // ExtractIconEx 只能拿到 PE 资源里的「默认」尺寸（通常 32px），
     // 一旦优先使用，62px/128px 的磁贴会把它放大成模糊噪点。
-    HICON jumbo = iconFromSystemImageList(filePath, false, desired);
+    HICON jumbo = iconFromSystemImageList(path, false, desired);
     if (jumbo != nullptr) {
         return UniqueHIcon(jumbo);
     }
 
     // ---- 方式三：ExtractIconEx（32px 兜底）----
-    if (hasIconBearingExtension(filePath)) {
+    if (hasIconBearingExtension(path)) {
         HICON largeIcon = nullptr;
         HICON smallIcon = nullptr;
-        const UINT extracted = ExtractIconExW(filePath.c_str(), 0,
+        const UINT extracted = ExtractIconExW(path.c_str(), 0,
                                              &largeIcon, &smallIcon, 1);
         if (extracted > 0 && largeIcon != nullptr) {
             if (smallIcon != nullptr) {
@@ -421,7 +572,7 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
     }
 
     // ---- 方式四：SHGetFileInfo 通用 ----
-    HICON shellIcon = shellIconForPath(filePath, false);
+    HICON shellIcon = shellIconForPath(path, false);
     if (shellIcon != nullptr) {
         return UniqueHIcon(shellIcon);
     }
