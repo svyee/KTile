@@ -1,0 +1,25 @@
+# 构建产物
+build/
+*.obj
+*.res
+*.exe
+*.ilk
+*.pdb
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# 本地数据（用户磁贴与配置，不属于仓库）
+data/
+
+# 内部资料：不随开源仓库发布
+文档/
+参考/
+验证/
+排查/
+
+# 系统杂项
+Thumbs.db
+Desktop.ini

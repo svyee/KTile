@@ -1,0 +1,31 @@
+101 ICON "app.ico"
+
+// 版本资源：资源管理器右键属性可见。
+// 注意：rc 文件必须保持纯 ASCII（rc.exe 的编码坑），中文文案只在
+// About 对话框里出现。版本号与应用层 kApplicationVersion 同步维护。
+#include <winver.h>
+
+1 VERSIONINFO
+FILEVERSION     0,9,0,0
+PRODUCTVERSION  0,9,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "KTile Tile Launcher"
+      VALUE "FileVersion",     "0.9.0"
+      VALUE "InternalName",    "KTile"
+      VALUE "LegalCopyright",  "Copyright (C) 2026 svyee"
+      VALUE "OriginalFilename", "KTile.exe"
+      VALUE "ProductName",     "KTile"
+      VALUE "ProductVersion",  "0.9.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 0x04B0
+  END
+END
