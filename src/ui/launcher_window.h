@@ -611,6 +611,14 @@ private:
     // 命中测试：坐标是否落在搜索框上
     bool hitTestSearchBox(float xDip, float yDip) const;
 
+    // ---- 搜索框左侧的应用图标 ----
+    // 框内的品牌位（嵌在搜索框左端），点击弹「关于」对话框。
+    D2D1_RECT_F searchIconRect() const;
+    bool hitTestSearchIcon(float xDip, float yDip) const;
+    void paintSearchIcon();
+    // 应用图标位图（从 exe 资源 101 取，按设备重建；缓存一次反复用）
+    ID2D1Bitmap* acquireAppIconBitmap();
+
     // ---- 搜索框 Edit 控件 ----
     // 文本输入交给真正的系统 Edit 控件：IME 中文、光标、选区、退格
     // 全部是系统原生行为，不再手画手维护（历史教训：手画方案在中文
@@ -840,6 +848,9 @@ private:
 
     // 图标位图缓存（key = item.id；设备资源重建时清空）
     std::map<std::string, platform::win32::ComPtr<ID2D1Bitmap>> iconCache_;
+    // 搜索框左侧的应用图标（exe 资源 101）。与 iconCache_ 一样依附于
+    // 渲染目标，设备丢失/重建时置空重取。
+    platform::win32::ComPtr<ID2D1Bitmap> appIconBitmap_;
 
     std::uint32_t dpi_ = 96;
 
@@ -903,10 +914,10 @@ private:
     platform::win32::ComPtr<ID2D1PathGeometry> pinFillGeometry_;
     platform::win32::ComPtr<ID2D1StrokeStyle> pinStrokeStyle_;
     void ensurePinGeometry();
-    // 锁定按钮的几何（Lucide lock，与钉子同一套路：描边 + 实心两份）
-    platform::win32::ComPtr<ID2D1PathGeometry> lockGeometry_;
-    platform::win32::ComPtr<ID2D1PathGeometry> lockFillGeometry_;
-    platform::win32::ComPtr<ID2D1StrokeStyle> lockStrokeStyle_;
+    // 锁定按钮的几何：锁定/解锁两枚独立的实心剪影
+    // （TurboWarp 的 lock.svg / unlock.svg，12x12 viewBox，直接填充绘制）
+    platform::win32::ComPtr<ID2D1PathGeometry> lockClosedGeometry_;
+    platform::win32::ComPtr<ID2D1PathGeometry> lockOpenGeometry_;
     void ensureLockGeometry();
 
     // 模态交互保护（设置窗口打开期间为 true，见 setModalGuard）

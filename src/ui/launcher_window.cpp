@@ -7,6 +7,7 @@
 #include "platform/win32/icon_store.h"
 #include "platform/win32/popup_menu.h"
 #include "platform/win32/svg_path.h"
+#include "platform/win32/tray_icon.h"  // kApplicationIconResourceId（应用图标）
 
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 
@@ -159,6 +160,15 @@ constexpr float kSearchBoxRightGap = 10.0F; // 搜索框右边缘与钉子左边
 constexpr float kSearchBoxStrokeWidth = 1.0F;
 // 无查询时的占位提示
 constexpr const wchar_t* kSearchPlaceholder = L"搜索…";
+
+// 搜索框左端的应用图标（品牌位）。
+//
+// 尺寸与搜索框（22 DIP）成比例：16 DIP 的图标在框内上下一共留 3 DIP，
+// 视觉上「嵌在框里」而不是「贴在框外」。图标右侧留 kSearchIconTextGap，
+// 输入文字与占位提示都从这里起排。
+constexpr float kSearchIconSize = 16.0F;
+constexpr float kSearchIconLeftGap = 4.0F;
+constexpr float kSearchIconTextGap = 4.0F;
 
 // 搜索框字号。
 //
@@ -480,6 +490,24 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             return 0;
         }
 
+        case WM_SETCURSOR: {
+            // 搜索框左端的应用图标是「可点」的，给手型光标；
+            // 其余客户区保持默认箭头（磁贴点击是「选中/启动」，不是链接）。
+            if (LOWORD(lParam) == HTCLIENT) {
+                POINT point{};
+                if (GetCursorPos(&point) != FALSE) {
+                    ScreenToClient(hwnd_, &point);
+                    const float scale = dpiScale();
+                    if (hitTestSearchIcon(point.x / scale,
+                                          point.y / scale)) {
+                        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                        return TRUE;
+                    }
+                }
+            }
+            break;  // 交给 DefWindowProc 走默认光标
+        }
+
         case WM_MOUSEMOVE: {
             const float x = static_cast<float>(GET_X_LPARAM(lParam));
             const float y = static_cast<float>(GET_Y_LPARAM(lParam));
@@ -712,7 +740,14 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
 
             // ---- 搜索框：点它把焦点交给 Edit 控件（键盘输入开始） ----
             // 不设捕获、不置 pressedItem_，它只是个「模式开关」。
+            // 框内左端的应用图标例外：它是「关于」按钮，不激活搜索。
             if (hitTestSearchBox(xDip, yDip)) {
+                if (hitTestSearchIcon(xDip, yDip)) {
+                    if (aboutHandler_) {
+                        aboutHandler_();
+                    }
+                    return 0;
+                }
                 if (searchEdit_ != nullptr) {
                     ShowWindow(searchEdit_, SW_SHOW);
                     SetFocus(searchEdit_);  // EN_SETFOCUS 里会 activateSearch
@@ -1253,6 +1288,7 @@ bool LauncherWindow::createDeviceIndependentResources() {
 void LauncherWindow::discardDeviceResources() {
     // 位图依附于渲染目标，必须先清缓存再释放目标
     clearIconCache();
+    appIconBitmap_.reset();
     backgroundBitmap_.reset();
     borderBrush_.reset();
     textBrush_.reset();
@@ -2460,27 +2496,33 @@ bool LauncherWindow::hitTestLock(const float xDip, const float yDip) const {
            yDip >= rect.top - pad && yDip < rect.bottom + pad;
 }
 
+// 锁定按钮的两枚图标（来源：TurboWarp scratch-gui 的
+// hide-flyout/lock.svg 与 unlock.svg，12x12 viewBox 的实心剪影）。
+// 与 Lucide 线框图标不同，这两枚是「填充图形」，直接 FillGeometry 绘制，
+// 不描边 —— 所以解析时统一走 forceFilled。
+constexpr const wchar_t* kLockClosedMarkup = LR"SVG(<path d="M3.5 3.5 C3.5 2.119 4.619 1 6 1 C7.381 1 8.5 2.119 8.5 3.5 L8.5 4.5 C9.328 4.5 10 5.172 10 6 L10 9.5 C10 10.328 9.328 11 8.5 11 L3.5 11 C2.672 11 2 10.328 2 9.5 L2 6 C2 5.172 2.672 4.5 3.5 4.5 Z M6 2 C5.172 2 4.5 2.672 4.5 3.5 L4.5 4.5 L7.5 4.5 L7.5 3.5 C7.5 2.672 6.828 2 6 2 Z M6.092 6.5 C5.791 6.5 5.546 6.745 5.546 7.046 L5.546 8.299 C5.546 8.601 5.791 8.845 6.092 8.845 C6.394 8.845 6.639 8.601 6.639 8.299 L6.639 7.046 C6.639 6.745 6.394 6.5 6.092 6.5 Z" />)SVG";
+constexpr const wchar_t* kLockOpenMarkup = LR"SVG(<path d="M6 6.5 C5.688 6.496 5.407 6.687 5.296 6.978 C5.184 7.27 5.266 7.599 5.5 7.805 L5.5 8.5 C5.5 8.776 5.724 9 6 9 C6.276 9 6.5 8.776 6.5 8.5 L6.5 7.805 C6.734 7.599 6.816 7.27 6.704 6.978 C6.593 6.687 6.312 6.496 6 6.5 Z M8.5 4.5 L4.5 4.5 L4.5 3.5 C4.499 2.893 4.863 2.345 5.424 2.111 C5.984 1.878 6.63 2.006 7.06 2.435 C7.248 2.627 7.382 2.865 7.45 3.125 C7.519 3.393 7.792 3.554 8.06 3.485 C8.328 3.416 8.489 3.143 8.42 2.875 C8.306 2.442 8.08 2.047 7.765 1.73 C7.049 1.017 5.975 0.804 5.042 1.191 C4.109 1.579 3.5 2.49 3.5 3.5 L3.5 4.5 C2.672 4.5 2 5.172 2 6 L2 9.5 C2 10.328 2.672 11 3.5 11 L8.5 11 C9.328 11 10 10.328 10 9.5 L10 6 C10 5.172 9.328 4.5 8.5 4.5 Z M9 9.5 C9 9.776 8.776 10 8.5 10 L3.5 10 C3.224 10 3 9.776 3 9.5 L3 6 C3 5.724 3.224 5.5 3.5 5.5 L8.5 5.5 C8.776 5.5 9 5.724 9 6 Z" />)SVG";
+
 void LauncherWindow::ensureLockGeometry() {
-    if (lockGeometry_ || !d2dFactory_.valid()) {
+    if (lockClosedGeometry_ || !d2dFactory_.valid()) {
         return;
     }
     const float offset = (kPinButtonSize - kPinGlyphBox) / 2.0F;
-    platform::win32::SvgGlyph outline;
-    if (!platform::win32::buildSvgGlyph(
-            d2dFactory_.get(), core::lucideBuiltinMarkup(L"lock"),
-            kPinGlyphScale, offset, offset, &outline)) {
+    // 源 viewBox 是 12x12（Lucide 是 24x24），缩放系数按源尺寸算
+    const float scale = kPinGlyphBox / 12.0F;
+    platform::win32::SvgGlyph closed;
+    if (!platform::win32::buildSvgGlyph(d2dFactory_.get(), kLockClosedMarkup,
+                                        scale, offset, offset, &closed,
+                                        true)) {
         return;
     }
-    // 实心版单独建：D2D 的 FillGeometry 跳过 HOLLOW 起始的图元
-    platform::win32::SvgGlyph solid;
-    platform::win32::buildSvgGlyph(d2dFactory_.get(),
-                                   core::lucideBuiltinMarkup(L"lock"),
-                                   kPinGlyphScale, offset, offset, &solid,
-                                   true);
-    lockGeometry_ = outline.strokeGeometry;
-    lockFillGeometry_ = solid.fillGeometry;
-    lockStrokeStyle_ =
-        platform::win32::createRoundStrokeStyle(d2dFactory_.get());
+    platform::win32::SvgGlyph open;
+    if (!platform::win32::buildSvgGlyph(d2dFactory_.get(), kLockOpenMarkup,
+                                        scale, offset, offset, &open, true)) {
+        return;
+    }
+    lockClosedGeometry_ = closed.fillGeometry;
+    lockOpenGeometry_ = open.fillGeometry;
 }
 
 // 绘制锁定按钮。
@@ -2509,18 +2551,16 @@ void LauncherWindow::paintLockButton() {
         renderTarget_->FillRoundedRectangle(back, brush_.get());
     }
 
-    if (lockGeometry_) {
+    // 两枚图标本身是实心剪影（锁定 = 闭合锁 / 解锁 = 开口锁），
+    // 直接按状态选一个填充绘制，不再区分描边/实心两套几何。
+    ID2D1PathGeometry* glyph = tilesLocked_ ? lockClosedGeometry_.get()
+                                            : lockOpenGeometry_.get();
+    if (glyph != nullptr) {
         borderBrush_->SetColor(colorFromArgb(
             tilesLocked_ ? theme_.pinActive() : theme_.pinIdle()));
         renderTarget_->SetTransform(
             D2D1::Matrix3x2F::Translation(rect.left, rect.top));
-        if (tilesLocked_ && lockFillGeometry_) {
-            // 锁定时把锁体填实：与钉子的「钉住=实心」同一视觉语言
-            renderTarget_->FillGeometry(lockFillGeometry_.get(),
-                                        borderBrush_.get(), nullptr);
-        }
-        renderTarget_->DrawGeometry(lockGeometry_.get(), borderBrush_.get(),
-                                    kPinStrokeWidth, lockStrokeStyle_.get());
+        renderTarget_->FillGeometry(glyph, borderBrush_.get(), nullptr);
     }
 
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -2549,6 +2589,91 @@ bool LauncherWindow::hitTestSearchBox(const float xDip,
            yDip >= rect.top && yDip < rect.bottom;
 }
 
+// 搜索框内左端的应用图标矩形（客户区 DIP，与搜索框垂直居中）。
+D2D1_RECT_F LauncherWindow::searchIconRect() const {
+    const D2D1_RECT_F box = searchBoxRect();
+    const float left = box.left + kSearchIconLeftGap;
+    const float top =
+        box.top + (kSearchBoxHeight - kSearchIconSize) / 2.0F;
+    return D2D1::RectF(left, top, left + kSearchIconSize,
+                       top + kSearchIconSize);
+}
+
+bool LauncherWindow::hitTestSearchIcon(const float xDip,
+                                       const float yDip) const {
+    const D2D1_RECT_F rect = searchIconRect();
+    return xDip >= rect.left && xDip < rect.right &&
+           yDip >= rect.top && yDip < rect.bottom;
+}
+
+// 从 exe 资源取应用图标并转成 D2D 位图。
+//
+// 源尺寸固定取 64px：图标在界面上最多显示到 16 DIP（150% DPI 下 24 物理
+// 像素），64 降采样到 24 比直接取 32 更锐利；再大就浪费显存。
+// 位图依附渲染目标，设备重建时由 discardDeviceResources 置空。
+ID2D1Bitmap* LauncherWindow::acquireAppIconBitmap() {
+    if (appIconBitmap_) {
+        return appIconBitmap_.get();
+    }
+    ID2D1RenderTarget* host =
+        (hwndTarget_.get() != nullptr) ? hwndTarget_.get() : renderTarget_;
+    if (host == nullptr || instance_ == nullptr) {
+        return nullptr;
+    }
+
+    const HICON icon = static_cast<HICON>(LoadImageW(
+        instance_, MAKEINTRESOURCEW(
+                       platform::win32::kApplicationIconResourceId),
+        IMAGE_ICON, 64, 64, LR_DEFAULTCOLOR));
+    if (icon == nullptr) {
+        return nullptr;
+    }
+
+    platform::win32::ComPtr<IWICImagingFactory> wicFactory;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                                  CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(wicFactory.put()));
+    if (SUCCEEDED(hr)) {
+        platform::win32::ComPtr<IWICBitmap> wicBitmap;
+        hr = wicFactory->CreateBitmapFromHICON(icon, wicBitmap.put());
+        if (SUCCEEDED(hr)) {
+            // 与磁贴图标同一条链路：HICON 出来的是非预乘 BGRA，
+            // HwndRenderTarget 只认预乘，必须转一次。
+            platform::win32::ComPtr<IWICFormatConverter> converter;
+            hr = wicFactory->CreateFormatConverter(converter.put());
+            if (SUCCEEDED(hr)) {
+                hr = converter->Initialize(
+                    wicBitmap.get(), GUID_WICPixelFormat32bppPBGRA,
+                    WICBitmapDitherTypeNone, nullptr, 0.0F,
+                    WICBitmapPaletteTypeCustom);
+            }
+            if (SUCCEEDED(hr)) {
+                hr = host->CreateBitmapFromWicBitmap(
+                    converter.get(), nullptr, appIconBitmap_.put());
+            }
+        }
+    }
+    DestroyIcon(icon);
+    return appIconBitmap_.get();
+}
+
+void LauncherWindow::paintSearchIcon() {
+    if (!renderTarget_) {
+        return;
+    }
+    // 标题带太窄（窗口被拉到极窄）时图标会顶到框右壁，干脆不画
+    const D2D1_RECT_F box = searchBoxRect();
+    if (box.right < searchIconRect().right + kSearchIconTextGap + 4.0F) {
+        return;
+    }
+    ID2D1Bitmap* bitmap = acquireAppIconBitmap();
+    if (bitmap == nullptr) {
+        return;
+    }
+    renderTarget_->DrawBitmap(bitmap, searchIconRect(), 1.0F,
+                              D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+}
+
 // 绘制搜索框外框与占位提示。
 //
 // 文本、光标、选区、退格、IME 中文输入全部由子 Edit 控件负责
@@ -2569,14 +2694,15 @@ void LauncherWindow::paintSearchBox() {
     ensureSearchEditResources();
     const float scale = dpiScale();
 
-    // ---- 编辑框就位（框内留出描边宽度）----
+    // ---- 编辑框就位（框内留出描边宽度与左侧图标位）----
+    const D2D1_RECT_F iconRect = searchIconRect();
+    const float editLeft = iconRect.right + kSearchIconTextGap;
     if (searchEdit_ != nullptr) {
-        const int ex = static_cast<int>(
-            std::lround((rect.left + 1.5F) * scale));
+        const int ex = static_cast<int>(std::lround(editLeft * scale));
         const int ey = static_cast<int>(
             std::lround((rect.top + 1.5F) * scale));
-        const int ew = static_cast<int>(
-            std::lround((rect.right - rect.left - 3.0F) * scale));
+        const int ew = static_cast<int>(std::lround(
+            (rect.right - 1.5F - editLeft) * scale));
         const int eh = static_cast<int>(
             std::lround((rect.bottom - rect.top - 3.0F) * scale));
         RECT cur{};
@@ -2606,11 +2732,16 @@ void LauncherWindow::paintSearchBox() {
     renderTarget_->DrawRoundedRectangle(back, borderBrush_.get(),
                                         kSearchBoxStrokeWidth);
 
+    // ---- 左端应用图标（点击 = 关于）----
+    // 画在框内而不是框外：搜索框左边缘就是内容区起始线，标题带左侧
+    // 没有多余空间；嵌进框里既不挤占搜索宽度，也形成品牌锚点。
+    paintSearchIcon();
+
     // ---- 占位提示：编辑框隐藏（无内容且无焦点）时才画得出来 ----
     // 查询非空但控件隐藏（如调试预置查询）时不画 —— 那会盖住语义。
     if ((searchEdit_ == nullptr || !IsWindowVisible(searchEdit_)) &&
         searchQuery_.empty()) {
-        const float textLeft = rect.left + 7.0F;
+        const float textLeft = iconRect.right + kSearchIconTextGap;
         const float textRight = rect.right - 6.0F;
         if (textRight > textLeft) {
             textBrush_->SetColor(colorFromArgb(theme_.searchPlaceholder()));
