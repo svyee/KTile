@@ -298,7 +298,8 @@ struct PreviewLayout {
 // fillIcon = 用「用户导入的自定义图片」：图片铺满整块磁贴内框（含 2px 内缩，
 // 与 1x1 的「图标铺满」同一套规则）。系统图标仍是方框居中。
 PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
-                                   const bool fillIcon) {
+                                   const bool fillIcon,
+                                   const int iconScalePercent) {
     constexpr float labelHeight = 18.0F;
     constexpr float iconLabelGap = 3.0F;
     constexpr float iconTopGap = 3.0F;
@@ -314,6 +315,10 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     const bool isWide = (spanColumns > 1.0F && spanRows == 1.0F);
     const bool isTall = (spanColumns == 1.0F && spanRows > 1.0F);
     const bool isSmall = (spanColumns == 1.0F && spanRows == 1.0F);
+
+    // 图标缩放：与 launcher_window.cpp 的 paintSingleTile 同一套公式
+    const float iconFactor =
+        static_cast<float>(std::clamp(iconScalePercent, 50, 100)) / 100.0F;
 
     const float bottomLabelTop = top + height - bottomInset - labelHeight;
 
@@ -336,20 +341,25 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     float iconTop = top;
     float labelTop = bottomLabelTop;
 
+    // 统一规则（与 paintSingleTile 一致）：标签贴磁贴底边，图标在
+    // 标签上方区域（或整格，标签悬浮的尺寸）内上下左右居中。
     if (isWide) {
-        side = (std::max)(12.0F,
-                          (std::min)(height - iconTopGap * 2.0F, width - 8.0F));
+        const float base =
+            (std::min)(height - iconTopGap * 2.0F, width - 8.0F);
+        side = (std::max)(12.0F, base * iconFactor);
         iconLeft = left + (width - side) / 2.0F;
         iconTop = top + (height - side) / 2.0F;
     } else if (isSmall) {
-        side = (std::max)(12.0F, (std::min)(width, height) - 4.0F);
-        iconLeft = left + 2.0F;
-        iconTop = top + 2.0F;
+        const float base = (std::min)(width, height) - 4.0F;
+        side = (std::max)(12.0F, base * iconFactor);
+        iconLeft = left + (width - side) / 2.0F;
+        iconTop = top + (height - side) / 2.0F;
     } else if (isTall) {
-        side = (std::max)(12.0F,
-                          (std::min)(width - 8.0F,
-                                     height - bottomInset - labelHeight -
-                                         iconLabelGap - iconTopGap));
+        const float base =
+            (std::min)(width - 8.0F,
+                       height - bottomInset - labelHeight - iconLabelGap -
+                           iconTopGap);
+        side = (std::max)(12.0F, base * iconFactor);
         iconLeft = left + (width - side) / 2.0F;
         iconTop = top + iconTopGap +
                   (height - iconTopGap - bottomInset - labelHeight -
@@ -358,10 +368,11 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     } else {
         const float maxIconHeight =
             height - iconTopGap - iconLabelGap - labelHeight - bottomInset;
-        side = (std::max)(12.0F, (std::min)(width - 8.0F, maxIconHeight));
+        const float base = (std::min)(width - 8.0F, maxIconHeight);
+        side = (std::max)(12.0F, base * iconFactor);
         iconLeft = left + (width - side) / 2.0F;
-        iconTop = top + iconTopGap;
-        labelTop = iconTop + side + iconLabelGap;
+        iconTop = top + iconTopGap + (maxIconHeight - side) / 2.0F;
+        labelTop = bottomLabelTop;
     }
 
     PreviewLayout layout;
@@ -843,12 +854,29 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
 
     // 自定义图片（存在 data\res 的相对路径）铺满整块磁贴；
     // 用目标自身图标时仍是方框居中 —— 与 launcher_window.cpp 一致。
+    // 例外：内置项自绘的 builtin-*.png 是方图，走缩放分支。
+    const bool builtinIcon =
+        state->hasCustomIcon() &&
+        ([] (const std::wstring& icon) {
+            const std::size_t slash = icon.find_last_of(L"\\/");
+            const std::wstring filename =
+                (slash == std::wstring::npos) ? icon : icon.substr(slash + 1);
+            return filename.rfind(L"builtin-", 0) == 0;
+        }(state->customIcon));
     const bool fillIcon =
         state->hasCustomIcon() &&
-        platform::win32::isManagedIconPath(state->customIcon);
+        platform::win32::isManagedIconPath(state->customIcon) &&
+        !builtinIcon;
 
-    const PreviewLayout layout =
-        computePreviewLayout(tile, state->previewSize, fillIcon);
+    // 预览的有效缩放值：勾「按统一设置」用全局值，否则用本项滑块值
+    const bool followGlobal =
+        SendMessageW(GetDlgItem(dialog, kIconScaleCheckId), BM_GETCHECK, 0,
+                     0) == BST_CHECKED;
+    const int effectiveScale =
+        followGlobal ? state->globalIconScale : state->iconScalePercent;
+
+    const PreviewLayout layout = computePreviewLayout(
+        tile, state->previewSize, fillIcon, effectiveScale);
 
     // ---- 磁贴底 + 边框 ----
     const int radius = (std::max)(4, unit / 8);
@@ -1259,6 +1287,9 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                                     : state->globalIconScale;
                         }
                         syncIconScaleControls(hwnd, state);
+                        // 统一/覆盖切换后有效缩放值变了，预览跟着刷
+                        InvalidateRect(GetDlgItem(hwnd, kPreviewId), nullptr,
+                                       TRUE);
                     }
                     return 0;
                 case kNameId:
@@ -1297,6 +1328,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     SendMessageW(GetDlgItem(hwnd, kIconScaleSliderId),
                                  TBM_GETPOS, 0, 0));
                 syncIconScaleControls(hwnd, state);
+                // 预览图标实时跟随滑块缩放
+                InvalidateRect(GetDlgItem(hwnd, kPreviewId), nullptr, TRUE);
             }
             return 0;
 
