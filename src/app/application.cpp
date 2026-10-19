@@ -18,6 +18,7 @@
 
 #include <Shlwapi.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 
 #include <algorithm>
 
@@ -45,6 +46,73 @@ constexpr std::size_t kTileMenuTabEntries = 32;
 constexpr UINT kTrayMenuAbout = 2005;
 
 HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
+
+// ---------------------------------------------------------------- 拖入的快捷方式
+
+// .lnk 解析结果。
+struct ResolvedShortcut {
+    std::wstring target;           // 真实目标路径（空 = 解析失败）
+    std::wstring arguments;        // 快捷方式带的启动参数
+    std::wstring workingDirectory; // 快捷方式记录的工作目录
+};
+
+// 把 .lnk 解析成真实目标。
+//
+// 为什么必须解析：快捷方式只是个「指路牌」，指的目标随时可能被
+// 移动/删除/卸载 —— 把 .lnk 本身存成磁贴的 target，等于把磁贴的
+// 生命周期拴在一个中间层上。直接存真实目标，快捷方式删了也不影响启动。
+//
+// 失败（不是合法 lnk / COM 失败）时返回空 target，调用方保留原路径
+// —— 宁可存一个还能双击打开的快捷方式，也不能让拖入凭空失败。
+ResolvedShortcut resolveShortcut(const std::wstring& lnkPath) {
+    constexpr DWORD kMaximumArguments = 2048;
+    ResolvedShortcut resolved;
+
+    IShellLinkW* link = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr,
+                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link))) ||
+        link == nullptr) {
+        return resolved;
+    }
+    IPersistFile* file = nullptr;
+    if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file))) &&
+        file != nullptr) {
+        if (SUCCEEDED(file->Load(lnkPath.c_str(), STGM_READ))) {
+            wchar_t path[MAX_PATH] = {};
+            wchar_t arguments[kMaximumArguments] = {};
+            wchar_t directory[MAX_PATH] = {};
+            // RAWPATH：拿快捷方式里存的原始路径。部分系统快捷方式
+            // 存的是「%windir%\...」这类带环境变量的写法，必须展开，
+            // 否则 inferItemType 与 ShellExecute 都不认。
+            link->GetPath(path, MAX_PATH, nullptr, SLGP_RAWPATH);
+            if (path[0] == L'\0') {
+                // RAWPATH 为空（部分广告安装的快捷方式只有目标列表）：
+                // 再按默认方式要一次 —— shell 会做完整的解析
+                link->GetPath(path, MAX_PATH, nullptr, 0);
+            }
+            link->GetArguments(arguments, kMaximumArguments);
+            link->GetWorkingDirectory(directory, MAX_PATH);
+            wchar_t expanded[MAX_PATH] = {};
+            if (ExpandEnvironmentStringsW(path, expanded, MAX_PATH) > 0 &&
+                expanded[0] != L'\0') {
+                resolved.target = expanded;
+            } else {
+                resolved.target = path;
+            }
+            wchar_t expandedDir[MAX_PATH] = {};
+            if (ExpandEnvironmentStringsW(directory, expandedDir, MAX_PATH) >
+                0) {
+                resolved.workingDirectory = expandedDir;
+            } else {
+                resolved.workingDirectory = directory;
+            }
+            resolved.arguments = arguments;
+        }
+        file->Release();
+    }
+    link->Release();
+    return resolved;
+}
 
 // ---------------------------------------------------------------- 拖入项的名字
 
@@ -1094,7 +1162,24 @@ void Application::addDroppedSources(
     std::vector<core::LaunchItem> fresh;
     std::size_t duplicates = 0;
     for (const platform::win32::DroppedSource& source : sources) {
-        const std::string target = base::wideToUtf8Lossy(source.value);
+        std::wstring sourceValue = source.value;
+
+        // .lnk 快捷方式 → 解析出真实目标再入库。
+        // 注意 dedup 用的也是解析后的 target：同一个程序，拖它的
+        // 快捷方式和拖它本体，应该被识别为同一个东西。
+        std::wstring linkArguments;
+        std::wstring linkWorkingDirectory;
+        if (source.kind == platform::win32::DroppedKind::Path &&
+            _wcsicmp(PathFindExtensionW(sourceValue.c_str()), L".lnk") == 0) {
+            const ResolvedShortcut resolved = resolveShortcut(sourceValue);
+            if (!resolved.target.empty()) {
+                sourceValue = resolved.target;
+                linkArguments = resolved.arguments;
+                linkWorkingDirectory = resolved.workingDirectory;
+            }
+        }
+
+        const std::string target = base::wideToUtf8Lossy(sourceValue);
         const std::string lowered = asciiLower(target);
 
         bool alreadyThere = false;
@@ -1121,11 +1206,22 @@ void Application::addDroppedSources(
         // 拖进来的东西十有八九就是文件。
         item.type = (source.kind == platform::win32::DroppedKind::Url)
                         ? core::ItemType::Url
-                        : ui::inferItemType(source.value)
+                        : ui::inferItemType(sourceValue)
                               .value_or(core::ItemType::File);
 
         // 名字跟着类型走（与对话框「添加新项目」共用同一条规则）
-        item.name = deriveItemName(source.value, item.type);
+        item.name = deriveItemName(sourceValue, item.type);
+
+        // 快捷方式自带的启动参数与工作目录一并继承，
+        // 否则「带参数的快捷方式」拖进来启动行为就变了。
+        if (!linkArguments.empty()) {
+            item.arguments.push_back(
+                base::wideToUtf8Lossy(linkArguments));
+        }
+        if (!linkWorkingDirectory.empty()) {
+            item.workingDirectory =
+                base::wideToUtf8Lossy(linkWorkingDirectory);
+        }
 
         // 同一批里也可能有重复（多选时把同一个文件拖了两次）
         existingTargets.push_back(lowered);

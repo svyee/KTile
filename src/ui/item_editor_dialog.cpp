@@ -1246,13 +1246,17 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                 }
                 case kIconScaleCheckId:
                     if (state != nullptr) {
-                        // 取消勾选瞬间，滑块从全局值起步（state 里已是全局值，
-                        // 若本项有覆盖值则 populateControls 已还原）
+                        // 取消勾选瞬间，滑块要有合理的起步值：
+                        // 本项有过覆盖值 → 恢复它；一直跟随全局 → 从全局值
+                        // 起步（否则 state 里还是初值 0，会显示「0%」）
                         if (SendMessageW(GetDlgItem(hwnd, kIconScaleCheckId),
-                                         BM_GETCHECK, 0, 0) == BST_UNCHECKED &&
-                            state->initial.iconScalePercent > 0) {
-                            state->iconScalePercent = std::clamp(
-                                state->initial.iconScalePercent, 50, 100);
+                                         BM_GETCHECK, 0, 0) == BST_UNCHECKED) {
+                            state->iconScalePercent =
+                                state->initial.iconScalePercent > 0
+                                    ? std::clamp(
+                                          state->initial.iconScalePercent, 50,
+                                          100)
+                                    : state->globalIconScale;
                         }
                         syncIconScaleControls(hwnd, state);
                     }

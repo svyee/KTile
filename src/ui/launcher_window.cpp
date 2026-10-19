@@ -2980,9 +2980,23 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     //
     // 系统提取的图标（exe / 文件夹 / 网址）天生是方图，仍走下方各尺寸的
     // 方框 —— 否则会被拉成一根竖条，反而认不出。
+    //
+    // 例外：内置项的矢量图标虽然也存成托管路径（res\builtin-*.png），
+    // 但它是程序自绘的方形图 —— 必须跟随图标大小设置缩放（居中），
+    // 否则「图标大小」滑块对这些磁贴不生效。
+    const bool builtinIcon =
+        item.icon.has_value() &&
+        [icon = base::utf8ToWide(*item.icon)] {
+            const std::size_t slash = icon.find_last_of(L"\\/");
+            const std::wstring filename = (slash == std::wstring::npos)
+                                              ? icon
+                                              : icon.substr(slash + 1);
+            return filename.rfind(L"builtin-", 0) == 0;
+        }();
     const bool fillTile =
         item.icon.has_value() &&
-        platform::win32::isManagedIconPath(base::utf8ToWide(*item.icon));
+        platform::win32::isManagedIconPath(base::utf8ToWide(*item.icon)) &&
+        !builtinIcon;
 
     // ---- 图标缩放系数 ----
     //
