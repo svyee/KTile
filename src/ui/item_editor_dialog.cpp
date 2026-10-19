@@ -303,7 +303,6 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     constexpr float labelHeight = 18.0F;
     constexpr float iconLabelGap = 3.0F;
     constexpr float iconTopGap = 3.0F;
-    constexpr float bottomInset = 3.0F;
 
     const float left = static_cast<float>(tile.left);
     const float top = static_cast<float>(tile.top);
@@ -320,7 +319,8 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     const float iconFactor =
         static_cast<float>(std::clamp(iconScalePercent, 50, 100)) / 100.0F;
 
-    const float bottomLabelTop = top + height - bottomInset - labelHeight;
+    // 标签底衬贴住磁贴下边缘（与 paintSingleTile 一致，不留缝隙）
+    const float bottomLabelTop = top + height - labelHeight;
 
     // 自定义图片：整块磁贴内框都给图片（标签叠在图上，与 1x1 的做法一致）
     if (fillIcon) {
@@ -357,17 +357,16 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     } else if (isTall) {
         const float base =
             (std::min)(width - 8.0F,
-                       height - bottomInset - labelHeight - iconLabelGap -
-                           iconTopGap);
+                       height - labelHeight - iconLabelGap - iconTopGap);
         side = (std::max)(12.0F, base * iconFactor);
         iconLeft = left + (width - side) / 2.0F;
         iconTop = top + iconTopGap +
-                  (height - iconTopGap - bottomInset - labelHeight -
+                  (height - iconTopGap - labelHeight -
                    iconLabelGap - side) /
                       2.0F;
     } else {
         const float maxIconHeight =
-            height - iconTopGap - iconLabelGap - labelHeight - bottomInset;
+            height - iconTopGap - iconLabelGap - labelHeight;
         const float base = (std::min)(width - 8.0F, maxIconHeight);
         side = (std::max)(12.0F, base * iconFactor);
         iconLeft = left + (width - side) / 2.0F;

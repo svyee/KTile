@@ -2958,17 +2958,16 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
 
     // ---- 几何统一度量 ----
     //
-    // 统一规则：标签一律贴磁贴底边（距底 3px），图标在标签上方的
-    // 剩余区域内上下左右居中。所有尺寸都遵守同一规则，混排时标题
-    // 基线完全一致，也不会因图标缩放（iconScalePercent < 100）把
-    // 标签带离底边。
+    // 统一规则：标签底衬直接贴住磁贴下边缘（不留缝隙），图标在标签
+    // 上方的剩余区域内上下左右居中。所有尺寸都遵守同一规则，混排时
+    // 标题基线完全一致，也不会因图标缩放（iconScalePercent < 100）
+    // 把标签带离底边。
     constexpr float labelHeight = 18.0F;
     constexpr float iconLabelGap = 3.0F;
     constexpr float iconTopGap = 3.0F;
-    constexpr float bottomInset = 3.0F;
 
-    // 标签下沿目标位置：距磁贴底边固定偏移（2x2 基准）
-    const float bottomLabelTop = top + height - bottomInset - labelHeight;
+    // 标签底衬：占据磁贴最下面一整条（绘制时下沿再内缩 1px 给边框）
+    const float bottomLabelTop = top + height - labelHeight;
 
     D2D1_RECT_F iconRect = D2D1::RectF(left, top, left, top);
     float labelTop = bottomLabelTop;
@@ -3038,12 +3037,11 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         // 纵向磁贴 (1x2)：图标上下居中、横向居中，
         // 标签常驻贴底（与 2x2 基线一致）。
         const float base = std::min(width - 8.0F,
-                     height - bottomInset - labelHeight - iconLabelGap
-                         - iconTopGap);
+                     height - labelHeight - iconLabelGap - iconTopGap);
         const float side = std::max(12.0F, base * iconFactor);
         const float iconLeft = left + (width - side) / 2.0F;
         const float iconTopPos = top + iconTopGap +
-            (height - iconTopGap - bottomInset - labelHeight -
+            (height - iconTopGap - labelHeight -
              iconLabelGap - side) / 2.0F;
         iconRect = D2D1::RectF(iconLeft, iconTopPos,
                                iconLeft + side, iconTopPos + side);
@@ -3053,7 +3051,7 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         // 上方的剩余区域里上下左右居中。图标缩到 50% 时标签仍在
         // 底边不动，只是居中区域里的图标变小。
         const float maxIconHeight =
-            height - iconTopGap - iconLabelGap - labelHeight - bottomInset;
+            height - iconTopGap - iconLabelGap - labelHeight;
         const float base = std::min(width - 8.0F, maxIconHeight);
         const float side = std::max(12.0F, base * iconFactor);
         const float iconTopPos = top + iconTopGap +
