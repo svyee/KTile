@@ -2958,9 +2958,10 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
 
     // ---- 几何统一度量 ----
     //
-    // 基准是 2x2（Large）：图标从磁贴顶部起、横向居中，标签紧贴图标
-    // 下边缘，标签下沿与磁贴底边留 3px。其余尺寸按同一套「标签紧贴
-    // 图标底边」的规则推导，保证不同尺寸混排时标题基线一致。
+    // 统一规则：标签一律贴磁贴底边（距底 3px），图标在标签上方的
+    // 剩余区域内上下左右居中。所有尺寸都遵守同一规则，混排时标题
+    // 基线完全一致，也不会因图标缩放（iconScalePercent < 100）把
+    // 标签带离底边。
     constexpr float labelHeight = 18.0F;
     constexpr float iconLabelGap = 3.0F;
     constexpr float iconTopGap = 3.0F;
@@ -3048,16 +3049,19 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
                                iconLeft + side, iconTopPos + side);
         labelTop = bottomLabelTop;
     } else {
-        // Large (2x2) —— 全部尺寸的基准：
-        // 图标从顶部起、横向居中，标签紧贴图标底边。
+        // Large (2x2)：与其它尺寸同规则 —— 标签贴底，图标在标签
+        // 上方的剩余区域里上下左右居中。图标缩到 50% 时标签仍在
+        // 底边不动，只是居中区域里的图标变小。
         const float maxIconHeight =
             height - iconTopGap - iconLabelGap - labelHeight - bottomInset;
         const float base = std::min(width - 8.0F, maxIconHeight);
         const float side = std::max(12.0F, base * iconFactor);
-        iconRect = D2D1::RectF(left + (width - side) / 2.0F, top + iconTopGap,
+        const float iconTopPos = top + iconTopGap +
+            (maxIconHeight - side) / 2.0F;
+        iconRect = D2D1::RectF(left + (width - side) / 2.0F, iconTopPos,
                                left + (width + side) / 2.0F,
-                               top + iconTopGap + side);
-        labelTop = iconRect.bottom + iconLabelGap;
+                               iconTopPos + side);
+        labelTop = bottomLabelTop;
     }
 
     ID2D1Bitmap* iconBitmap = acquireItemIcon(item);
