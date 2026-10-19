@@ -12,7 +12,9 @@ build/
 *.suo
 
 # 本地数据（用户磁贴与配置，不属于仓库）
-data/
+# 但内置皮肤主题 data/themes/ 需要随仓库分发
+data/*
+!data/themes/*.json
 
 # 系统杂项
 Thumbs.db
