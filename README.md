@@ -22,7 +22,7 @@ KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁�
 `KTile.exe`，无需安装、无需运行库、完全离线。
 
 <p align="center">
-  <img src="docs/screenshot-main.png" alt="KTile 主面板" width="651">
+  <img src="docs/screenshot-main.jpg" alt="KTile 主面板" width="651">
 </p>
 
 ## 为什么有这个项目
@@ -100,22 +100,21 @@ JSON 解析/序列化为零依赖自研实现。
 ## 项目结构
 
 ```
-src/
-├── app/            # 应用层：生命周期、托盘、热键、调试入口
-├── core/           # 领域层：磁贴布局、数据模型、搜索、标签操作
-├── infrastructure/ # 持久化：JSON 解析/写入、便携路径
-├── platform/win32/ # 平台层：D2D 基建、图标提取、拖放、全局热键
-└── ui/             # 界面层：主窗口、编辑对话框、设置窗口、皮肤
-tests/              # 单元测试
-tools/              # 开发期代码生成脚本（Lucide 图标转换）
+KTile/
+├── src/
+│   ├── app/            # 应用层：生命周期、托盘、热键、调试入口
+│   ├── core/           # 领域层：磁贴布局、数据模型、搜索、标签操作
+│   ├── infrastructure/ # 持久化：JSON 解析/写入、便携路径
+│   ├── platform/win32/ # 平台层：D2D 基建、图标提取、拖放、全局热键
+│   └── ui/             # 界面层：主窗口、编辑对话框、设置窗口、皮肤
+├── tests/              # 单元测试（每个模块一个 test_*.cpp）
+├── tools/              # 开发期代码生成：Lucide 图标、应用 ico
+├── scripts/            # 构建环境脚本与诊断探针（不参与编译）
+├── docs/               # 文档与截图
+├── assets/             # 设计源文件（应用图标母版 icon.png）
+├── build.ps1           # 构建脚本（直接调用 cl.exe，无需 CMake）
+└── build/              # 构建产物（已忽略）
 ```
-
-## 路线图
-
-- [ ] v1.0：便携 zip 打包、Windows 7 SP1 真机验证
-- [ ] 拖动磁贴到标签条切页
-- [ ] 标签页重排
-- [ ] 每页独立网格列数
 
 ## 反馈与联系
 
