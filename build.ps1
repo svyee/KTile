@@ -200,6 +200,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "platform\win32\uuid.cpp")
         # ui
         (Join-Path $SrcDir "ui\theme.cpp")
+        (Join-Path $SrcDir "ui\color_picker.cpp")
         (Join-Path $SrcDir "ui\launcher_window.cpp")
         (Join-Path $SrcDir "ui\launcher_window_behavior.cpp")
         (Join-Path $SrcDir "ui\launcher_window_animation.cpp")

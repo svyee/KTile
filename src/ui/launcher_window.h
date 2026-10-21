@@ -275,6 +275,16 @@ public:
     // 真实值，否则滑块会停在一个和观感对不上的位置。
     int effectiveTileOpacityPercent() const;
 
+    // 所有磁贴的默认背景色（ARGB）。空 = 跟随皮肤。
+    // 单项 LaunchItem.tileColor 优先于它；它不套用磁贴背景不透明度。
+    void setDefaultTileColor(const std::optional<std::uint32_t>& color) {
+        defaultTileColor_ = color;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    const std::optional<std::uint32_t>& defaultTileColor() const noexcept {
+        return defaultTileColor_;
+    }
+
     // 丢弃图标缓存。
     //
     // 「修改项目」改过目标或自定义图标后必须调用：缓存键是 item.id，
@@ -890,6 +900,8 @@ private:
 
     // 磁贴背景不透明度（0~100；-1 = 跟随皮肤）
     int tileOpacityPercent_ = -1;
+    // 全局默认磁贴底色（空 = 跟随皮肤；单项 tileColor 优先）
+    std::optional<std::uint32_t> defaultTileColor_;
     // 把主题给的磁贴底色按用户设置换算 alpha。跟随皮肤时原样返回。
     std::uint32_t applyTileOpacityPercent(std::uint32_t baseColor) const;
 

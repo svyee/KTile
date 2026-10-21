@@ -61,6 +61,9 @@ struct SettingsResult {
     std::optional<int> windowOpacityPercent;
     // 磁贴背景不透明度（0~100；-1 = 跟随皮肤）
     std::optional<int> tileOpacityPercent;
+    // 全局默认磁贴底色。nullopt = 未改动；有值但内层为空 = 恢复跟随皮肤；
+    // 有值且内层非空 = 新的默认色（ARGB）。
+    std::optional<std::optional<std::uint32_t>> defaultTileColor;
     // 图标相对磁贴内框的统一缩放（50~100）
     std::optional<int> iconScalePercent;
 };
@@ -89,6 +92,8 @@ struct SettingsPreviewHooks {
     std::function<void(int percent)> windowOpacityChanged;
     // 磁贴背景不透明度（0~100）。-1 表示「跟随皮肤」。
     std::function<void(int percent)> tileOpacityChanged;
+    // 全局默认磁贴底色（空 = 跟随皮肤）。
+    std::function<void(std::optional<std::uint32_t> color)> defaultTileColorChanged;
     // 图标统一缩放（50~100）。拖动滑块过程中就会连续回调。
     std::function<void(int percent)> iconScaleChanged;
 };
@@ -111,6 +116,7 @@ struct SettingsPreviewHooks {
 //   currentWindowOpacity 当前主窗口整体不透明度（50~100）
 //   currentTileOpacity   当前磁贴背景不透明度（0~100；-1 = 跟随皮肤）
 //   currentIconScale     当前图标统一缩放（50~100）
+//   currentDefaultTileColor 当前全局默认磁贴底色（可空 = 跟随皮肤）
 //   columnsInUse         当前布局已占用的最大列数（用于提示「缩小会挤掉磁贴」）
 //   rowsInUse            当前布局已占用的最大行数
 //   out                  结果输出
@@ -129,6 +135,7 @@ bool showSettingsWindow(HWND owner,
                         int currentWindowOpacity,
                         int currentTileOpacity,
                         int currentIconScale,
+                        const std::optional<std::uint32_t>& currentDefaultTileColor,
                         std::uint16_t columnsInUse,
                         std::uint16_t rowsInUse,
                         SettingsResult* out,

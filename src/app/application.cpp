@@ -47,6 +47,18 @@ constexpr UINT kTrayMenuAbout = 2005;
 
 HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
 
+// Explorer 重启时广播的消息 ID（动态注册，不能 constexpr）。
+//
+// 为什么需要它：WH_KEYBOARD_LL 钩子链是 LIFO，后装的先收到事件。
+// 正常情况下 KTile 比 Explorer 晚启动，我们的钩子在前，能吞掉 Win 键
+// 不让它弹开始菜单。但一旦 Explorer 崩溃重启 / 注销重登，它会重新装
+// 钩子排到我们前面 —— 我们的「吞」就失效了，开始菜单和 KTile 会同时弹。
+// 监听这条广播，在 Explorer 重启后立刻重装钩子，把顺序抢回来。
+UINT taskbarCreatedMessageId() {
+    static const UINT id = RegisterWindowMessageW(L"TaskbarCreated");
+    return id;
+}
+
 // ---------------------------------------------------------------- 拖入的快捷方式
 
 // .lnk 解析结果。
@@ -224,6 +236,15 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
 
     auto* self = reinterpret_cast<Application*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    // TaskbarCreated 是动态消息 ID，不能进 switch —— 在 switch 前拦截。
+    // Explorer 重启后立刻重装手势钩子，把「Win 键先到我们这里」的顺序抢回来。
+    if (message == taskbarCreatedMessageId()) {
+        if (self != nullptr) {
+            self->reinstallGestureHotkey();
+        }
+        return 0;
+    }
 
     switch (message) {
         case WM_HOTKEY: {
@@ -661,6 +682,8 @@ bool Application::initializeWindow() {
         static_cast<int>(config_.appearance.windowOpacityPercent));
     launcherWindow_->setTileOpacityPercent(
         static_cast<int>(config_.appearance.tileOpacityPercent));
+    // 全局默认磁贴底色（空 = 跟随皮肤；单项 tileColor 优先）
+    launcherWindow_->setDefaultTileColor(config_.appearance.defaultTileColor);
 
     // ---- 回调：启动项目 ----
     // 真实启动逻辑：普通权限按项目自身的管理员设置决定是否提权；
@@ -989,6 +1012,8 @@ void Application::applyItemEdit(const HWND owner,
     initial.tileSize = item.tileSize;
     initial.labelMode = item.labelMode;
     initial.iconScalePercent = item.iconScalePercent;
+    // 本项自己的底色（空 = 跟随设置里的全局默认 / 皮肤）
+    initial.tileColor = item.tileColor;
     // 初值 = 当前所在页：用户在哪一页上右键，改的就是哪一页的东西。
     initial.tabIndex = launcherWindow_->activeTabIndex();
 
@@ -1004,7 +1029,8 @@ void Application::applyItemEdit(const HWND owner,
     if (!ui::showItemEditorDialog(
             owner, tabNames, initial.tabIndex, initial,
             launcherWindow_->alwaysShowTileLabels(),
-            static_cast<int>(config_.appearance.iconScalePercent), &result)) {
+            static_cast<int>(config_.appearance.iconScalePercent),
+            config_.appearance.defaultTileColor, &result)) {
         return;  // 用户取消
     }
 
@@ -1023,6 +1049,11 @@ void Application::applyItemEdit(const HWND owner,
     fields.tileSize = result.tileSize;
     fields.labelMode = result.labelMode;
     fields.iconScalePercent = result.iconScalePercent;
+    // 外层 optional = 「这次编辑要处理颜色」；内层空 = 清除自定义色。
+    // 对话框总是回填当前值，所以没动过时这里与 item.tileColor 相等，
+    // editItem 会判定为无变化。
+    fields.tileColor = std::optional<std::optional<std::uint32_t>>(
+        result.tileColor);
 
     const std::size_t activeTab = launcherWindow_->activeTabIndex();
 
@@ -1082,7 +1113,8 @@ void Application::applyItemAdd(const HWND owner,
     if (!ui::showItemEditorDialog(
             owner, tabNames, initial.tabIndex, initial,
             launcherWindow_->alwaysShowTileLabels(),
-            static_cast<int>(config_.appearance.iconScalePercent), &result,
+            static_cast<int>(config_.appearance.iconScalePercent),
+            config_.appearance.defaultTileColor, &result,
             ui::ItemEditorMode::Create)) {
         return;  // 用户取消
     }
@@ -1111,6 +1143,7 @@ void Application::applyItemAdd(const HWND owner,
     item.runAsAdministrator = result.runAsAdministrator;
     item.tileSize = result.tileSize;
     item.labelMode = result.labelMode;
+    item.tileColor = result.tileColor;
 
     core::ItemsDocument updated = launcherWindow_->document();
     const std::size_t tabIndex =
@@ -1369,6 +1402,10 @@ void Application::openSettings() {
     preview.iconScaleChanged = [this](const int percent) {
         launcherWindow_->setTileIconScalePercent(percent);
     };
+    preview.defaultTileColorChanged = [this](
+        std::optional<std::uint32_t> color) {
+        launcherWindow_->setDefaultTileColor(color);
+    };
 
     // ---- 统计当前布局实际占用的行列，用于「缩小网格」的提示 ----
     //
@@ -1407,6 +1444,7 @@ void Application::openSettings() {
         launcherWindow_->windowOpacityPercent(),
         launcherWindow_->effectiveTileOpacityPercent(),
         static_cast<int>(config_.appearance.iconScalePercent),
+        config_.appearance.defaultTileColor,
         columnsInUse,
         rowsInUse,
         &result,
@@ -1435,6 +1473,8 @@ void Application::openSettings() {
             static_cast<int>(config_.appearance.tileOpacityPercent));
         launcherWindow_->setTileIconScalePercent(
             static_cast<int>(config_.appearance.iconScalePercent));
+        launcherWindow_->setDefaultTileColor(
+            config_.appearance.defaultTileColor);
         return;
     }
 
@@ -1592,6 +1632,17 @@ void Application::openSettings() {
         configChanged = true;
     }
 
+    // ---- 全局默认磁贴底色 ----
+    //
+    // 外层有值 = 用户确实动过（含「恢复跟随皮肤」）；
+    // 内层空 = 清空默认色，回到皮肤 tileFill。
+    if (result.defaultTileColor.has_value()) {
+        config_.appearance.defaultTileColor = *result.defaultTileColor;
+        launcherWindow_->setDefaultTileColor(
+            config_.appearance.defaultTileColor);
+        configChanged = true;
+    }
+
     // ---- 应用网格改动 ----
     //
     // 顺序很重要：先改尺寸，再让窗口重算布局，最后落盘。
@@ -1714,6 +1765,20 @@ bool Application::initializeHotkey() {
         return false;
     }
     return true;
+}
+
+void Application::reinstallGestureHotkey() {
+    const core::HotkeyConfig& config = config_.activation.hotkey;
+    if (config.gesture == core::HotkeyGesture::None) {
+        return;  // 普通 RegisterHotKey 不走钩子链，无需重装
+    }
+    if (messageWindow_ == nullptr) {
+        return;
+    }
+    // install 内部会先 uninstall，调用一次即可完成「拆旧 + 装新」。
+    // 失败不覆盖 hotkeyErrorText_：这里不是用户主动改热键，没必要
+    // 把「暂时没装上」当成用户能处理的错误提示出来，下次唤醒时再试。
+    gestureHotkey_.install(messageWindow_, kToggleHotkeyId, config.gesture);
 }
 
 // ================================================================ 消息循环

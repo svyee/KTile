@@ -434,6 +434,16 @@ struct AppearanceConfig {
     std::int32_t windowOpacityPercent = 100;
     std::int32_t tileOpacityPercent = -1;
 
+    // 所有磁贴的默认背景色（ARGB）。空 = 跟随皮肤 tileFill。
+    //
+    // 与单项 LaunchItem.tileColor 的关系：
+    //   单项显式色 > 这里的全局默认色 > 皮肤 tileFill。
+    // 之所以单独做一个全局字段：用户常常想一次性换掉所有格子的底色
+    //（例如整套改成深蓝），而不是逐块右键改 30 次。
+    // 选了颜色后不再套用 tileOpacityPercent —— 那个旋钮是给皮肤玻璃底
+    // 调的，套到用户亲手挑的实色上会让颜色变脏（与单项色的规则一致）。
+    std::optional<std::uint32_t> defaultTileColor;
+
     // 图标相对磁贴内框的统一缩放百分比，50~100（默认 90）。
     // 100% = 图标铺满内框（与未引入该设置前一致）；单项可在
     // 编辑对话框里覆盖（LaunchItem.iconScalePercent，0=跟随这里）。

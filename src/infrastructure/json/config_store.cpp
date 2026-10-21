@@ -170,6 +170,8 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     writer.member("windowOpacityPercent",
                   config.appearance.windowOpacityPercent);
     writer.member("tileOpacityPercent", config.appearance.tileOpacityPercent);
+    writeOptionalUint32(writer, "defaultTileColor",
+                        config.appearance.defaultTileColor);
     writer.member("iconScalePercent", config.appearance.iconScalePercent);
     writeOptionalUint32(writer, "accentColor", config.appearance.accentColor);
     // 上次所在页（存 id）。空串代表还没有记录 —— 照样写出去，
@@ -436,6 +438,15 @@ ConfigStore::deserializeConfig(const std::string& text) {
                 appearance.find("iconScalePercent").asInt(90);
             config.iconScalePercent =
                 iconScale < 50 ? 50 : (iconScale > 100 ? 100 : iconScale);
+        }
+
+        // 全局默认磁贴底色（老配置没有 → 空 = 跟随皮肤，行为不变）
+        {
+            const JsonValue& defaultTileColor =
+                appearance.find("defaultTileColor");
+            if (defaultTileColor.isNumber()) {
+                config.defaultTileColor = defaultTileColor.asUint32(0);
+            }
         }
 
         const JsonValue& accent = appearance.find("accentColor");

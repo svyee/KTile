@@ -6,8 +6,8 @@
 #include <winver.h>
 
 1 VERSIONINFO
-FILEVERSION     0,9,0,0
-PRODUCTVERSION  0,9,0,0
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
 FILEOS          VOS_NT_WINDOWS32
 FILETYPE        VFT_APP
 BEGIN
@@ -16,12 +16,12 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "FileDescription", "KTile Tile Launcher"
-      VALUE "FileVersion",     "0.9.0"
+      VALUE "FileVersion",     "1.0.0"
       VALUE "InternalName",    "KTile"
       VALUE "LegalCopyright",  "Copyright (C) 2026 svyee"
       VALUE "OriginalFilename", "KTile.exe"
       VALUE "ProductName",     "KTile"
-      VALUE "ProductVersion",  "0.9.0"
+      VALUE "ProductVersion",  "1.0.0"
     END
   END
   BLOCK "VarFileInfo"

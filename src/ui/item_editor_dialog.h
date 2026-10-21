@@ -62,6 +62,9 @@ struct ItemEditorFields {
     // 图标相对磁贴的显示比例（%）。0 = 按统一设置（设置窗口里的滑块），
     // 否则夹在 50~100 之间，只影响方框图标，铺满型自定义图片不受限。
     int iconScalePercent = 0;
+
+    // 磁贴背景色（ARGB）。空 = 跟随设置里的全局默认底色 / 皮肤。
+    std::optional<std::uint32_t> tileColor;
 };
 
 // 对话框用途。
@@ -86,6 +89,9 @@ enum class ItemEditorMode : std::uint8_t {
 //                          预览出真实效果。
 // globalIconScale        ：设置里的「图标大小」当前值（%）。
 //                          勾选框选「按统一设置」时，滑块显示它作参照。
+// globalTileColor        ：设置里的全局默认磁贴底色（可空）。
+//                          本项未单独选色时，预览与颜色选择器的初始值
+//                          都按它来，才能如实画出「跟随默认」的效果。
 // outResult  ：用户点「保存」时写出新值
 // mode       ：新建 / 修改，只影响标题与按钮文案（见 ItemEditorMode）
 //
@@ -97,6 +103,7 @@ bool showItemEditorDialog(HWND owner,
                           const ItemEditorFields& initial,
                           bool globalAlwaysShowLabels,
                           int globalIconScale,
+                          const std::optional<std::uint32_t>& globalTileColor,
                           ItemEditorFields* outResult,
                           ItemEditorMode mode = ItemEditorMode::Edit);
 

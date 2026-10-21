@@ -305,6 +305,7 @@ void GestureHotkey::uninstall() {
     ctrlHeld_ = false;
     winState_ = WinState::Idle;
     startMenuByWinKey_ = false;
+    ctrlPressed_ = false;
 }
 
 void GestureHotkey::trigger() const {
@@ -342,6 +343,14 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
         return false;
     }
 
+    // 事件队列里的 Ctrl 状态：在进入任何手势分支前统一更新。
+    // 不管当前手势用不用得上都跟踪 —— 手势热替换后状态依然正确。
+    // 注意：StartMenu 分支会注入一次 Ctrl keyup，注入事件带签名在
+    // 函数开头就放行了，所以这里只看得到物理事件，状态不会错乱。
+    if (isCtrlKey(event.vkCode)) {
+        ctrlPressed_ = isDown;
+    }
+
     // ---------------------------------------------------------- 双击 Ctrl
     if (gesture_ == core::HotkeyGesture::DoubleCtrl) {
         if (isCtrlKey(event.vkCode)) {
@@ -376,9 +385,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
         if (isWinKey(event.vkCode)) {
             if (isDown) {
                 if (winState_ == WinState::Idle) {
-                    const bool ctrlDown =
-                        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-                    if (startMenuByWinKey_ && ctrlDown) {
+                    if (startMenuByWinKey_ && ctrlPressed_) {
                         // Ctrl+Win：用户约定它仍开开始菜单。原生的组合
                         // 被我们吞掉了，这里代劳。
                         //
@@ -391,6 +398,9 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
                         // 用户继续按住 Ctrl 打字不再算组合键 —— 但这正是
                         // 「按 Ctrl+Win 开菜单」这个动作的语义终点。
                         injectKey(VK_CONTROL, false);
+                        // 系统视角里 Ctrl 已松开，本地状态同步 —— 否则
+                        // 下一次 Win 按下还会被误判成 Ctrl+Win。
+                        ctrlPressed_ = false;
                         injectWinKey(true);
                         injectWinKey(false);
                         winState_ = WinState::StartMenu;

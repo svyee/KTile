@@ -110,6 +110,14 @@ struct ItemEditFields {
     // 图标相对磁贴的显示比例（%）。0 = 跟随全局设置；
     // 50~100 = 本项覆盖。nullopt 时不动原值。
     std::optional<int> iconScalePercent;
+
+    // 磁贴背景色（ARGB）。
+    //
+    // 三层语义，与对话框的「背景色」一行严格对应：
+    //   nullopt            = 本次不改动（其它调用方可不填）
+    //   有值但内层为空      = 清除自定义色，回到全局默认 / 皮肤
+    //   有值且内层非空      = 显式指定这一块的颜色
+    std::optional<std::optional<std::uint32_t>> tileColor;
 };
 
 // 把对话框提交的字段写回某个磁贴。

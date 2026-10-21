@@ -3429,14 +3429,19 @@ std::uint32_t LauncherWindow::resolveTileBackground(const core::LaunchItem& item
     // 用户显式指定了磁贴色 —— 尊重用户选择，只叠加状态提亮。
     // 注意：这一档**不套用**全局的「磁贴背景不透明度」—— 那是给
     // 默认玻璃底调的旋钮，套到用户亲手挑的颜色上等于擅自改他的配色。
-    if (item.tileColor.has_value()) {
+    //
+    // 优先级：单项色 > 设置里的全局默认色 > 皮肤/调色板。
+    // 后两档共用同一段提亮逻辑，避免两份「hover 加多少亮」各写一遍。
+    const std::optional<std::uint32_t> customColor =
+        item.tileColor.has_value() ? item.tileColor : defaultTileColor_;
+    if (customColor.has_value()) {
         std::uint32_t lift = 0;
         if (pressed) {
             lift = 0x40U;
         } else if (hovered) {
             lift = 0x20U;
         }
-        return liftColor(*item.tileColor, lift);
+        return liftColor(*customColor, lift);
     }
 
     // 默认：中性深灰玻璃。图标多为浅色设计，中性底能保证对比度。

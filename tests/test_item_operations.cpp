@@ -421,6 +421,54 @@ static void testEditWithoutLabelModeLeavesItAlone() {
     CHECK(document.tabs[0].items[1].labelMode == TileLabelMode::OnHover);
 }
 
+// 「每块磁贴自定义背景色」：三层语义（不改 / 清除 / 指定）都要成立。
+// 外层 optional 表达「这次编辑是否处理颜色」，内层 optional 才是值本身 ——
+// 少了这层，「清除自定义色」与「没动过」就无法区分。
+static void testEditTileColorSetAndClear() {
+    ItemsDocument document = makeDocument();
+
+    const LaunchItem& before = document.tabs[0].items[1];
+    ItemEditFields fields;
+    fields.name = before.name;
+    fields.type = before.type;
+    fields.target = before.target;
+
+    // 指定颜色
+    fields.tileColor = std::optional<std::optional<std::uint32_t>>(
+        std::optional<std::uint32_t>(0xFF112233U));
+    CHECK(editItem(document, 0, 1, fields));
+    CHECK(document.tabs[0].items[1].tileColor.has_value());
+    CHECK(*document.tabs[0].items[1].tileColor == 0xFF112233U);
+
+    // 同值再提交 → 无变化
+    CHECK(!editItem(document, 0, 1, fields));
+
+    // 清除（回到全局默认 / 皮肤）
+    fields.tileColor = std::optional<std::optional<std::uint32_t>>(
+        std::optional<std::uint32_t>());
+    CHECK(editItem(document, 0, 1, fields));
+    CHECK(!document.tabs[0].items[1].tileColor.has_value());
+
+    // 再次清除 → 已经是空，无变化
+    CHECK(!editItem(document, 0, 1, fields));
+}
+
+// 不带 tileColor（外层 nullopt）→ 别把用户单独设过的颜色冲掉
+static void testEditWithoutTileColorLeavesItAlone() {
+    ItemsDocument document = makeDocument();
+    document.tabs[0].items[1].tileColor = 0xFF445566U;
+
+    const LaunchItem& before = document.tabs[0].items[1];
+    ItemEditFields fields;
+    fields.name = "计算器（改名）";
+    fields.type = before.type;
+    fields.target = before.target;
+
+    CHECK(editItem(document, 0, 1, fields));
+    CHECK(document.tabs[0].items[1].tileColor.has_value());
+    CHECK(*document.tabs[0].items[1].tileColor == 0xFF445566U);
+}
+
 static void testEditInvalidIndex() {
     ItemsDocument document = makeDocument();
     ItemEditFields fields;
@@ -573,6 +621,8 @@ int wmain() {
     testEditLabelModeChanges();
     testEditAllLabelModes();
     testEditWithoutLabelModeLeavesItAlone();
+    testEditTileColorSetAndClear();
+    testEditWithoutTileColorLeavesItAlone();
     testEditInvalidIndex();
 
     if (g_failures == 0) {

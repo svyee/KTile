@@ -214,6 +214,8 @@ bool editItem(ItemsDocument& document,
     const bool iconScaleChanged =
         fields.iconScalePercent.has_value() &&
         *fields.iconScalePercent != item.iconScalePercent;
+    const bool tileColorChanged =
+        fields.tileColor.has_value() && *fields.tileColor != item.tileColor;
 
     const bool changed =
         item.name != name ||
@@ -224,6 +226,7 @@ bool editItem(ItemsDocument& document,
         tileSizeChanged ||
         labelModeChanged ||
         iconScaleChanged ||
+        tileColorChanged ||
         item.workingDirectory.has_value() != !workingDirectory.empty() ||
         (item.workingDirectory.has_value() &&
          *item.workingDirectory != workingDirectory) ||
@@ -264,6 +267,10 @@ bool editItem(ItemsDocument& document,
             std::clamp(*fields.iconScalePercent, 0, 100) <= 0
                 ? 0
                 : std::clamp(*fields.iconScalePercent, 50, 100);
+    }
+    if (tileColorChanged) {
+        // 内层空 = 清除自定义色，回到全局默认 / 皮肤
+        item.tileColor = *fields.tileColor;
     }
     return true;
 }

@@ -2,6 +2,7 @@
 
 #include "base/text_convert.h"
 #include "core/data_model.h"
+#include "ui/color_picker.h"
 #include "ui/theme.h"
 
 #include <commctrl.h>
@@ -23,13 +24,13 @@ namespace {
 constexpr int kDialogWidth = 330;
 // 高度按四个分组（外观 / 布局 / 窗口 / 启动与唤醒）累加得出：
 //   外观     皮肤(26) + 背景图(27) + 整体不透明度(30) + 磁贴背景(30)
-//            + 文字标签(24) + 默认行为(26)
+//            + 格子底色(30) + 文字标签(24) + 默认行为(26)
 //   布局     网格(24+4) + 提示(24) + 标签栏位置(26)
 //   窗口     出现位置(26)
 //   启动与唤醒 开机自启(26) + 唤醒方式(62)
 // 每个分组的标题另占 24，非首组再加 14 的分隔线间距。
 // 改任何一行的行高都要回来重算这个数，否则底部按钮会压到内容上。
-constexpr int kDialogHeight = 586;  // 556 + 图标大小一行（30）
+constexpr int kDialogHeight = 616;  // 586 + 格子底色一行（30）
 
 constexpr int kMargin = 16;          // 左右页边距
 constexpr int kRowGap = 12;          // 行间垂直间距
@@ -86,6 +87,8 @@ constexpr int kWindowPlacementComboId = 1140;
 constexpr int kWindowOpacitySliderId = 1150;    // 整体不透明度滑块
 constexpr int kWindowOpacityValueId = 1151;     // 整体不透明度数值
 constexpr int kTileOpacitySliderId = 1152;      // 磁贴背景不透明度滑块
+constexpr int kDefaultTileColorSwatchId = 1156; // 默认底色样本（SS_OWNERDRAW）
+constexpr int kDefaultTileColorClearId = 1158;  // 恢复跟随皮肤
 constexpr int kIconScaleSliderId = 1154;        // 图标统一缩放滑块
 constexpr int kIconScaleValueId = 1155;         // 图标统一缩放数值
 constexpr int kTileOpacityValueId = 1153;       // 磁贴背景不透明度数值
@@ -140,6 +143,13 @@ struct SettingsDialogState {
     bool tileOpacityTouched = false;
     int initialIconScale = 90;
     bool iconScaleTouched = false;
+
+    // 全局默认磁贴底色：初始值 / 当前选择 / 是否动过。
+    // 用「是否动过」而不是直接比值，才能把「取消选色」这种回到
+    // 空值的变化也识别出来。
+    std::optional<std::uint32_t> initialDefaultTileColor;
+    std::optional<std::uint32_t> chosenDefaultTileColor;
+    bool defaultTileColorTouched = false;
 
     // 皮肤与背景图
     std::wstring initialThemeName;      // 当前皮肤显示名（空 = 默认）
@@ -488,6 +498,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             y += 30;
 
+            // ---- 格子底色 ----
+            //
+            // 所有磁贴的默认背景色，优先级低于单项自己选的颜色。
+            // 色块本身就是按钮（SS_NOTIFY）：点它弹内置色表，尺寸沿用
+            // 原先「选择颜色...」按钮的宽度，既好点也能看清当前颜色。
+            // 「跟随皮肤」按钮 = 清空，回到皮肤自带的 tileFill。
+            makeLabel(L"格子底色", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeControl(L"STATIC", L"",
+                        WS_CHILD | WS_VISIBLE | SS_OWNERDRAW | SS_NOTIFY, 0,
+                        kMargin + kLabelWidth, y, 82, 23,
+                        kDefaultTileColorSwatchId);
+            makeControl(L"BUTTON", L"跟随皮肤",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                        0, kMargin + kLabelWidth + 86, y, 70, 23,
+                        kDefaultTileColorClearId);
+            y += 30;
+
             // ---- 图标大小 ----
             //
             // 图标相对磁贴内框的统一缩放（50~100）。格子尺寸完全不变，
@@ -777,6 +804,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             return 0;
         }
 
+        case WM_DRAWITEM: {
+            // 自绘控件只有「格子底色」样本一块。
+            // SS_OWNERDRAW 的 STATIC 在 WM_DRAWITEM 里的 CtlType 是
+            // ODT_STATIC（不是 ODT_BUTTON），按 CtlID 判定即可。
+            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (draw != nullptr && draw->CtlType == ODT_STATIC &&
+                draw->CtlID == static_cast<UINT>(kDefaultTileColorSwatchId)) {
+                paintColorSwatch(
+                    draw->hDC, draw->rcItem,
+                    state != nullptr
+                        ? state->chosenDefaultTileColor
+                        : std::optional<std::uint32_t>());
+                return TRUE;
+            }
+            break;
+        }
+
         case WM_COMMAND: {
             const int controlId = LOWORD(wParam);
             const int notification = HIWORD(wParam);
@@ -867,6 +911,55 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     if (state->preview != nullptr &&
                         state->preview->backgroundChanged) {
                         state->preview->backgroundChanged(std::wstring());
+                    }
+                }
+                return 0;
+            }
+
+            // ---- 格子底色：选色 / 恢复跟随皮肤（都实时预览）----
+            //
+            // 与其它外观项一样只通告预览，不写 state->result：
+            // 提交仍然只看「确定」那一刻的选择。
+            // 色块即入口：STATIC 只有带 SS_NOTIFY 才会发 STN_CLICKED。
+            // 双击会先给 STN_CLICKED 再给 STN_DBLCLK，只认前者，避免
+            // 连开两个调色板。
+            if (controlId == kDefaultTileColorSwatchId &&
+                notification == STN_CLICKED) {
+                if (state != nullptr) {
+                    // 初始色：已选则用它；否则用皮肤磁贴底的近似值，
+                    // 让调色板打开时勾在用户现在看到的那一格附近。
+                    const std::uint32_t initial =
+                        state->chosenDefaultTileColor.value_or(0xFF3A3A3EU);
+                    // 内置色表：每点一格立刻刷新主窗口预览，弹板不关，
+                    // 方便连续换色对比；最终值仍由「确定」提交。
+                    showColorPalette(
+                        hwnd, GetDlgItem(hwnd, kDefaultTileColorSwatchId),
+                        initial,
+                        [hwnd, state](const std::uint32_t color) {
+                            state->chosenDefaultTileColor = color;
+                            state->defaultTileColorTouched = true;
+                            InvalidateRect(
+                                GetDlgItem(hwnd, kDefaultTileColorSwatchId),
+                                nullptr, TRUE);
+                            if (state->preview != nullptr &&
+                                state->preview->defaultTileColorChanged) {
+                                state->preview->defaultTileColorChanged(color);
+                            }
+                        });
+                }
+                return 0;
+            }
+            if (controlId == kDefaultTileColorClearId &&
+                notification == BN_CLICKED) {
+                if (state != nullptr) {
+                    state->chosenDefaultTileColor.reset();
+                    state->defaultTileColorTouched = true;
+                    InvalidateRect(
+                        GetDlgItem(hwnd, kDefaultTileColorSwatchId),
+                        nullptr, TRUE);
+                    if (state->preview != nullptr &&
+                        state->preview->defaultTileColorChanged) {
+                        state->preview->defaultTileColorChanged(std::nullopt);
                     }
                 }
                 return 0;
@@ -1035,6 +1128,17 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                 state->result.iconScalePercent = percent;
                             }
                         }
+                    }
+
+                    // ---- 格子底色 ----
+                    //
+                    // 必须用 touched 而不是单看值：内层空值（取消选色、
+                    // 回到跟随皮肤）也是有效改动，与「没动过」不同。
+                    if (state->defaultTileColorTouched &&
+                        state->chosenDefaultTileColor !=
+                            state->initialDefaultTileColor) {
+                        state->result.defaultTileColor =
+                            state->chosenDefaultTileColor;
                     }
 
                     state->accepted = true;
@@ -1361,6 +1465,8 @@ bool showSettingsWindow(HWND owner,
                         const int currentWindowOpacity,
                         const int currentTileOpacity,
                         const int currentIconScale,
+                        const std::optional<std::uint32_t>&
+                            currentDefaultTileColor,
                         const std::uint16_t columnsInUse,
                         const std::uint16_t rowsInUse,
                         SettingsResult* out,
@@ -1402,6 +1508,8 @@ bool showSettingsWindow(HWND owner,
     state.initialWindowOpacity = currentWindowOpacity;
     state.initialTileOpacity = currentTileOpacity;
     state.initialIconScale = currentIconScale;
+    state.initialDefaultTileColor = currentDefaultTileColor;
+    state.chosenDefaultTileColor = currentDefaultTileColor;
     state.columnsInUse = columnsInUse;
     state.rowsInUse = rowsInUse;
     state.preview = preview;

@@ -32,13 +32,14 @@ namespace app {
 inline constexpr const wchar_t* kApplicationName = L"KTile";
 inline constexpr const wchar_t* kApplicationWindowTitle = L"KTile 磁贴快启";
 
-// 版本号。尚未发布，走 0.x：
+// 版本号。
 //   0.9.0 = 功能开发完成、待打包与 Win7 真机验证（M6）；
-//   正式发布升 1.0.0。改这里时记得同步 app.rc 里的 VERSIONINFO
+//   1.0.0 = 正式版。
+// 改这里时记得同步 app.rc 里的 VERSIONINFO
 //  （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
-inline constexpr const wchar_t* kApplicationVersion = L"0.9.0";
-inline constexpr int kApplicationVersionMajor = 0;
-inline constexpr int kApplicationVersionMinor = 9;
+inline constexpr const wchar_t* kApplicationVersion = L"1.0.0";
+inline constexpr int kApplicationVersionMajor = 1;
+inline constexpr int kApplicationVersionMinor = 0;
 inline constexpr int kApplicationVersionPatch = 0;
 inline constexpr const wchar_t* kSingleInstanceMutexName =
     L"KTile.SingleInstance.{8F3A1C2D-4B5E-4A6F-9C8D-7E6F5A4B3C2D}";
@@ -113,6 +114,12 @@ public:
     void toggleLauncher();
     void showTrayMenu();
     void handleTrayCommand(UINT commandId);
+
+    // Explorer 重启广播（TaskbarCreated）触发：重装手势钩子。
+    // WH_KEYBOARD_LL 钩子链是 LIFO，Explorer 重启会把它的钩子排到我们
+    // 前面，导致「吞 Win 键」失效。收到广播后立刻重装，把顺序抢回来。
+    // 非手势热键（普通 RegisterHotKey）不受钩子链影响，直接返回。
+    void reinstallGestureHotkey();
 
 private:
     // 各初始化步骤，任一步失败则终止启动

@@ -118,6 +118,16 @@ private:
 
     bool startMenuByWinKey_ = false;  // install 时记录：Ctrl+Win 要不要开开始菜单
 
+    // Ctrl 状态（事件队列视图）。为什么不用 GetAsyncKeyState：
+    //   那个 API 返回「调用那一刻」的物理状态，而判定 Ctrl+Win 要的是
+    //   「事件顺序里 Ctrl 是否已按下且未松开」。两者在「刚按完 Ctrl+C
+    //   立刻按 Win」这种时序下会得出不同结论 —— 用户心智里 Ctrl 已经
+    //   结束，但物理键可能还没抬起来。用事件队列才能匹配用户预期。
+    //
+    // StartMenu 分支注入 Ctrl keyup 后必须同步把这里置 false，
+    // 否则系统状态变了本地还不知道，下一次 Win 按下会误判成 Ctrl+Win。
+    bool ctrlPressed_ = false;
+
     void trigger() const;
     static void injectWinKey(bool down);
     static void injectKey(WORD virtualKey, bool down);

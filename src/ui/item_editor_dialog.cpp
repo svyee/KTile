@@ -6,6 +6,7 @@
 #include "platform/win32/icon_store.h"
 #include "platform/win32/unique_handles.h"
 #include "ui/builtin_item_dialog.h"
+#include "ui/color_picker.h"
 
 #include <Shlwapi.h>
 #include <commdlg.h>
@@ -72,6 +73,19 @@ constexpr int kIconScaleSliderY = 318;
 constexpr int kIconScaleSliderWidth = 64;   // 88..152，别越过右列 x=212
 constexpr int kIconScaleValueX = 158;
 
+// 背景色：文字 + 色块（点击即选色）+「默认」按钮。
+// 放在左列最下方，与「磁贴大小 / 标题显示 / 图标大小」同属外观组；
+// 色块本身就是当前色的样本与入口，改完立刻在正上方预览里看到。
+constexpr int kTileColorLabelY = 346;
+// 背景色样本本身就是按钮：尺寸取原来「选择」按钮的大小，
+// 既好点中，也能直接把颜色看得清楚。
+constexpr int kTileColorSwatchX = 80;
+constexpr int kTileColorSwatchY = 345;
+constexpr int kTileColorSwatchWidth = 56;
+constexpr int kTileColorSwatchHeight = 24;
+constexpr int kTileColorClearX = 142;
+constexpr int kTileColorClearWidth = 36;
+
 // 右列
 constexpr int kLabelX = 212;
 constexpr int kLabelWidth = 78;
@@ -109,6 +123,8 @@ constexpr int kBuiltinPickId = 1017; // 「系统项...」— 选内置命令/�
 constexpr int kIconScaleCheckId = 1018;  // 「按统一设置」勾选框
 constexpr int kIconScaleSliderId = 1019; // 图标大小滑块（50~100）
 constexpr int kIconScaleValueId = 1020;  // 图标大小数值显示
+constexpr int kTileColorSwatchId = 1021; // 背景色样本（SS_OWNERDRAW）
+constexpr int kTileColorClearId = 1023;  // 「默认」恢复跟随全局
 // 保存/取消直接用 IDOK / IDCANCEL：IsDialogMessageW 处理回车/Esc 时
 // 对普通窗口发送的就是这两个 ID，按钮点击也发同 ID，一套处理两处来源。
 
@@ -121,7 +137,8 @@ constexpr UINT kEditorDialogCloseMessage = WM_APP + 0x90U;
 
 // 预览用配色。磁贴在真实窗口里是「半透明深色玻璃叠在亚克力背景上」，
 // 对话框里没有背景模糊可叠，直接用中深灰模拟观感。
-constexpr COLORREF kPreviewTileFill = RGB(0x3A, 0x3A, 0x3E);
+// 同色的 ARGB 形式：背景色样本与「跟随全局」预览都按它取默认。
+constexpr std::uint32_t kPreviewTileFillArgb = 0xFF3A3A3E;
 constexpr COLORREF kPreviewTileBorder = RGB(0x62, 0x62, 0x68);
 constexpr COLORREF kPreviewFrame = RGB(0x9A, 0x9A, 0x9A);
 constexpr COLORREF kPreviewPlaceholder = RGB(0x8A, 0x8A, 0x8A);
@@ -414,6 +431,11 @@ struct EditorDialogState {
     int iconScalePercent = 0;
     int globalIconScale = 90;
 
+    // 磁贴底色：本项显式色（空 = 跟随全局默认）+ 设置里的全局默认色。
+    // 预览与颜色选择器的初始值都按这个优先级来。
+    std::optional<std::uint32_t> tileColor;
+    std::optional<std::uint32_t> globalTileColor;
+
     // 已解码的图标像素 + 供 AlphaBlend 使用的预乘 DIB。
     // pixelsKey 记录这些像素来自哪个来源，避免每次重绘都重新解码
     // （解码要走 WIC 开文件，几十毫秒级，放在 WM_PAINT 里会拖慢重绘）。
@@ -584,6 +606,19 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     addControl(dialog, L"STATIC", L"", 0, kIconScaleValueX,
                kIconScaleSliderY + 3, 44, kLabelHeight,
                kIconScaleValueId, font);
+
+    // ---- 左列：背景色 ----
+    // 色块（点击弹出内置色表）+「默认」清回全局默认。
+    // SS_NOTIFY 是让 STATIC 把点击通知（STN_CLICKED）发给父窗口的开关，
+    // 少了它色块只能看不能点。
+    label(L"背景色：", kPreviewX, kTileColorLabelY, 56);
+    addControl(dialog, L"STATIC", L"", SS_OWNERDRAW | SS_NOTIFY,
+               kTileColorSwatchX, kTileColorSwatchY,
+               kTileColorSwatchWidth, kTileColorSwatchHeight,
+               kTileColorSwatchId, font);
+    addControl(dialog, L"BUTTON", L"默认", WS_TABSTOP,
+               kTileColorClearX, kTileColorSwatchY, kTileColorClearWidth,
+               kTileColorSwatchHeight, kTileColorClearId, font);
 
     // ---- 右列：名称 ----
     label(L"名称：", kLabelX, 20, kLabelWidth);
@@ -878,8 +913,16 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         tile, state->previewSize, fillIcon, effectiveScale);
 
     // ---- 磁贴底 + 边框 ----
+    // 底色按「本项显式色 > 全局默认色 > 预览默认灰」取，让用户选完
+    // 颜色立刻在预览里看到真实结果（与主窗口 resolveTileBackground 同序）。
+    const std::uint32_t previewTileColor =
+        state->tileColor.has_value()
+            ? *state->tileColor
+            : state->globalTileColor.value_or(kPreviewTileFillArgb);
     const int radius = (std::max)(4, unit / 8);
-    HBRUSH fillBrush = CreateSolidBrush(kPreviewTileFill);
+    HBRUSH fillBrush = CreateSolidBrush(RGB((previewTileColor >> 16) & 0xFFU,
+                                            (previewTileColor >> 8) & 0xFFU,
+                                            previewTileColor & 0xFFU));
     HPEN borderPen = CreatePen(PS_SOLID, 1, kPreviewTileBorder);
     if (fillBrush != nullptr && borderPen != nullptr) {
         HGDIOBJ oldBrush = SelectObject(dc, fillBrush);
@@ -1036,6 +1079,7 @@ void populateControls(HWND dialog, EditorDialogState* state) {
     state->customIcon = state->initial.icon;
     state->previewSize = state->initial.tileSize;
     state->labelMode = state->initial.labelMode;
+    state->tileColor = state->initial.tileColor;
 
     SetDlgItemTextW(dialog, kNameId, state->initial.name.c_str());
     SetDlgItemTextW(dialog, kTargetId, state->initial.target.c_str());
@@ -1114,6 +1158,9 @@ bool saveDialog(HWND dialog, EditorDialogState* state) {
         BST_CHECKED;
     state->result.tileSize = state->previewSize;
     state->result.labelMode = state->labelMode;
+    // 空 = 跟随全局默认色；非空 = 本项显式色。对话框每次保存都完整
+    // 提交这一项（与尺寸、标题方式同一套「所见即所得」）。
+    state->result.tileColor = state->tileColor;
 
     // 图标大小：勾选「按统一设置」→ 0（跟随全局）；否则取滑块值
     const bool followGlobal =
@@ -1169,10 +1216,19 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
 
         case WM_DRAWITEM: {
             auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-            if (draw != nullptr && draw->CtlType == ODT_STATIC &&
-                draw->CtlID == static_cast<UINT>(kPreviewId)) {
-                paintPreview(hwnd, state, draw->hDC, draw->rcItem);
-                return TRUE;
+            if (draw != nullptr && draw->CtlType == ODT_STATIC) {
+                if (draw->CtlID == static_cast<UINT>(kPreviewId)) {
+                    paintPreview(hwnd, state, draw->hDC, draw->rcItem);
+                    return TRUE;
+                }
+                if (draw->CtlID == static_cast<UINT>(kTileColorSwatchId)) {
+                    paintColorSwatch(
+                        draw->hDC, draw->rcItem,
+                        state != nullptr
+                            ? state->tileColor
+                            : std::optional<std::uint32_t>());
+                    return TRUE;
+                }
             }
             break;
         }
@@ -1291,6 +1347,39 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                                        TRUE);
                     }
                     return 0;
+                case kTileColorSwatchId:
+                    // STATIC 点击发的是 STN_CLICKED（双击还会补一个
+                    // STN_DBLCLK），只认前者，避免双击弹两次色板。
+                    if (state != nullptr && notification == STN_CLICKED) {
+                        const std::uint32_t initial =
+                            state->tileColor.value_or(
+                                state->globalTileColor.value_or(
+                                    kPreviewTileFillArgb));
+                        // 内置色表：点一格立刻回填并刷新预览。
+                        // 弹板保持打开，用户可以在几块颜色之间来回点着比较；
+                        // 点完直接点「保存」即可，不需要先关弹板。
+                        showColorPalette(
+                            hwnd, GetDlgItem(hwnd, kTileColorSwatchId),
+                            initial,
+                            [hwnd, state](const std::uint32_t color) {
+                                state->tileColor = color;
+                                InvalidateRect(
+                                    GetDlgItem(hwnd, kTileColorSwatchId),
+                                    nullptr, TRUE);
+                                // 预览底色跟着换，用户不必先保存再回主窗口确认
+                                refreshPreview(hwnd, state);
+                            });
+                    }
+                    return 0;
+                case kTileColorClearId:
+                    if (state != nullptr) {
+                        // 清回「跟随全局默认色」，不是清成某个固定灰
+                        state->tileColor.reset();
+                        InvalidateRect(GetDlgItem(hwnd, kTileColorSwatchId),
+                                       nullptr, TRUE);
+                        refreshPreview(hwnd, state);
+                    }
+                    return 0;
                 case kNameId:
                     // 名字边打边反映到预览的标题上
                     if (notification == EN_CHANGE) {
@@ -1400,6 +1489,7 @@ bool showItemEditorDialog(HWND owner,
                           const ItemEditorFields& initial,
                           const bool globalAlwaysShowLabels,
                           const int globalIconScale,
+                          const std::optional<std::uint32_t>& globalTileColor,
                           ItemEditorFields* outResult,
                           const ItemEditorMode mode) {
     if (outResult == nullptr || tabNames.empty()) {
@@ -1418,6 +1508,7 @@ bool showItemEditorDialog(HWND owner,
     state.labelMode = initial.labelMode;
     state.globalAlwaysShowLabels = globalAlwaysShowLabels;
     state.globalIconScale = std::clamp(globalIconScale, 50, 100);
+    state.globalTileColor = globalTileColor;
     state.mode = mode;
     state.title = (mode == ItemEditorMode::Create) ? L"添加项目" : L"修改项目";
 
