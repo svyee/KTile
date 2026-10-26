@@ -21,20 +21,24 @@ namespace {
 // 这样做的好处：换一台 150% 缩放屏时不必重算任何数字，只需保证
 // 这里写的是设计稿尺寸。
 
-constexpr int kDialogWidth = 330;
-// 高度按四个分组（外观 / 布局 / 窗口 / 启动与唤醒）累加得出：
-//   外观     皮肤(26) + 背景图(27) + 整体不透明度(30) + 磁贴背景(30)
-//            + 格子底色(30) + 文字标签(24) + 默认行为(26)
-//   布局     网格(24+4) + 提示(24) + 标签栏位置(26)
-//   窗口     出现位置(26)
+constexpr int kDialogWidth = 380;  // 容得下「文字标签」一行三个单选项
+// 高度按分组累加得出：
+//   背景       标题(24) + 皮肤(26) + 背景图(27) + 不透明度(30)
+//   磁贴       标题+分隔线(34) + 背景色(30) + 不透明度(30)
+//   图标与标签 标题+分隔线(34) + 图标大小(30) + 文字标签(26)
+//   布局       网格(28) + 提示(24) + 标签栏位置(26)
+//   窗口       出现位置(26)
 //   启动与唤醒 开机自启(26) + 唤醒方式(62)
-// 每个分组的标题另占 24，非首组再加 14 的分隔线间距。
+// 每个分组的标题另占 24，非首组再加 10 的分隔线间距。
 // 改任何一行的行高都要回来重算这个数，否则底部按钮会压到内容上。
-constexpr int kDialogHeight = 616;  // 586 + 格子底色一行（30）
+// （648 DIP 是本机 150% DPI、1027px 工作区下的上限，再高就超屏。）
+constexpr int kDialogHeight = 648;
 
 constexpr int kMargin = 16;          // 左右页边距
 constexpr int kRowGap = 12;          // 行间垂直间距
-constexpr int kLabelWidth = 76;      // 「列数」等标签宽度
+constexpr int kLabelWidth = 76;      // 标签列宽度
+constexpr int kSliderWidth = 190;    // 滑块宽度（分组标题已承担前缀，可放宽）
+constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
 constexpr int kSpinnerWidth = 96;    // 数字输入框宽度
 constexpr int kSpinnerHeight = 24;
 constexpr int kGroupGap = 18;        // 分组之间的额外间隔
@@ -74,15 +78,14 @@ constexpr int kColumnsEditId = 1101;
 constexpr int kRowsEditId = 1102;
 constexpr int kColumnsSpinId = 1103;
 constexpr int kRowsSpinId = 1104;
-constexpr int kLabelsCheckId = 1110;
-constexpr int kTitleAlwaysRadioId = 1118;   // 默认行为：一直显示
-constexpr int kTitleDynamicRadioId = 1119;  // 默认行为：移入时显示
+constexpr int kTitleAlwaysRadioId = 1123;   // 文字标签：始终显示
+constexpr int kTitleDynamicRadioId = 1124;  // 文字标签：移动时显示
+constexpr int kTitleNeverRadioId = 1125;    // 文字标签：始终不显示
 constexpr int kTabTopRadioId = 1121;        // 标签栏位置：顶部
 constexpr int kTabBottomRadioId = 1122;     // 标签栏位置：底部
 constexpr int kThemeComboId = 1114;
-constexpr int kBackgroundBrowseId = 1115;
-constexpr int kBackgroundClearId = 1116;
-constexpr int kBackgroundLabelId = 1117;
+constexpr int kBackgroundBrowseId = 1116;
+constexpr int kBackgroundClearId = 1118;
 constexpr int kWindowPlacementComboId = 1140;
 constexpr int kWindowOpacitySliderId = 1150;    // 整体不透明度滑块
 constexpr int kWindowOpacityValueId = 1151;     // 整体不透明度数值
@@ -104,10 +107,12 @@ constexpr int kCancelId = 1131;
 // 分组标题的控件 ID。用一段连续区间而不是逐个常量，是为了在
 // WM_CTLCOLORSTATIC 里一次判定「这批是分组标题，画成灰色」。
 constexpr int kSectionHeaderIdBase = 1201;
-constexpr int kSectionAppearanceId = 1201;
+constexpr int kSectionAppearanceId = 1201;  // 背景
 constexpr int kSectionLayoutId = 1202;
 constexpr int kSectionWindowId = 1203;
 constexpr int kSectionStartupId = 1204;
+constexpr int kSectionTileId = 1205;        // 磁贴
+constexpr int kSectionIconLabelId = 1206;   // 图标与标签
 constexpr int kSectionHeaderIdEnd = 1210;
 
 // 控件 ID 到「窗口属性名」的映射：把控件句柄挂在对话框上，
@@ -153,7 +158,6 @@ struct SettingsDialogState {
 
     // 皮肤与背景图
     std::wstring initialThemeName;      // 当前皮肤显示名（空 = 默认）
-    std::wstring initialBackgroundName; // 当前背景图文件名（仅显示）
     std::wstring pickedBackgroundPath;  // 本次会话新选的图片（绝对路径）
     bool backgroundCleared = false;     // 用户点了「清除」
 
@@ -359,17 +363,18 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             int y = kMargin;
 
             // 分组标题：加粗小一号 + 上方细分隔线（首组不画）。
-            // 设置项按用途归入「外观 / 布局 / 窗口 / 启动与唤醒」四类，
-            // 顺序按「改得最勤 → 一动就得重开程序」排，找一项不必逐行扫。
+            // 设置项按用途归入「背景 / 磁贴 / 图标与标签 / 布局 / 窗口 /
+            // 启动与唤醒」，顺序按「改得最勤 → 一动就得重开程序」排。
             auto makeSection = [&](const wchar_t* text, const int id,
                                    const bool withRule) {
                 if (withRule) {
-                    y += 6;
+                    y += 4;
                     makeControl(L"STATIC", L"",
                                 WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, 0,
                                 kMargin, y, kDialogWidth - 2 * kMargin, 2, -1);
-                    y += 6;
+                    y += 4;
                 }
+                y += 2;
                 HWND header = makeControl(
                     L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                     kMargin + 8, y, kDialogWidth - 2 * kMargin - 8, 18, id);
@@ -380,13 +385,19 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 y += 24;
             };
 
-            // ==================== 外观 ====================
+            // ==================== 背景 ====================
+            //
+            // 与「磁贴」分组的分工：
+            //   · 背景 = 窗口这一层（皮肤、背景图、整体不透明度）；
+            //   · 磁贴 = 每块磁贴自己画的底色与浓度。
+            // 两者叠起来才是最终画面，所以相邻摆放，方便对照着调。
 
-            makeSection(L"外观", kSectionAppearanceId, false);
+            makeSection(L"背景", kSectionAppearanceId, false);
 
             // 皮肤下拉：选项来自 <data>\themes\*.json（即枚举结果）。
             // 枚举为空（目录被整个删了）时退回内置预置名，保证下拉
             // 永远有得选 —— 选了不存在文件的名字，应用层会回落默认配色。
+            // 皮肤决定所有基础配色（含磁贴底），所以归在「背景」里。
             makeLabel(L"皮肤", kMargin + 8, y + 5, kLabelWidth - 8, 18);
             HWND themeCombo = makeControl(
                 L"COMBOBOX", L"",
@@ -417,9 +428,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             y += 26;
 
-            // 背景图：选图 / 清除 / 当前文件名。
-            // 路径太长会把这一行挤爆，所以只显示文件名（SS_PATHELLIPSIS
-            // 再兜一层，超长仍然省略中间）。
+            // 背景图：选图 / 清除。
+            // 不再显示当前文件名 —— 文件名是随机串，对用户没有信息量，
+            // 反而把这一行挤得乱七八糟；设置了什么背景，主窗口一眼可见。
             makeLabel(L"背景图", kMargin + 8, y + 5, kLabelWidth - 8, 18);
             makeControl(
                 L"BUTTON", L"选择图片...",
@@ -431,34 +442,22 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 0, kMargin + kLabelWidth + 88, y, 52, 23,
                 kBackgroundClearId);
-            {
-                const std::wstring currentText =
-                    state->initialBackgroundName.empty()
-                        ? std::wstring(L"未设置")
-                        : state->initialBackgroundName;
-                makeControl(
-                    L"STATIC", currentText.c_str(),
-                    WS_CHILD | WS_VISIBLE | SS_LEFT | SS_PATHELLIPSIS,
-                    0, kMargin + kLabelWidth + 148, y + 5,
-                    kDialogWidth - kMargin * 2 - kLabelWidth - 148, 18,
-                    kBackgroundLabelId);
-            }
             y += 27;
 
-            // ---- 不透明度 ----
+            // ---- 不透明度（窗口）----
             //
-            // 两个旋钮不是一回事，界面上刻意分开摆：
-            //   · 整体不透明：窗口与桌面合成时统一乘的系数（分层窗口），
+            // 与「磁贴」分组里的不透明度不是一回事，界面上刻意分开摆：
+            //   · 背景 / 不透明度 ：窗口与桌面合成时统一乘的系数（分层窗口），
             //     连搜索框、标签条、边框一起变透，透出来的是**桌面**；
-            //   · 磁贴背景  ：磁贴底色自己画多浓，透出来的是**背景图**，
+            //   · 磁贴 / 不透明度 ：磁贴底色自己画多浓，透出来的是**背景图**，
             //     窗口整体仍然不透明。
             // 用滑块而不是数字框：这两项都是「边拖边看」的观感调整，
             // 输完数字才知道效果就失去意义了。
-            makeLabel(L"整体不透明", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"不透明度", kMargin + 8, y + 5, kLabelWidth - 8, 18);
             HWND windowOpacitySlider = makeControl(
                 TRACKBAR_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
-                0, kMargin + kLabelWidth, y - 2, 156, 26,
+                0, kMargin + kLabelWidth, y - 2, kSliderWidth, 26,
                 kWindowOpacitySliderId);
             if (windowOpacitySlider != nullptr) {
                 SendMessageW(windowOpacitySlider, TBM_SETRANGE, TRUE,
@@ -471,16 +470,38 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     std::to_wstring(state->initialWindowOpacity) + L"%";
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                            kMargin + kLabelWidth + 162, y + 5, 44, 18,
-                            kWindowOpacityValueId);
+                            kMargin + kLabelWidth + kSliderValueOffset, y + 5,
+                            44, 18, kWindowOpacityValueId);
             }
             y += 30;
 
-            makeLabel(L"磁贴背景", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            // ==================== 磁贴 ====================
+
+            makeSection(L"磁贴", kSectionTileId, true);
+
+            // ---- 背景色 ----
+            //
+            // 所有磁贴的默认背景色，优先级低于单项自己选的颜色。
+            // 色块本身就是按钮（SS_NOTIFY）：点它弹内置色表，既好点也能
+            // 看清当前颜色。「跟随皮肤」按钮 = 清空，回到皮肤自带的 tileFill。
+            // 与下面的「不透明度」是一对：一个定色相，一个定浓度。
+            makeLabel(L"背景色", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeControl(L"STATIC", L"",
+                        WS_CHILD | WS_VISIBLE | SS_OWNERDRAW | SS_NOTIFY, 0,
+                        kMargin + kLabelWidth, y, 82, 23,
+                        kDefaultTileColorSwatchId);
+            makeControl(L"BUTTON", L"跟随皮肤",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                        0, kMargin + kLabelWidth + 86, y, 70, 23,
+                        kDefaultTileColorClearId);
+            y += 30;
+
+            // ---- 不透明度（磁贴）----
+            makeLabel(L"不透明度", kMargin + 8, y + 5, kLabelWidth - 8, 18);
             HWND tileOpacitySlider = makeControl(
                 TRACKBAR_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
-                0, kMargin + kLabelWidth, y - 2, 156, 26,
+                0, kMargin + kLabelWidth, y - 2, kSliderWidth, 26,
                 kTileOpacitySliderId);
             if (tileOpacitySlider != nullptr) {
                 SendMessageW(tileOpacitySlider, TBM_SETRANGE, TRUE,
@@ -493,27 +514,14 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     std::to_wstring(state->initialTileOpacity) + L"%";
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                            kMargin + kLabelWidth + 162, y + 5, 44, 18,
-                            kTileOpacityValueId);
+                            kMargin + kLabelWidth + kSliderValueOffset, y + 5,
+                            44, 18, kTileOpacityValueId);
             }
             y += 30;
 
-            // ---- 格子底色 ----
-            //
-            // 所有磁贴的默认背景色，优先级低于单项自己选的颜色。
-            // 色块本身就是按钮（SS_NOTIFY）：点它弹内置色表，尺寸沿用
-            // 原先「选择颜色...」按钮的宽度，既好点也能看清当前颜色。
-            // 「跟随皮肤」按钮 = 清空，回到皮肤自带的 tileFill。
-            makeLabel(L"格子底色", kMargin + 8, y + 5, kLabelWidth - 8, 18);
-            makeControl(L"STATIC", L"",
-                        WS_CHILD | WS_VISIBLE | SS_OWNERDRAW | SS_NOTIFY, 0,
-                        kMargin + kLabelWidth, y, 82, 23,
-                        kDefaultTileColorSwatchId);
-            makeControl(L"BUTTON", L"跟随皮肤",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                        0, kMargin + kLabelWidth + 86, y, 70, 23,
-                        kDefaultTileColorClearId);
-            y += 30;
+            // ==================== 图标与标签 ====================
+
+            makeSection(L"图标与标签", kSectionIconLabelId, true);
 
             // ---- 图标大小 ----
             //
@@ -524,7 +532,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             HWND iconScaleSlider = makeControl(
                 TRACKBAR_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
-                0, kMargin + kLabelWidth, y - 2, 156, 26,
+                0, kMargin + kLabelWidth, y - 2, kSliderWidth, 26,
                 kIconScaleSliderId);
             if (iconScaleSlider != nullptr) {
                 SendMessageW(iconScaleSlider, TBM_SETRANGE, TRUE,
@@ -537,53 +545,55 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     std::to_wstring(state->initialIconScale) + L"%";
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                            kMargin + kLabelWidth + 162, y + 5, 44, 18,
-                            kIconScaleValueId);
+                            kMargin + kLabelWidth + kSliderValueOffset, y + 5,
+                            44, 18, kIconScaleValueId);
             }
             y += 30;
 
-            // 文字标签总闸。勾掉后「默认行为」整组置灰（不是隐藏）——
-            // 位置固定，界面不跳。
-            HWND labels = makeControl(
-                L"BUTTON", L"显示磁贴文字标签",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                0, kMargin + 8, y,
-                kDialogWidth - 2 * kMargin - 8, 20, kLabelsCheckId);
-            if (labels != nullptr) {
-                SendMessageW(labels, BM_SETCHECK,
-                             state->initialShowLabels ? BST_CHECKED : BST_UNCHECKED,
-                             0);
-            }
-            y += 24;
-
-            // 默认行为：单选（一直显示 / 移入时显示）。
-            // 与上面是两层开关（总闸 / 常驻与否），跟随总闸置灰。
-            makeLabel(L"默认行为", kMargin + 8, y + 3, kLabelWidth - 8, 18);
+            // ---- 文字标签（三态）----
+            //
+            // 三态单选合并了原来的「总闸 + 默认行为」两层开关 ——
+            // 同一件事只在一处表达，用户不必先勾总闸再选行为：
+            //   · 始终显示   → showTileLabels = true， alwaysShowTileLabels = true
+            //   · 移动时显示 → showTileLabels = true， alwaysShowTileLabels = false
+            //   · 始终不显示 → showTileLabels = false
+            // 配置字段保持不变（旧配置文件仍可直接读），只是换了呈现方式。
+            makeLabel(L"文字标签", kMargin + 8, y + 3, kLabelWidth - 8, 18);
             HWND titleAlways = makeControl(
-                L"BUTTON", L"一直显示",
+                L"BUTTON", L"始终显示",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth, y, 78, 20, kTitleAlwaysRadioId);
+                0, kMargin + kLabelWidth, y, 76, 20, kTitleAlwaysRadioId);
+            HWND titleDynamic = makeControl(
+                L"BUTTON", L"移动时显示",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                0, kMargin + kLabelWidth + 80, y, 90, 20,
+                kTitleDynamicRadioId);
+            HWND titleNever = makeControl(
+                L"BUTTON", L"始终不显示",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                0, kMargin + kLabelWidth + 174, y, 90, 20,
+                kTitleNeverRadioId);
+
+            // 初值：先看总闸，再看「常驻与否」。隐藏状态下两项都勾不上。
+            const bool labelsShown = state->initialShowLabels;
+            const bool labelsAlwaysChosen =
+                labelsShown && state->initialAlwaysShowTitle;
             if (titleAlways != nullptr) {
                 SendMessageW(titleAlways, BM_SETCHECK,
-                             state->initialAlwaysShowTitle ? BST_CHECKED
-                                                           : BST_UNCHECKED,
+                             labelsAlwaysChosen ? BST_CHECKED : BST_UNCHECKED,
                              0);
             }
-            HWND titleDynamic = makeControl(
-                L"BUTTON", L"移入时显示",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth + 82, y, 96, 20,
-                kTitleDynamicRadioId);
             if (titleDynamic != nullptr) {
                 SendMessageW(titleDynamic, BM_SETCHECK,
-                             state->initialAlwaysShowTitle ? BST_UNCHECKED
-                                                           : BST_CHECKED,
+                             (labelsShown && !state->initialAlwaysShowTitle)
+                                 ? BST_CHECKED
+                                 : BST_UNCHECKED,
                              0);
-                const BOOL enabled =
-                    state->initialShowLabels ? TRUE : FALSE;
-                EnableWindow(titleAlways, enabled);
-                EnableWindow(titleDynamic, enabled);
+            }
+            if (titleNever != nullptr) {
+                SendMessageW(titleNever, BM_SETCHECK,
+                             labelsShown ? BST_UNCHECKED : BST_CHECKED, 0);
             }
             y += 26;
 
@@ -750,13 +760,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                      kMargin + kLabelWidth, y},
                     {kHotkeyCtrlSpaceRadioId, L"Ctrl+Space",
                      core::HotkeyPreset::CtrlSpace,
-                     kMargin + kLabelWidth + 104, y},
+                     kMargin + kLabelWidth + 98, y},
                     {kHotkeyDoubleCtrlRadioId, L"双击 Ctrl",
                      core::HotkeyPreset::DoubleCtrl,
                      kMargin + kLabelWidth, y + 22},
                     {kHotkeyWinKeyRadioId, L"单按 Win 键",
                      core::HotkeyPreset::WinKey,
-                     kMargin + kLabelWidth + 104, y + 22},
+                     kMargin + kLabelWidth + 98, y + 22},
                 };
                 for (const auto& radio : radios) {
                     const bool checked =
@@ -805,7 +815,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
         }
 
         case WM_DRAWITEM: {
-            // 自绘控件只有「格子底色」样本一块。
+            // 自绘控件只有「磁贴背景色」样本一块。
             // SS_OWNERDRAW 的 STATIC 在 WM_DRAWITEM 里的 CtlType 是
             // ODT_STATIC（不是 ODT_BUTTON），按 CtlID 判定即可。
             auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
@@ -875,17 +885,6 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     if (GetOpenFileNameW(&ofn) != FALSE) {
                         state->pickedBackgroundPath = file;
                         state->backgroundCleared = false;
-                        // 只显示文件名（路径太长会挤爆这一行）
-                        std::wstring name = file;
-                        const std::size_t slash =
-                            name.find_last_of(L"\\/");
-                        if (slash != std::wstring::npos) {
-                            name = name.substr(slash + 1);
-                        }
-                        HWND label = GetDlgItem(hwnd, kBackgroundLabelId);
-                        if (label != nullptr) {
-                            SetWindowTextW(label, name.c_str());
-                        }
                         // 立即把这张图贴到主窗口上——先看效果再决定是否确定
                         if (state->preview != nullptr &&
                             state->preview->backgroundChanged) {
@@ -903,10 +902,6 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 if (state != nullptr) {
                     state->backgroundCleared = true;
                     state->pickedBackgroundPath.clear();
-                    HWND label = GetDlgItem(hwnd, kBackgroundLabelId);
-                    if (label != nullptr) {
-                        SetWindowTextW(label, L"未设置");
-                    }
                     // 主窗口同步撤掉背景图（仍只是预览，未落盘）
                     if (state->preview != nullptr &&
                         state->preview->backgroundChanged) {
@@ -916,7 +911,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 return 0;
             }
 
-            // ---- 格子底色：选色 / 恢复跟随皮肤（都实时预览）----
+            // ---- 磁贴背景色：选色 / 恢复跟随皮肤（都实时预览）----
             //
             // 与其它外观项一样只通告预览，不写 state->result：
             // 提交仍然只看「确定」那一刻的选择。
@@ -987,25 +982,25 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                             static_cast<std::uint16_t>(rows);
                     }
 
-                    HWND labels = GetDlgItem(hwnd, kLabelsCheckId);
-                    if (labels != nullptr) {
-                        const bool checked =
-                            SendMessageW(labels, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                        if (checked != state->initialShowLabels) {
-                            state->result.showTileLabels = checked;
+                    // ---- 文字标签（三态单选）----
+                    // 「始终不显示」= 总闸关；另外两项都显示，区别在常驻与否。
+                    // 隐藏时不改 alwaysShowTileLabels：它此时无意义，保留原值
+                    // 可以让用户切回「始终显示」/「移动时显示」时回到原来的
+                    // 选择。
+                    {
+                        const bool labelsNever =
+                            SendMessageW(GetDlgItem(hwnd, kTitleNeverRadioId),
+                                         BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        const bool labelsAlways =
+                            SendMessageW(GetDlgItem(hwnd, kTitleAlwaysRadioId),
+                                         BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        const bool show = !labelsNever;
+                        if (show != state->initialShowLabels) {
+                            state->result.showTileLabels = show;
                         }
-                    }
-
-                    // ---- 标题默认行为（单选）----
-                    // 直接看「一直显示」是否被选中：radio 组内互斥，
-                    // 另一项必然取反。
-                    HWND titleAlways = GetDlgItem(hwnd, kTitleAlwaysRadioId);
-                    if (titleAlways != nullptr) {
-                        const bool checked =
-                            SendMessageW(titleAlways, BM_GETCHECK, 0, 0) ==
-                            BST_CHECKED;
-                        if (checked != state->initialAlwaysShowTitle) {
-                            state->result.alwaysShowTileLabels = checked;
+                        if (show && labelsAlways !=
+                                        state->initialAlwaysShowTitle) {
+                            state->result.alwaysShowTileLabels = labelsAlways;
                         }
                     }
 
@@ -1130,7 +1125,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         }
                     }
 
-                    // ---- 格子底色 ----
+                    // ---- 磁贴背景色 ----
                     //
                     // 必须用 touched 而不是单看值：内层空值（取消选色、
                     // 回到跟随皮肤）也是有效改动，与「没动过」不同。
@@ -1179,31 +1174,25 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 return 0;
             }
 
-            // 总闸「显示磁贴文字标签」：点击即预览 + 联动置灰
-            if (controlId == kLabelsCheckId &&
-                notification == BN_CLICKED) {
-                const BOOL checked =
-                    SendMessageW(GetDlgItem(hwnd, kLabelsCheckId),
-                                 BM_GETCHECK, 0, 0) == BST_CHECKED
-                        ? TRUE
-                        : FALSE;
-                EnableWindow(GetDlgItem(hwnd, kTitleAlwaysRadioId), checked);
-                EnableWindow(GetDlgItem(hwnd, kTitleDynamicRadioId), checked);
-                if (state != nullptr && state->preview != nullptr &&
-                    state->preview->showTileLabelsChanged) {
-                    state->preview->showTileLabelsChanged(checked == TRUE);
-                }
-                return 0;
-            }
-
-            // 标题默认行为单选：选中即预览
+            // 文字标签三态单选：选中即预览。
+            // 原来的「显示标签」复选框 + 「默认行为」二选一被合并成一行三项，
+            // 因此这里要同时推出两个布尔量：
+            //   show  = 不是「始终不显示」
+            //   always = 是否选的是「始终显示」
+            // 「移动时显示」时 show=true / always=false，正好等价于旧组合。
             if ((controlId == kTitleAlwaysRadioId ||
-                 controlId == kTitleDynamicRadioId) &&
+                 controlId == kTitleDynamicRadioId ||
+                 controlId == kTitleNeverRadioId) &&
                 notification == BN_CLICKED) {
-                if (state != nullptr && state->preview != nullptr &&
-                    state->preview->alwaysShowTitleChanged) {
-                    state->preview->alwaysShowTitleChanged(
-                        controlId == kTitleAlwaysRadioId);
+                if (state != nullptr && state->preview != nullptr) {
+                    const bool show = controlId != kTitleNeverRadioId;
+                    const bool always = controlId == kTitleAlwaysRadioId;
+                    if (state->preview->showTileLabelsChanged) {
+                        state->preview->showTileLabelsChanged(show);
+                    }
+                    if (show && state->preview->alwaysShowTitleChanged) {
+                        state->preview->alwaysShowTitleChanged(always);
+                    }
                 }
                 return 0;
             }
@@ -1494,15 +1483,6 @@ bool showSettingsWindow(HWND owner,
     state.initialTabBarAtBottom = currentTabBarAtBottom;
     state.initialWindowPlacement = currentWindowPlacement;
     state.initialThemeName = base::utf8ToWide(currentThemeName);
-    // 背景图只显示文件名
-    {
-        std::wstring backgroundWide = base::utf8ToWide(currentBackground);
-        const std::size_t slash = backgroundWide.find_last_of(L"\\/");
-        if (slash != std::wstring::npos) {
-            backgroundWide = backgroundWide.substr(slash + 1);
-        }
-        state.initialBackgroundName = backgroundWide;
-    }
     state.initialStartup = currentStartup;
     state.initialHotkeyPreset = currentHotkeyPreset;
     state.initialWindowOpacity = currentWindowOpacity;

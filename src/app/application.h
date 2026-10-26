@@ -37,10 +37,10 @@ inline constexpr const wchar_t* kApplicationWindowTitle = L"KTile 磁贴快启";
 //   1.0.0 = 正式版。
 // 改这里时记得同步 app.rc 里的 VERSIONINFO
 //  （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
-inline constexpr const wchar_t* kApplicationVersion = L"1.0.0";
+inline constexpr const wchar_t* kApplicationVersion = L"1.0.1";
 inline constexpr int kApplicationVersionMajor = 1;
 inline constexpr int kApplicationVersionMinor = 0;
-inline constexpr int kApplicationVersionPatch = 0;
+inline constexpr int kApplicationVersionPatch = 1;
 inline constexpr const wchar_t* kSingleInstanceMutexName =
     L"KTile.SingleInstance.{8F3A1C2D-4B5E-4A6F-9C8D-7E6F5A4B3C2D}";
 inline constexpr const wchar_t* kStartupRegistryValueName = L"KTile";

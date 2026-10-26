@@ -9,8 +9,10 @@ namespace ui {
 namespace {
 
 // 客户区尺寸（DIP）。
-constexpr int kClientWidth = 380;
-constexpr int kClientHeight = 240;
+// 宽度要容得下「版本发布地址：https://github.com/svyee/KTile/releases」这一行，
+// 否则会被静态文本裁掉；高度相应加一行。
+constexpr int kClientWidth = 440;
+constexpr int kClientHeight = 262;
 
 constexpr int kMargin = 20;
 constexpr int kIconSize = 48;
@@ -27,6 +29,8 @@ constexpr int kCopyrightY = 102;
 constexpr int kSeparatorY = 132;
 constexpr int kEmailY = 148;
 constexpr int kWechatY = 170;
+// 发布地址放在联系方式之后；按钮在其下方，靠右，不冲突。
+constexpr int kHomepageY = 192;
 
 constexpr int kButtonWidth = 84;
 constexpr int kButtonHeight = 28;
@@ -41,6 +45,7 @@ constexpr int kCopyrightId = 2004;
 constexpr int kSeparatorId = 2005;
 constexpr int kEmailId = 2006;
 constexpr int kWechatId = 2007;
+constexpr int kHomepageId = 2008;
 
 // 对话框关闭通知（结束本地模态循环）。与 text_input_dialog 的
 // WM_APP+0x93 区分开，避免两条模态链路互相唤醒看不懂。
@@ -150,6 +155,8 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                 {kCopyrightId, kCopyrightY, L"© 2026 svyee · 奇竹科技"},
                 {kEmailId, kEmailY, L"邮箱：svyee@163.com"},
                 {kWechatId, kWechatY, L"微信：svyeee"},
+                {kHomepageId, kHomepageY,
+                 L"版本发布地址：https://github.com/svyee/KTile/releases"},
             };
 
             std::vector<HWND> children;

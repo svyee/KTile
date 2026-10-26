@@ -3426,12 +3426,12 @@ void LauncherWindow::drawFallbackGlyph(const core::LaunchItem& item,
 std::uint32_t LauncherWindow::resolveTileBackground(const core::LaunchItem& item,
                                                     const bool hovered,
                                                     const bool pressed) const {
-    // 用户显式指定了磁贴色 —— 尊重用户选择，只叠加状态提亮。
-    // 注意：这一档**不套用**全局的「磁贴背景不透明度」—— 那是给
-    // 默认玻璃底调的旋钮，套到用户亲手挑的颜色上等于擅自改他的配色。
-    //
     // 优先级：单项色 > 设置里的全局默认色 > 皮肤/调色板。
-    // 后两档共用同一段提亮逻辑，避免两份「hover 加多少亮」各写一遍。
+    //
+    // 自定义色与皮肤默认色**同样**套用全局「磁贴背景不透明度」：
+    // 调色板选的色都是不透明的，滑块拉到多少 alpha 就该是多少，
+    // 否则用户换了底色却发现透明度旋钮失灵（实测反馈过的 bug）。
+    // 皮肤三档底色之间的浓淡差仍由 applyTileOpacityPercent 保留。
     const std::optional<std::uint32_t> customColor =
         item.tileColor.has_value() ? item.tileColor : defaultTileColor_;
     if (customColor.has_value()) {
@@ -3441,7 +3441,16 @@ std::uint32_t LauncherWindow::resolveTileBackground(const core::LaunchItem& item
         } else if (hovered) {
             lift = 0x20U;
         }
-        return liftColor(*customColor, lift);
+        const std::uint32_t lifted = liftColor(*customColor, lift);
+        if (tileOpacityPercent_ < 0) {
+            return lifted;  // 跟随皮肤：自定义色保持不透明原样
+        }
+        // 不走 applyTileOpacityPercent：它以皮肤 tileFill 的 alpha 为
+        // 基准保留差值，而自定义色基准是 0xFF，套上去会凭空偏移。
+        // 直接替换 alpha 才符合「滑块即所见」的预期。
+        const std::uint32_t targetAlpha =
+            static_cast<std::uint32_t>(tileOpacityPercent_) * 255U / 100U;
+        return (lifted & 0x00FFFFFFU) | (targetAlpha << 24);
     }
 
     // 默认：中性深灰玻璃。图标多为浅色设计，中性底能保证对比度。
