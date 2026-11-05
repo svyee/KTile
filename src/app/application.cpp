@@ -6,6 +6,7 @@
 #include "core/item_operations.h"
 #include "core/tab_operations.h"
 #include "infrastructure/json/config_store.h"
+#include "infrastructure/log/app_log.h"
 #include "ui/launcher_window.h"
 #include "platform/win32/item_launcher.h"
 #include "platform/win32/icon_store.h"
@@ -21,6 +22,7 @@
 #include <shobjidl.h>
 
 #include <algorithm>
+#include <cstdio>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -46,6 +48,40 @@ constexpr std::size_t kTileMenuTabEntries = 32;
 constexpr UINT kTrayMenuAbout = 2005;
 
 HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
+
+// 消息窗口定时器
+constexpr UINT_PTR kLogFlushTimerId = 1;        // 日志落盘
+constexpr UINT_PTR kHookWatchdogTimerId = 2;    // 手势钩子看门狗
+constexpr UINT kLogFlushIntervalMs = 2000;
+constexpr UINT kHookWatchdogIntervalMs = 60 * 1000;
+// 手势钩子的强制重装周期：系统负载高时会静默跳过超时的钩子回调
+//（没有任何通知），只能定期重装把钩子链顺序抢回来。
+constexpr ULONGLONG kForceReinstallIntervalMs = 10 * 60 * 1000;
+
+// 操作系统版本（写入启动横幅，排查「只在某台机器复现」时用）。
+// 走 ntdll 的 RtlGetVersion：GetVersionEx 在 Win8.1+ 会被兼容性 shim
+// 截成 6.2，RtlGetVersion 给的才是真版本（Win7 起就存在）。
+std::string osVersionString() {
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll == nullptr) {
+        return "unknown";
+    }
+    using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+    const auto fn = reinterpret_cast<RtlGetVersionFn>(
+        GetProcAddress(ntdll, "RtlGetVersion"));
+    if (fn == nullptr) {
+        return "unknown";
+    }
+    OSVERSIONINFOW info{};
+    info.dwOSVersionInfoSize = sizeof(info);
+    if (fn(&info) != 0) {
+        return "unknown";
+    }
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%lu.%lu.%lu",
+             info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
+    return buffer;
+}
 
 // Explorer 重启时广播的消息 ID（动态注册，不能 constexpr）。
 //
@@ -241,12 +277,28 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
     // Explorer 重启后立刻重装手势钩子，把「Win 键先到我们这里」的顺序抢回来。
     if (message == taskbarCreatedMessageId()) {
         if (self != nullptr) {
-            self->reinstallGestureHotkey();
+            self->reinstallGestureHotkey("Explorer 重启（TaskbarCreated）");
         }
         return 0;
     }
 
     switch (message) {
+        case WM_TIMER:
+            if (self != nullptr) {
+                self->onMessageTimer(wParam);
+                return 0;
+            }
+            break;
+
+        case WM_POWERBROADCAST:
+            if (wParam == PBT_APMRESUMEAUTOMATIC ||
+                wParam == PBT_APMRESUMESUSPEND) {
+                if (self != nullptr) {
+                    self->onPowerResume();
+                }
+            }
+            return TRUE;
+
         case WM_HOTKEY: {
             if (self != nullptr && wParam == static_cast<WPARAM>(kToggleHotkeyId)) {
                 self->toggleLauncher();
@@ -297,6 +349,12 @@ Application::~Application() {
     }
     gestureHotkey_.uninstall();
     tray_.destroy();
+    // 正常退出路径（托盘菜单退出）已经在 runMessageLoop 之后 shutdown
+    // 过日志；这里兜底覆盖调试开关的提前返回路径。
+    if (loggingReady_) {
+        infrastructure::applog::shutdown();
+        loggingReady_ = false;
+    }
 }
 
 // ================================================================ 启动流程
@@ -338,6 +396,9 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         }
         return 1;
     }
+
+    // 日志初始化紧跟配置（需要 data 目录路径）；此后所有关键环节都留痕。
+    initializeLogging(automationMode);
 
     if (!initializeWindow()) {
         if (!debug.shot) {
@@ -496,7 +557,86 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     //（kStartupTrimTimerId）：初始化之后的首次渲染会把页换回来，
     // 太早裁是白裁。
 
-    return runMessageLoop();
+    // 日志落盘（2s）与手势钩子看门狗（60s）。
+    // 定时器挂在消息窗口上：主窗口隐藏期间消息循环照常泵送。
+    SetTimer(messageWindow_, kLogFlushTimerId, kLogFlushIntervalMs, nullptr);
+    SetTimer(messageWindow_, kHookWatchdogTimerId, kHookWatchdogIntervalMs,
+             nullptr);
+
+    const int exitCode = runMessageLoop();
+
+    KillTimer(messageWindow_, kLogFlushTimerId);
+    KillTimer(messageWindow_, kHookWatchdogTimerId);
+    infrastructure::applog::markSessionEnd();
+    infrastructure::applog::info("正常退出");
+    infrastructure::applog::shutdown();
+    loggingReady_ = false;
+    return exitCode;
+}
+
+void Application::initializeLogging(const bool automation) {
+    loggingReady_ = infrastructure::applog::initialize(
+        paths_.dataDirectory() + L"\\logs");
+    if (!loggingReady_) {
+        return;  // 目录不可写：程序照常跑，只是没有日志
+    }
+    if (!automation) {
+        infrastructure::applog::markSessionStart();
+    }
+
+    // 手势状态机的事件上报：sink 里只做内存缓冲（applog::info 不落盘），
+    // 满足钩子回调「零文件 I/O」的硬约束。
+    gestureHotkey_.setEventSink(
+        [](const char* message) { infrastructure::applog::info(message); });
+
+    // 启动横幅：一次给齐排查所需的全部上下文
+    std::string banner = "===== KTile 启动 v";
+    banner += base::wideToUtf8Lossy(std::wstring(kApplicationVersion));
+    banner += " | Windows " + osVersionString();
+    banner += paths_.isPortable() ? " | 便携模式" : " | 降级模式(AppData)";
+    banner += automation ? " | 自动化" : "";
+    banner += " =====";
+    infrastructure::applog::info(banner);
+
+    const core::HotkeyConfig& hotkey = config_.activation.hotkey;
+    std::string summary = "唤醒方式: ";
+    summary += base::wideToUtf8Lossy(platform::win32::formatHotkey(hotkey));
+    summary += config_.activation.startWithWindows ? " | 开机自启: 开"
+                                                   : " | 开机自启: 关";
+    infrastructure::applog::info(summary);
+}
+
+void Application::onMessageTimer(const UINT_PTR timerId) {
+    if (timerId == kLogFlushTimerId) {
+        infrastructure::applog::flush();
+    } else if (timerId == kHookWatchdogTimerId) {
+        onHookWatchdog();
+    }
+}
+
+void Application::onHookWatchdog() {
+    const core::HotkeyConfig& config = config_.activation.hotkey;
+    if (config.gesture == core::HotkeyGesture::None ||
+        messageWindow_ == nullptr) {
+        return;
+    }
+    if (!gestureHotkey_.isInstalled()) {
+        infrastructure::applog::error("看门狗：手势钩子丢失，立即重装");
+        reinstallGestureHotkey("看门狗（钩子丢失）");
+        return;
+    }
+    // 系统会静默跳过超时的钩子回调（没有通知），定期重装抢回钩子链
+    // 顺序。手势做到一半时不装：重装会重置状态机，等它做完。
+    const ULONGLONG elapsed =
+        GetTickCount64() - lastGestureInstallTick_;
+    if (elapsed >= kForceReinstallIntervalMs && !gestureHotkey_.isMidGesture()) {
+        reinstallGestureHotkey("看门狗（定期重装）");
+    }
+}
+
+void Application::onPowerResume() {
+    infrastructure::applog::info("系统从休眠/睡眠恢复");
+    reinstallGestureHotkey("休眠恢复");
 }
 
 bool Application::initializeConfig() {
@@ -1594,6 +1734,12 @@ void Application::openSettings() {
         config_.activation.hotkey =
             core::hotkeyConfigForPreset(*result.hotkeyPreset);
         configChanged = true;
+        infrastructure::applog::info(
+            "设置变更：唤醒方式 " +
+            base::wideToUtf8Lossy(platform::win32::formatHotkey(previous)) +
+            " -> " +
+            base::wideToUtf8Lossy(
+                platform::win32::formatHotkey(config_.activation.hotkey)));
         if (!initializeHotkey()) {
             const std::wstring message =
                 L"唤醒快捷键 " +
@@ -1752,8 +1898,11 @@ bool Application::initializeHotkey() {
             messageWindow_, kToggleHotkeyId, config.gesture);
         if (!status) {
             hotkeyErrorText_ = base::utf8ToWide(status.error().message);
+            infrastructure::applog::error(
+                "手势钩子安装失败: " + status.error().message);
             return false;
         }
+        lastGestureInstallTick_ = GetTickCount64();
         return true;
     }
 
@@ -1762,12 +1911,17 @@ bool Application::initializeHotkey() {
         messageWindow_, kToggleHotkeyId, config);
     if (!status) {
         hotkeyErrorText_ = base::utf8ToWide(status.error().message);
+        infrastructure::applog::error("热键注册失败: " +
+                                      status.error().message);
         return false;
     }
+    infrastructure::applog::info(
+        "热键已注册: " +
+        base::wideToUtf8Lossy(platform::win32::formatHotkey(config)));
     return true;
 }
 
-void Application::reinstallGestureHotkey() {
+void Application::reinstallGestureHotkey(const char* reason) {
     const core::HotkeyConfig& config = config_.activation.hotkey;
     if (config.gesture == core::HotkeyGesture::None) {
         return;  // 普通 RegisterHotKey 不走钩子链，无需重装
@@ -1778,7 +1932,16 @@ void Application::reinstallGestureHotkey() {
     // install 内部会先 uninstall，调用一次即可完成「拆旧 + 装新」。
     // 失败不覆盖 hotkeyErrorText_：这里不是用户主动改热键，没必要
     // 把「暂时没装上」当成用户能处理的错误提示出来，下次唤醒时再试。
-    gestureHotkey_.install(messageWindow_, kToggleHotkeyId, config.gesture);
+    infrastructure::applog::info(std::string("重装手势钩子（") +
+                                 (reason != nullptr ? reason : "?") + "）");
+    const auto status = gestureHotkey_.install(
+        messageWindow_, kToggleHotkeyId, config.gesture);
+    if (status) {
+        lastGestureInstallTick_ = GetTickCount64();
+    } else {
+        infrastructure::applog::error("重装手势钩子失败: " +
+                                      status.error().message);
+    }
 }
 
 // ================================================================ 消息循环
@@ -1800,6 +1963,9 @@ void Application::toggleLauncher() {
         return;
     }
     launcherWindow_->toggle();
+    infrastructure::applog::info(launcherWindow_->isVisible()
+                                     ? "面板：显示"
+                                     : "面板：隐藏");
 }
 
 void Application::showLauncher() {
@@ -1905,6 +2071,7 @@ void Application::handleTrayCommand(const UINT commandId) {
         }
 
         case kTrayMenuExit:
+            infrastructure::applog::info("用户从托盘菜单退出");
             if (launcherWindow_) {
                 launcherWindow_->hide();
             }

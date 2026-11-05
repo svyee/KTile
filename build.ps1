@@ -30,14 +30,15 @@ $ObjDir     = Join-Path $BuildDir "obj"
 $ThirdParty = Join-Path $Root "third_party"
 
 # ---------------------------------------------------------------- 工具链
-$VcTools = "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Tools\MSVC\14.16.27023"
-$SdkBin  = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64"
-$SdkInc  = "C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0"
-$SdkLib  = "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0"
+# VS2022 BuildTools + MSVC 14.44 + Windows SDK 10.0.26100.0
+$VcTools = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207"
+$SdkBin  = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64"
+$SdkInc  = "C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0"
+$SdkLib  = "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0"
 
 $Cl = Join-Path $VcTools "bin\Hostx64\x64\cl.exe"
 if (-not (Test-Path $Cl)) {
-    Write-Error "找不到 cl.exe: $Cl`n请确认 VS2017 安装路径是否正确。"
+    Write-Error "找不到 cl.exe: $Cl`n请确认 VS2022 BuildTools 安装路径是否正确。"
 }
 
 $env:Path = "$(Split-Path $Cl);$VcTools\bin\Hostx64;$SdkBin;$env:Path"
@@ -182,6 +183,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
+        (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
         # platform/win32
         (Join-Path $SrcDir "platform\win32\single_instance.cpp")
         (Join-Path $SrcDir "platform\win32\global_hotkey.cpp")
@@ -262,6 +264,12 @@ if ($Tests) {
             $extra = $extra | Select-Object -Unique
         }
 
+        # 运行日志测试需要带上 app_log.cpp
+        if ($content -match "app_log\.h") {
+            $extra = @($extra) + (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
+            $extra = $extra | Select-Object -Unique
+        }
+
         if (-not (Invoke-Compile -Source $tf.FullName -OutputExe $exePath -ExtraSources $extra)) {
             $failed++
             continue
@@ -305,7 +313,7 @@ $appSources = Get-AppSources
 # 应用图标资源：app.rc → app.res，cl 会把 .res 直接交给链接器。
 # 没有这步 exe 就是「无图标」状态（任务栏/资源管理器显示通用图标）。
 $rcFile = Join-Path $SrcDir "app\app.rc"
-$rcExe = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\rc.exe"
+$rcExe = Join-Path $SdkBin "rc.exe"
 if ((Test-Path $rcFile) -and (Test-Path $rcExe)) {
     $resOut = Join-Path $BuildDir "app.res"
     & $rcExe /nologo /fo $resOut $rcFile | Out-Null

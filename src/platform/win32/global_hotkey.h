@@ -11,6 +11,7 @@
 
 #include <Windows.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,20 @@ public:
     // 供钩子回调使用（文件级单例转发）。返回 true 表示「吞掉这个按键」。
     bool handleKeyEvent(WPARAM message, const KBDLLHOOKSTRUCT& event);
 
+    // 事件上报（可选）：应用层注入，把状态机关键迁移写进运行日志。
+    //
+    // 注意：回调运行在低级键盘钩子上下文里，实现必须只做纯内存操作
+    // （日志模块的 info/warn 只写缓冲、不落盘），严禁任何文件 I/O，
+    // 否则可能超过 LowLevelHooksTimeout 被系统静默卸载钩子。
+    using EventSink = std::function<void(const char*)>;
+    void setEventSink(EventSink sink);
+
+    // 手势是否进行到一半（Win 按下未释放 / Ctrl 连击窗口内）。
+    // 看门狗定期重装钩子时用：手势中途重装会丢状态，等它做完。
+    bool isMidGesture() const noexcept {
+        return winState_ != WinState::Idle || ctrlHeld_;
+    }
+
 private:
     HHOOK hook_ = nullptr;
     HWND notifyWindow_ = nullptr;
@@ -128,6 +143,13 @@ private:
     // 否则系统状态变了本地还不知道，下一次 Win 按下会误判成 Ctrl+Win。
     bool ctrlPressed_ = false;
 
+    EventSink eventSink_;
+
+    // 上报一条状态机事件（未注入 sink 时为空操作）
+    void report(const char* message) const;
+    // 状态对账：本地状态机与物理按键状态不一致时把账结清。
+    // 触发场景见 cpp 注释（钩子回调被系统跳过会丢事件）。
+    void reconcileWinState();
     void trigger() const;
     static void injectWinKey(bool down);
     static void injectKey(WORD virtualKey, bool down);

@@ -256,6 +256,16 @@ GestureHotkey::~GestureHotkey() {
     uninstall();
 }
 
+void GestureHotkey::setEventSink(EventSink sink) {
+    eventSink_ = std::move(sink);
+}
+
+void GestureHotkey::report(const char* message) const {
+    if (eventSink_) {
+        eventSink_(message);
+    }
+}
+
 Win32Status GestureHotkey::install(const HWND notifyWindow, const int hotkeyId,
                                    const core::HotkeyGesture gesture) {
     uninstall();
@@ -287,13 +297,24 @@ Win32Status GestureHotkey::install(const HWND notifyWindow, const int hotkeyId,
         return base::makeUnexpected(
             Win32Error(code, "安装键盘钩子失败（可能被安全软件拦截）"));
     }
+    report(gesture == core::HotkeyGesture::WinKey
+               ? "手势钩子已安装（单按 Win）"
+               : "手势钩子已安装（双击 Ctrl）");
     return {};
 }
 
 void GestureHotkey::uninstall() {
+    // 结清未配对的注入：Replayed 表示我们向系统补发过「Win 按下」
+    // 而还没补「抬起」。不结清就卸载，系统会一直认为 Win 按着 ——
+    // 之后所有按键都变成 Win+组合键（实测过的严重事故）。
+    if (winState_ == WinState::Replayed) {
+        report("卸载前补发 Win 抬起（结清未配对的注入）");
+        injectWinKey(false);
+    }
     if (hook_ != nullptr) {
         UnhookWindowsHookEx(hook_);
         hook_ = nullptr;
+        report("手势钩子已卸载");
     }
     if (g_gestureHotkey == this) {
         g_gestureHotkey = nullptr;
@@ -330,6 +351,34 @@ void GestureHotkey::injectKey(const WORD virtualKey, const bool down) {
     SendInput(1, &input, sizeof(INPUT));
 }
 
+void GestureHotkey::reconcileWinState() {
+    // 为什么会不一致：低级键盘钩子的回调由我们的消息线程泵送，
+    // 系统负载高（典型：开机自启后的几分钟）时若某次回调超过
+    // LowLevelHooksTimeout，系统会跳过这次回调 —— 「Win 抬起」事件
+    // 就这样丢了。状态机停在非 Idle：
+    //   Held 卡住     → 单击永远不触发（Win 键「没反应」）
+    //   Replayed 卡住 → 已注入的 Win 按下没有配对抬起，系统认为 Win
+    //                   一直按着，之后所有按键都变成 Win+组合键（事故）
+    // 这里把账结清：Held 按「单击完成」处理，Replayed 补发抬起。
+    switch (winState_) {
+        case WinState::Held:
+            report("状态对账：Win 抬起事件丢失，Held 按单击完成处理");
+            winState_ = WinState::Idle;
+            trigger();
+            break;
+        case WinState::Replayed:
+            report("状态对账：Win 抬起事件丢失，补发 Win 抬起防止卡键");
+            injectWinKey(false);
+            winState_ = WinState::Idle;
+            break;
+        case WinState::StartMenu:
+            winState_ = WinState::Idle;
+            break;
+        case WinState::Idle:
+            break;
+    }
+}
+
 bool GestureHotkey::handleKeyEvent(const WPARAM message,
                                    const KBDLLHOOKSTRUCT& event) {
     // 自己补发的按键必须原样放行，否则补发 Win 会再被自己吞掉（死循环）。
@@ -362,6 +411,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
                     if (lastCtrlDownTick_ != 0 &&
                         now - lastCtrlDownTick_ <= kDoubleCtrlWindowMs) {
                         lastCtrlDownTick_ = 0;
+                        report("识别到双击 Ctrl，触发唤醒");
                         trigger();
                     } else {
                         lastCtrlDownTick_ = now;
@@ -382,8 +432,23 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
 
     // ---------------------------------------------------------- 单按 Win 键
     if (gesture_ == core::HotkeyGesture::WinKey) {
+        // 自愈对账（见 reconcileWinState 的注释）：只要状态机不在 Idle
+        // 而物理 Win 已经松开，说明抬起事件丢了，立刻结账。
+        // GetAsyncKeyState 只在非 Idle 时调用 —— 常态（Idle）零开销。
+        if (winState_ != WinState::Idle &&
+            (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
+            (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0) {
+            reconcileWinState();
+        }
+
         if (isWinKey(event.vkCode)) {
             if (isDown) {
+                if (winState_ != WinState::Idle) {
+                    // 物理上不可能「按着再按一次」：上一个抬起丢了，而
+                    // 此刻物理 Win 是按下的，上面的物理对账不会触发，
+                    // 必须在这里强制结清旧账再走正常流程。
+                    reconcileWinState();
+                }
                 if (winState_ == WinState::Idle) {
                     if (startMenuByWinKey_ && ctrlPressed_) {
                         // Ctrl+Win：用户约定它仍开开始菜单。原生的组合
@@ -404,6 +469,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
                         injectWinKey(true);
                         injectWinKey(false);
                         winState_ = WinState::StartMenu;
+                        report("Ctrl+Win：代发开始菜单");
                     } else {
                         winState_ = WinState::Held;
                     }
@@ -414,6 +480,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
             switch (winState_) {
                 case WinState::Held:
                     winState_ = WinState::Idle;
+                    report("识别到单击 Win，触发唤醒");
                     trigger();
                     break;
                 case WinState::Replayed:
@@ -434,6 +501,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
         // 其它键：Win 还按着时按了别的键 → 判定为 Win+X 组合
         if (isDown && winState_ == WinState::Held) {
             winState_ = WinState::Replayed;
+            report("判定为 Win+组合键，补发 Win 按下放行");
             injectWinKey(true);  // 把「Win 按着」这件事补给系统
         }
         return false;

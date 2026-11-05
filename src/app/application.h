@@ -115,11 +115,19 @@ public:
     void showTrayMenu();
     void handleTrayCommand(UINT commandId);
 
-    // Explorer 重启广播（TaskbarCreated）触发：重装手势钩子。
-    // WH_KEYBOARD_LL 钩子链是 LIFO，Explorer 重启会把它的钩子排到我们
-    // 前面，导致「吞 Win 键」失效。收到广播后立刻重装，把顺序抢回来。
+    // 重装手势钩子（reason 只用于写日志，说明是谁触发的）。
+    //
+    // 为什么需要重装：WH_KEYBOARD_LL 钩子链是 LIFO，Explorer 重启会把
+    // 它的钩子排到我们前面，导致「吞 Win 键」失效；系统负载高时还可能
+    // 静默跳过/卸载超时钩子。TaskbarCreated 广播、休眠恢复、看门狗
+    // 定时器都会调这里把顺序抢回来。
     // 非手势热键（普通 RegisterHotKey）不受钩子链影响，直接返回。
-    void reinstallGestureHotkey();
+    void reinstallGestureHotkey(const char* reason);
+
+    // 消息窗口定时器回调（日志落盘 / 钩子看门狗）
+    void onMessageTimer(UINT_PTR timerId);
+    // 休眠恢复：钩子链顺序可能被电源事件打乱，重装保险一次
+    void onPowerResume();
 
 private:
     // 各初始化步骤，任一步失败则终止启动
@@ -127,6 +135,13 @@ private:
     bool initializeWindow();
     bool initializeTray();
     bool initializeHotkey();
+
+    // 运行日志：初始化目录 + 写启动横幅。automation 模式不建会话哨兵
+    //（自动化会并发起多实例，哨兵会误报「上次异常退出」）。
+    void initializeLogging(bool automation);
+    // 看门狗：手势钩子丢了就重装，每隔一段时间也强制重装一次
+    //（系统会静默跳过超时钩子，没有通知，只能定期抢）。
+    void onHookWatchdog();
 
     // 持久化：从磁盘加载配置与磁贴数据
     void loadPersistedState();
@@ -208,6 +223,11 @@ private:
     // OLE 是否由本对象初始化（OleInitialize 成功才在析构里 OleUninitialize）。
     // 拖放（RegisterDragDrop）依赖 OLE，因此启动时必须先初始化。
     bool oleInitialized_ = false;
+
+    // 运行日志是否已初始化（析构时据此决定是否 shutdown 日志模块）
+    bool loggingReady_ = false;
+    // 上一次安装/重装手势钩子的时刻（看门狗定期重装用）
+    ULONGLONG lastGestureInstallTick_ = 0;
 
     core::ApplicationConfig config_;
     core::ItemsDocument document_;
