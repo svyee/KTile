@@ -34,13 +34,14 @@ inline constexpr const wchar_t* kApplicationWindowTitle = L"KTile 磁贴快启";
 
 // 版本号。
 //   0.9.0 = 功能开发完成、待打包与 Win7 真机验证（M6）；
-//   1.0.0 = 正式版。
+//   1.0.0 = 正式版；
+//   1.0.2 = 关于对话框字体优先微软雅黑 / 思源黑体。
 // 改这里时记得同步 app.rc 里的 VERSIONINFO
 //  （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
-inline constexpr const wchar_t* kApplicationVersion = L"1.0.1";
+inline constexpr const wchar_t* kApplicationVersion = L"1.0.2";
 inline constexpr int kApplicationVersionMajor = 1;
 inline constexpr int kApplicationVersionMinor = 0;
-inline constexpr int kApplicationVersionPatch = 1;
+inline constexpr int kApplicationVersionPatch = 2;
 inline constexpr const wchar_t* kSingleInstanceMutexName =
     L"KTile.SingleInstance.{8F3A1C2D-4B5E-4A6F-9C8D-7E6F5A4B3C2D}";
 inline constexpr const wchar_t* kStartupRegistryValueName = L"KTile";
@@ -135,6 +136,8 @@ private:
     bool initializeWindow();
     bool initializeTray();
     bool initializeHotkey();
+    // 托盘提示文字跟随当前唤醒方式（热键 / 手势）刷新
+    void updateTrayTooltip();
 
     // 运行日志：初始化目录 + 写启动横幅。automation 模式不建会话哨兵
     //（自动化会并发起多实例，哨兵会误报「上次异常退出」）。

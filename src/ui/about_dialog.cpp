@@ -1,5 +1,6 @@
 // KTile - UI 层：「关于」对话框实现
 #include "ui/about_dialog.h"
+#include <Shellapi.h>
 
 #include <string>
 #include <vector>
@@ -8,9 +9,7 @@ namespace ktile {
 namespace ui {
 namespace {
 
-// 客户区尺寸（DIP）。
-// 宽度要容得下「版本发布地址：https://github.com/svyee/KTile/releases」这一行，
-// 否则会被静态文本裁掉；高度相应加一行。
+// 客户区尺寸（DIP）。宽度要容得下「Github」「网盘下载」两个并排按钮。
 constexpr int kClientWidth = 440;
 constexpr int kClientHeight = 262;
 
@@ -29,8 +28,6 @@ constexpr int kCopyrightY = 102;
 constexpr int kSeparatorY = 132;
 constexpr int kEmailY = 148;
 constexpr int kWechatY = 170;
-// 发布地址放在联系方式之后；按钮在其下方，靠右，不冲突。
-constexpr int kHomepageY = 192;
 
 constexpr int kButtonWidth = 84;
 constexpr int kButtonHeight = 28;
@@ -45,7 +42,14 @@ constexpr int kCopyrightId = 2004;
 constexpr int kSeparatorId = 2005;
 constexpr int kEmailId = 2006;
 constexpr int kWechatId = 2007;
-constexpr int kHomepageId = 2008;
+// 发布地址 / 备用下载地址两个扁平按钮。
+constexpr int kGithubId = 2008;
+constexpr int kPanDownloadId = 2009;
+
+constexpr const wchar_t* kGithubUrl =
+    L"https://github.com/svyee/KTile/releases";
+constexpr const wchar_t* kPanUrl =
+    L"https://pan.baidu.com/s/1h7Cs_XQGaGMWqKnO8olbbQ?pwd=p3gf";
 
 // 对话框关闭通知（结束本地模态循环）。与 text_input_dialog 的
 // WM_APP+0x93 区分开，避免两条模态链路互相唤醒看不懂。
@@ -57,6 +61,9 @@ constexpr int kAppIconResourceId = 101;
 struct DialogState {
     std::wstring productName;
     std::wstring version;
+    // 由本对话框创建的字体，WM_DESTROY 时释放；系统 Stock 字体不在此列。
+    HFONT createdBodyFont = nullptr;
+    HFONT createdTitleFont = nullptr;
 };
 
 // 把 owner 的 DPI 换算成缩放系数（96 DPI = 1.0）。
@@ -78,8 +85,63 @@ int scaled(const double scale, const int value) {
     return static_cast<int>(value * scale + 0.5);
 }
 
+// 系统中是否安装了指定字体族。
+//
+// 为什么用枚举而不是直接 CreateFont：CreateFont 遇到不存在的族名会
+// 静默替换成别的字体，没法判断是否命中；EnumFontFamiliesEx 按族名
+// 过滤，只有字体真实存在时回调才会被调用。
+bool hasFontFamily(const wchar_t* family) {
+    const HDC dc = GetDC(nullptr);
+    if (dc == nullptr) {
+        return false;
+    }
+
+    LOGFONTW filter{};
+    filter.lfCharSet = DEFAULT_CHARSET;
+    lstrcpynW(filter.lfFaceName, family, LF_FACESIZE);
+
+    bool found = false;
+    EnumFontFamiliesExW(
+        dc, &filter,
+        [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM param) -> int {
+            *reinterpret_cast<bool*>(param) = true;
+            return 0;
+        },
+        reinterpret_cast<LPARAM>(&found), 0);
+    ReleaseDC(nullptr, dc);
+    return found;
+}
+
+// 关于对话框的界面字体：优先微软雅黑，其次思源黑体；都没装则返回
+// nullptr，调用方回退系统默认字体。
+//
+// Win7 只有「Microsoft YaHei」，带 UI 后缀的版本从 Win8 才有，
+// 所以两个名字都要探测；思源黑体各版本的族名有 SC / CN 两种写法。
+const wchar_t* pickUiFontFamily() {
+    static const wchar_t* const kCandidates[] = {
+        L"Microsoft YaHei UI",
+        L"Microsoft YaHei",
+        L"Source Han Sans SC",
+        L"Source Han Sans CN",
+        L"思源黑体 CN",
+        L"思源黑体 SC",
+    };
+    for (const wchar_t* family : kCandidates) {
+        if (hasFontFamily(family)) {
+            return family;
+        }
+    }
+    return nullptr;
+}
+
 void finishDialog(const HWND dialog) {
     DestroyWindow(dialog);
+}
+
+// 用系统默认浏览器打开链接。失败不做提示：这只是辅助入口，
+// 不应阻塞「确定」关闭流程。
+void openUrl(const wchar_t* url) {
+    ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
@@ -103,7 +165,12 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             const double scale = scaleFor(dialog);
             const HINSTANCE instance = reinterpret_cast<HINSTANCE>(
                 GetWindowLongPtrW(dialog, GWLP_HINSTANCE));
-            const HFONT bodyFont = static_cast<HFONT>(
+            // 界面字体：优先使用系统已安装的微软雅黑 / 思源黑体；
+            // 都没装时正文回退 DEFAULT_GUI_FONT、标题回退「微软雅黑 UI」
+            //（CreateFont 会自动替换成可用字体，Win7 没有 UI 变体也能显示）。
+            const wchar_t* uiFamily = pickUiFontFamily();
+
+            HFONT bodyFont = static_cast<HFONT>(
                 GetStockObject(DEFAULT_GUI_FONT));
 
             const int clientWidth = scaled(scale, kClientWidth);
@@ -127,18 +194,31 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                              reinterpret_cast<LPARAM>(appIcon));
             }
 
-            // 标题字体：正文沿用 DEFAULT_GUI_FONT，标题单做一个
-            // 加粗大字（微软雅黑 UI，Win7 SP1 起自带）。
+            // 正文与标题同族：9pt 正文、14pt 加粗标题，按当前 DPI 计算字高。
             const HDC dc = GetDC(dialog);
             const int dpiY = dc != nullptr ? GetDeviceCaps(dc, LOGPIXELSY) : 96;
             if (dc != nullptr) {
                 ReleaseDC(dialog, dc);
             }
-            const HFONT titleFont = CreateFontW(
-                -MulDiv(14, dpiY > 0 ? dpiY : 96, 72), 0, 0, 0, FW_BOLD,
+            const int effectiveDpi = dpiY > 0 ? dpiY : 96;
+
+            if (uiFamily != nullptr) {
+                state->createdBodyFont = CreateFontW(
+                    -MulDiv(9, effectiveDpi, 72), 0, 0, 0, FW_NORMAL,
+                    FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                    uiFamily);
+                if (state->createdBodyFont != nullptr) {
+                    bodyFont = state->createdBodyFont;
+                }
+            }
+
+            state->createdTitleFont = CreateFontW(
+                -MulDiv(14, effectiveDpi, 72), 0, 0, 0, FW_BOLD,
                 FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
-                L"Microsoft YaHei UI");
+                uiFamily != nullptr ? uiFamily : L"Microsoft YaHei UI");
+            const HFONT titleFont = state->createdTitleFont;
 
             // 版本行先拼成具名 wstring：数组里只能存 c_str()，
             // 直接内联临时对象会在表达式结束时就析构（悬垂）。
@@ -155,12 +235,10 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                 {kCopyrightId, kCopyrightY, L"© 2026 svyee · 奇竹科技"},
                 {kEmailId, kEmailY, L"邮箱：svyee@163.com"},
                 {kWechatId, kWechatY, L"微信：svyeee"},
-                {kHomepageId, kHomepageY,
-                 L"版本发布地址：https://github.com/svyee/KTile/releases"},
             };
 
             std::vector<HWND> children;
-            children.reserve(9);
+            children.reserve(10);
 
             const HWND title = CreateWindowExW(
                 0, L"STATIC", state->productName.c_str(),
@@ -190,6 +268,26 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                     static_cast<INT_PTR>(kSeparatorId)),
                 instance, nullptr);
             children.push_back(separator);
+
+            // 发布地址 / 备用下载地址：扁平按钮，与「确定」同一行、靠左，
+            // 点击后交给系统默认浏览器（不内嵌 WebView，保持零依赖）。
+            const int linkButtonY = clientHeight - margin - buttonHeight;
+            const HWND github = CreateWindowExW(
+                0, L"BUTTON", L"Github",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_FLAT | BS_PUSHBUTTON,
+                textX, linkButtonY, buttonWidth, buttonHeight, dialog,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGithubId)),
+                instance, nullptr);
+            children.push_back(github);
+
+            const HWND panDownload = CreateWindowExW(
+                0, L"BUTTON", L"网盘下载",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_FLAT | BS_PUSHBUTTON,
+                textX + buttonWidth + scaled(scale, kButtonGap), linkButtonY,
+                buttonWidth, buttonHeight, dialog,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPanDownloadId)),
+                instance, nullptr);
+            children.push_back(panDownload);
 
             const HWND ok = CreateWindowExW(
                 0, L"BUTTON", L"确定",
@@ -221,6 +319,10 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             // 确定 / 取消 / Esc / 标题栏关闭，统统等于关掉。
             if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
                 finishDialog(dialog);
+            } else if (LOWORD(wParam) == kGithubId) {
+                openUrl(kGithubUrl);
+            } else if (LOWORD(wParam) == kPanDownloadId) {
+                openUrl(kPanUrl);
             }
             return 0;
 
@@ -229,6 +331,19 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             return 0;
 
         case WM_DESTROY: {
+            // 释放本对话框创建的字体（Stock 字体不归我们释放）。
+            auto* state = reinterpret_cast<DialogState*>(
+                GetWindowLongPtrW(dialog, GWLP_USERDATA));
+            if (state != nullptr) {
+                if (state->createdBodyFont != nullptr) {
+                    DeleteObject(state->createdBodyFont);
+                    state->createdBodyFont = nullptr;
+                }
+                if (state->createdTitleFont != nullptr) {
+                    DeleteObject(state->createdTitleFont);
+                    state->createdTitleFont = nullptr;
+                }
+            }
             // 唤醒模态循环去检查 IsWindow（绝不能 PostQuitMessage，
             // 会连带杀掉主消息循环 —— 项目早期踩过的坑）。
             HWND owner = GetWindow(dialog, GW_OWNER);

@@ -1753,6 +1753,8 @@ void Application::openSettings() {
             config_.activation.hotkey = previous;
             initializeHotkey();
         }
+        // 设置里换了唤醒方式（或回滚到旧的）后同步托盘提示。
+        updateTrayTooltip();
     }
 
     // ---- 不透明度 ----
@@ -1867,10 +1869,14 @@ bool Application::initializeTray() {
         handleTrayCommand(commandId);
     });
 
+    // 提示文字必须跟随配置：选 Win 键 / 双击 Ctrl 时不能再写死 Alt+Space。
+    const std::wstring tooltip = L"KTile - " +
+        platform::win32::formatHotkey(config_.activation.hotkey) + L" 打开";
+
     const auto status = tray_.create(
         messageWindow_,
         WM_TRAYICON_CALLBACK,
-        L"KTile - Alt+Space 打开",
+        tooltip,
         icon.get());
     if (!status) {
         return false;
@@ -1882,6 +1888,13 @@ bool Application::initializeTray() {
     g_trayIconForMenu = icon.release();
 
     return true;
+}
+
+void Application::updateTrayTooltip() {
+    // 与启动时同一套文案：唤醒方式变化后立即刷新，避免提示与实际不符。
+    const std::wstring tooltip = L"KTile - " +
+        platform::win32::formatHotkey(config_.activation.hotkey) + L" 打开";
+    tray_.setTooltip(tooltip);
 }
 
 bool Application::initializeHotkey() {

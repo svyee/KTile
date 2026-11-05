@@ -93,7 +93,9 @@ data/
 
 ## 从源码构建
 
-**要求**：Visual Studio 2017（工具集 14.16，C++17）、Windows 10 SDK 10.0.19041.0。
+**要求**：Visual Studio 2022 Build Tools（MSVC 14.44，C++17）、Windows SDK 10.0.26100.0。
+工具链路径硬编码在 `build.ps1` 顶部；本机安装位置或版本不同时，改这几行即可。
+无需 CMake、vcpkg 或任何第三方库。
 
 ```powershell
 git clone https://github.com/svyee/KTile.git
