@@ -3,6 +3,7 @@
 
 #include "base/text_convert.h"
 #include "core/lucide_icons.h"
+#include "core/plugin_layout.h"
 #include "platform/win32/icon_loader.h"
 #include "platform/win32/icon_store.h"
 #include "platform/win32/popup_menu.h"
@@ -19,6 +20,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cwctype>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
@@ -38,6 +42,9 @@ constexpr UINT kBlankMenuSettingsId = 3101;
 constexpr UINT kBlankMenuAddItemId = 3102;
 constexpr UINT kBlankMenuNewTabId = 3103;
 constexpr UINT kBlankMenuAboutId = 3104;
+// 「添加插件」子菜单的命令 ID 段：3101..3104 之后，取 3201 起。
+// 命令 ID 与插件下标按下标偏移换算（子菜单项数量有限，不会溢出）。
+constexpr UINT kBlankMenuPluginBaseId = 3201;
 
 // 默认配色已迁移到 ui/theme.h 的 ThemeColors（皮肤系统）。
 // 磁贴底色：中性深灰玻璃 —— 对浅色/彩色图标都能保证对比度。
@@ -886,7 +893,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                     contextMenuHandler_(hwnd_, index, items[index]);
                 }
             } else if (settingsHandler_ || addItemHandler_ ||
-                       aboutHandler_) {
+                       aboutHandler_ || pluginCatalogProvider_) {
                 // ---- 空白区右键：面板级操作 ----
                 //
                 // 托盘图标经常被 Windows 收进溢出区，用户想找设置时
@@ -898,9 +905,27 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                 screenPoint.y = static_cast<LONG>(y);
                 ClientToScreen(hwnd_, &screenPoint);
 
+                // 插件入口做成子菜单：插件数量会随用户安装增长，
+                // 平铺到一级菜单会把「设置」挤到很下面。
+                std::vector<platform::win32::PopupMenuEntry> pluginEntries;
+                std::vector<core::PluginCatalogEntry> catalog;
+                if (pluginCatalogProvider_ && addPluginHandler_) {
+                    catalog = pluginCatalogProvider_();
+                    for (std::size_t index = 0; index < catalog.size(); ++index) {
+                        pluginEntries.push_back(platform::win32::PopupMenuEntry::action(
+                            kBlankMenuPluginBaseId +
+                                static_cast<UINT>(index),
+                            base::utf8ToWide(catalog[index].name)));
+                    }
+                }
+
                 std::vector<platform::win32::PopupMenuEntry> entries;
                 entries.push_back(platform::win32::PopupMenuEntry::action(
                     kBlankMenuAddItemId, L"添加新项目..."));
+                if (!pluginEntries.empty()) {
+                    entries.push_back(platform::win32::PopupMenuEntry::parent(
+                        L"添加插件磁贴", std::move(pluginEntries)));
+                }
                 entries.push_back(platform::win32::PopupMenuEntry::action(
                     kBlankMenuNewTabId, L"新建标签页..."));
                 entries.push_back(platform::win32::PopupMenuEntry::separator());
@@ -925,6 +950,13 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                     }
                 } else if (command == kBlankMenuNewTabId) {
                     promptCreateTab();
+                } else if (command >= kBlankMenuPluginBaseId &&
+                           addPluginHandler_) {
+                    const std::size_t index =
+                        static_cast<std::size_t>(command - kBlankMenuPluginBaseId);
+                    if (index < catalog.size()) {
+                        addPluginHandler_(catalog[index].id);
+                    }
                 }
             }
             return 0;
@@ -1288,6 +1320,9 @@ bool LauncherWindow::createDeviceIndependentResources() {
 void LauncherWindow::discardDeviceResources() {
     // 位图依附于渲染目标，必须先清缓存再释放目标
     clearIconCache();
+    // 插件图标几何是 D2D 工厂建的，本身不依附渲染目标；但设备丢失时
+    // 一并清掉最省心 —— 下次首绘重建，代价只有几十个线段。
+    clearPluginGeometryCache();
     appIconBitmap_.reset();
     backgroundBitmap_.reset();
     borderBrush_.reset();
@@ -3051,6 +3086,20 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     renderTarget_->DrawRoundedRectangle(rounded, borderBrush_.get(),
                                         borderWidth);
 
+    // ---- 插件磁贴：内容区完全交给插件布局树 ----
+    //
+    // 插件磁贴不画「图标 + 名称标签」那一套：布局树自己会给出图标、
+    // 主/副/页脚文本与进度条，名称只是菜单里的标识，不占磁贴空间。
+    if (item.type == core::ItemType::Plugin) {
+        paintPluginTileContent(item, D2D1::RectF(left, top,
+                                                 left + width, top + height));
+        renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+        if (layerPushed) {
+            renderTarget_->PopLayer();
+        }
+        return;
+    }
+
     // ---- 标签显示策略 ----
     // 名称一律叠加在图标之上（不挤占图标空间）。
     //
@@ -3340,6 +3389,711 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     if (layerPushed) {
         renderTarget_->PopLayer();
     }
+}
+
+// ================================================================ 插件磁贴
+//
+// 干了什么：把 app 层给出的 PluginView（manifest + 数据快照）翻译成
+// core::PluginDrawList，再逐条画出来。
+//
+// 为什么不在 UI 里自己排版：
+//   - 「large 显示 3 天、small 只显示今天」这类差异必须由插件的 manifest
+//     描述，UI 硬编码不了这么多种插件。
+//   - 排版逻辑放 core 才能脱离 D2D 做单测（见 tests/test_plugin_layout.cpp）。
+void LauncherWindow::paintPluginTileContent(const core::LaunchItem& item,
+                                            const D2D1_RECT_F& rect) {
+    if (renderTarget_ == nullptr || !brush_.valid() ||
+        !textBrush_.valid()) {
+        return;
+    }
+
+    core::PluginView view;
+    if (pluginViewProvider_) {
+        view = pluginViewProvider_(item);
+    }
+
+    // 没有 manifest 或没有可画的数据：统一走占位视图。
+    // 注意这里不能退化成「普通磁贴」画法 —— 插件磁贴没有可执行目标，
+    // 画个空图标加名字会让用户以为点了没反应。
+    if (!view.manifest || !view.hasData || !view.snapshot) {
+        paintPluginPlaceholder(view, rect);
+        return;
+    }
+
+    const float width = rect.right - rect.left;
+    const float height = rect.bottom - rect.top;
+    const int tileWidth = static_cast<int>(std::lround(width));
+    const int tileHeight = static_cast<int>(std::lround(height));
+
+    const core::PluginLayoutSpec* spec =
+        core::selectPluginLayout(*view.manifest, tileWidth, tileHeight);
+    if (spec == nullptr) {
+        paintPluginPlaceholder(view, rect);
+        return;
+    }
+
+    auto measure = [this](const std::string& text, float fontSize) {
+        return measurePluginText(text, fontSize);
+    };
+    const core::PluginDrawList list = core::buildPluginDrawList(
+        *view.manifest, view.snapshot->data, spec->root, rect.left, rect.top,
+        width, height, measure);
+
+    for (const core::PluginDrawCommand& command : list.commands) {
+        switch (command.kind) {
+            case core::PluginDrawKind::Text: {
+                IDWriteTextFormat* format = pluginTextFormat(command.fontSize);
+                if (format == nullptr) {
+                    break;
+                }
+                std::uint32_t color = theme_.text;
+                if (command.role == core::PluginTextRole::Sub) {
+                    color = withAlpha(theme_.text, 0xCC);
+                } else if (command.role == core::PluginTextRole::Footer) {
+                    color = withAlpha(theme_.text, 0x99);
+                }
+                const std::wstring text = base::utf8ToWide(command.text);
+                textBrush_->SetColor(colorFromArgb(color));
+                renderTarget_->DrawTextW(
+                    text.c_str(), static_cast<UINT32>(text.size()), format,
+                    D2D1::RectF(command.left, command.top, command.right,
+                                command.bottom),
+                    textBrush_.get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                break;
+            }
+            case core::PluginDrawKind::Icon: {
+                drawPluginIcon(command.icon, command.iconFallback,
+                               view.manifest->directory, renderTarget_,
+                               borderBrush_.get(),
+                               D2D1::RectF(command.left, command.top,
+                                           command.right, command.bottom),
+                               withAlpha(theme_.text, 0xE6));
+                break;
+            }
+            case core::PluginDrawKind::Meter: {
+                const float meterHeight = command.bottom - command.top;
+                if (meterHeight <= 0.0F) {
+                    break;
+                }
+                const float radius = meterHeight * 0.5F;
+                const D2D1_ROUNDED_RECT track = D2D1::RoundedRect(
+                    D2D1::RectF(command.left, command.top, command.right,
+                                command.bottom),
+                    radius, radius);
+                brush_->SetColor(colorFromArgb(withAlpha(theme_.text, 0x26)));
+                renderTarget_->FillRoundedRectangle(track, brush_.get());
+
+                const float fraction = std::clamp(command.fraction, 0.0F, 1.0F);
+                if (fraction > 0.0F) {
+                    const float fillRight = command.left +
+                        (command.right - command.left) * fraction;
+                    const D2D1_ROUNDED_RECT fill = D2D1::RoundedRect(
+                        D2D1::RectF(command.left, command.top,
+                                    std::max(command.left + meterHeight,
+                                             fillRight),
+                                    command.bottom),
+                        radius, radius);
+                    brush_->SetColor(colorFromArgb(
+                        command.color != 0 ? command.color : theme_.accent));
+                    renderTarget_->FillRoundedRectangle(fill, brush_.get());
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+void LauncherWindow::paintPluginPlaceholder(const core::PluginView& view,
+                                            const D2D1_RECT_F& rect) {
+    if (renderTarget_ == nullptr || !textBrush_.valid()) {
+        return;
+    }
+
+    const float width = rect.right - rect.left;
+    const float height = rect.bottom - rect.top;
+    if (width <= 0.0F || height <= 0.0F) {
+        return;
+    }
+
+    // 图标：用插件自己的缺省图标；插件不存在时没有图标可画（只在文字里说明）。
+    const std::string iconId =
+        view.manifest ? view.manifest->icon : std::string();
+
+    const float iconSize = std::clamp(std::min(width, height) * 0.40F,
+                                      16.0F, 44.0F);
+    const float textSize = std::clamp(std::min(width, height) * 0.14F,
+                                      8.0F, 11.0F);
+    const float textHeight = textSize * 1.4F;
+    const float gap = 4.0F;
+    const float blockHeight = iconSize + gap + textHeight;
+    const float iconTop = rect.top + (height - blockHeight) * 0.5F;
+    const float iconLeft = rect.left + (width - iconSize) * 0.5F;
+
+    std::string label;
+    std::uint32_t labelColor = withAlpha(theme_.text, 0x99);
+    if (!view.manifest) {
+        label = "插件未找到";
+        labelColor = withAlpha(theme_.text, 0x99);
+    } else if (view.loading) {
+        label = "加载中...";
+    } else if (!view.error.empty()) {
+        label = "数据不可用";
+        labelColor = withAlpha(theme_.text, 0x99);
+    } else {
+        label = "暂无数据";
+    }
+
+    drawPluginIcon(iconId, std::string(),
+                   view.manifest ? view.manifest->directory : std::string(),
+                   renderTarget_, borderBrush_.get(),
+                   D2D1::RectF(iconLeft, iconTop, iconLeft + iconSize,
+                               iconTop + iconSize),
+                   withAlpha(theme_.text, 0x66));
+
+    IDWriteTextFormat* format = pluginTextFormat(textSize);
+    if (format == nullptr) {
+        return;
+    }
+    // 没有图标可画时把文字放到磁贴正中，避免留下上半屏空白。
+    const float textTop = iconId.empty()
+                              ? rect.top + (height - textHeight) * 0.5F
+                              : iconTop + iconSize + gap;
+    const std::wstring text = base::utf8ToWide(label);
+    textBrush_->SetColor(colorFromArgb(labelColor));
+    renderTarget_->DrawTextW(
+        text.c_str(), static_cast<UINT32>(text.size()), format,
+        D2D1::RectF(rect.left, textTop, rect.right, textTop + textHeight),
+        textBrush_.get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+}
+
+// 编辑对话框预览：把插件磁贴画进一个临时绑定的 DC。
+//
+// 走的是与主窗口完全相同的路径（selectPluginLayout → buildPluginDrawList
+// → Text/Icon/Meter 绘制），因此预览里的文字、图标、进度条与磁贴一致，
+// 包括图标文件里的局部彩色。唯一的差别是渲染资源：DCRenderTarget +
+// 自己的笔刷（D2D 1.0 的笔刷不能跨渲染目标使用）。
+bool LauncherWindow::renderPluginPreview(HDC dc, const RECT& target,
+                                         const core::PluginView& view,
+                                         const core::TileSize size) {
+    if (dc == nullptr || !d2dFactory_.valid() || !dwriteFactory_.valid()) {
+        return false;
+    }
+    // 对话框的磁贴矩形是物理像素，而布局/字体是 DIP：先把渲染目标
+    // 固定到屏幕 DPI，再把像素尺寸换算成 DIP，预览与真实磁贴才同比例。
+    const int deviceDpi = GetDeviceCaps(dc, LOGPIXELSX);
+    const float dpi = (deviceDpi > 0) ? static_cast<float>(deviceDpi) : 96.0F;
+    const float dpiScale = dpi / 96.0F;
+
+    const float width = static_cast<float>(target.right - target.left) / dpiScale;
+    const float height = static_cast<float>(target.bottom - target.top) / dpiScale;
+    if (width < 4.0F || height < 4.0F) {
+        return false;
+    }
+
+    if (!previewTarget_.valid()) {
+        D2D1_RENDER_TARGET_PROPERTIES properties =
+            D2D1::RenderTargetProperties();
+        properties.dpiX = dpi;
+        properties.dpiY = dpi;
+        properties.pixelFormat = D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
+        if (FAILED(d2dFactory_->CreateDCRenderTarget(&properties,
+                                                     previewTarget_.put()))) {
+            return false;
+        }
+        if (FAILED(previewTarget_->CreateSolidColorBrush(
+                D2D1::ColorF(D2D1::ColorF::White), previewBrush_.put()))) {
+            previewTarget_.reset();
+            return false;
+        }
+    }
+    // 每次绘制都同步 DPI：用户可能把窗口拖到另一块不同缩放的屏幕。
+    previewTarget_->SetDpi(dpi, dpi);
+
+    // 绑定的矩形就是绘制原点：内容坐标从 (0,0) 起（单位为 DIP）。
+    const RECT bindRect = target;
+    if (FAILED(previewTarget_->BindDC(dc, &bindRect))) {
+        return false;
+    }
+
+    previewTarget_->BeginDraw();
+    previewTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+
+    // 用逻辑尺寸选布局：对话框会把大磁贴等比缩小放进预览区，
+    // 缩小后的像素尺寸不能拿来判断 small/large。
+    const int logicalWidth = 64 * core::tileSpanColumns(size);
+    const int logicalHeight = 64 * core::tileSpanRows(size);
+
+    const core::PluginLayoutSpec* spec = nullptr;
+    if (view.manifest) {
+        spec = core::selectPluginLayout(*view.manifest, logicalWidth,
+                                       logicalHeight);
+    }
+
+    const bool drawable =
+        view.manifest && view.hasData && view.snapshot && spec != nullptr;
+    if (!drawable) {
+        // ---- 占位：插件图标 + 一行状态（与 paintPluginPlaceholder 同观感）----
+        const std::string iconId =
+            view.manifest ? view.manifest->icon : std::string();
+        const float iconSize = std::clamp(std::min(width, height) * 0.40F,
+                                          16.0F, 44.0F);
+        const float textSize = std::clamp(std::min(width, height) * 0.14F,
+                                          8.0F, 11.0F);
+        const float textHeight = textSize * 1.4F;
+        const float gap = 4.0F;
+        const float blockHeight = iconSize + gap + textHeight;
+        const float iconTop = (height - blockHeight) * 0.5F;
+        const float iconLeft = (width - iconSize) * 0.5F;
+
+        std::string label = "暂无数据";
+        if (!view.manifest) {
+            label = "插件未找到";
+        } else if (view.loading) {
+            label = "加载中...";
+        } else if (!view.error.empty()) {
+            label = "数据不可用";
+        }
+
+        drawPluginIcon(iconId, std::string(),
+                       view.manifest ? view.manifest->directory : std::string(),
+                       previewTarget_.get(), previewBrush_.get(),
+                       D2D1::RectF(iconLeft, iconTop, iconLeft + iconSize,
+                                   iconTop + iconSize),
+                       withAlpha(theme_.text, 0x66));
+
+        IDWriteTextFormat* format = pluginTextFormat(textSize);
+        if (format != nullptr) {
+            const float textTop = iconId.empty()
+                                      ? (height - textHeight) * 0.5F
+                                      : iconTop + iconSize + gap;
+            const std::wstring text = base::utf8ToWide(label);
+            previewBrush_->SetColor(colorFromArgb(withAlpha(theme_.text, 0x99)));
+            previewTarget_->DrawTextW(
+                text.c_str(), static_cast<UINT32>(text.size()), format,
+                D2D1::RectF(0.0F, textTop, width, textTop + textHeight),
+                previewBrush_.get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
+    } else {
+        auto measure = [this](const std::string& text, float fontSize) {
+            return measurePluginText(text, fontSize);
+        };
+        const core::PluginDrawList list = core::buildPluginDrawList(
+            *view.manifest, view.snapshot->data, spec->root, 0.0F, 0.0F,
+            width, height, measure);
+
+        for (const core::PluginDrawCommand& command : list.commands) {
+            switch (command.kind) {
+                case core::PluginDrawKind::Text: {
+                    IDWriteTextFormat* format = pluginTextFormat(command.fontSize);
+                    if (format == nullptr) {
+                        break;
+                    }
+                    std::uint32_t color = theme_.text;
+                    if (command.role == core::PluginTextRole::Sub) {
+                        color = withAlpha(theme_.text, 0xCC);
+                    } else if (command.role == core::PluginTextRole::Footer) {
+                        color = withAlpha(theme_.text, 0x99);
+                    }
+                    const std::wstring text = base::utf8ToWide(command.text);
+                    previewBrush_->SetColor(colorFromArgb(color));
+                    previewTarget_->DrawTextW(
+                        text.c_str(), static_cast<UINT32>(text.size()), format,
+                        D2D1::RectF(command.left, command.top, command.right,
+                                    command.bottom),
+                        previewBrush_.get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                    break;
+                }
+                case core::PluginDrawKind::Icon: {
+                    drawPluginIcon(command.icon, command.iconFallback,
+                                   view.manifest->directory,
+                                   previewTarget_.get(), previewBrush_.get(),
+                                   D2D1::RectF(command.left, command.top,
+                                               command.right, command.bottom),
+                                   withAlpha(theme_.text, 0xE6));
+                    break;
+                }
+                case core::PluginDrawKind::Meter: {
+                    const float meterHeight = command.bottom - command.top;
+                    if (meterHeight <= 0.0F) {
+                        break;
+                    }
+                    const float radius = meterHeight * 0.5F;
+                    const D2D1_ROUNDED_RECT track = D2D1::RoundedRect(
+                        D2D1::RectF(command.left, command.top, command.right,
+                                    command.bottom),
+                        radius, radius);
+                    previewBrush_->SetColor(
+                        colorFromArgb(withAlpha(theme_.text, 0x26)));
+                    previewTarget_->FillRoundedRectangle(track,
+                                                         previewBrush_.get());
+
+                    const float fraction = std::clamp(command.fraction, 0.0F, 1.0F);
+                    if (fraction > 0.0F) {
+                        const float fillRight = command.left +
+                            (command.right - command.left) * fraction;
+                        const D2D1_ROUNDED_RECT fill = D2D1::RoundedRect(
+                            D2D1::RectF(command.left, command.top,
+                                        std::max(command.left + meterHeight,
+                                                 fillRight),
+                                        command.bottom),
+                            radius, radius);
+                        previewBrush_->SetColor(colorFromArgb(
+                            command.color != 0 ? command.color : theme_.accent));
+                        previewTarget_->FillRoundedRectangle(fill,
+                                                             previewBrush_.get());
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+    }
+
+    previewTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+    return SUCCEEDED(previewTarget_->EndDraw());
+}
+
+IDWriteTextFormat* LauncherWindow::pluginTextFormat(const float fontSize) {
+    if (!dwriteFactory_.valid()) {
+        return nullptr;
+    }
+    const float clamped = std::clamp(fontSize, 7.0F, 32.0F);
+    const int key = static_cast<int>(clamped * 10.0F + 0.5F);
+    const auto cached = pluginTextFormats_.find(key);
+    if (cached != pluginTextFormats_.end()) {
+        return cached->second.get();
+    }
+
+    platform::win32::ComPtr<IDWriteTextFormat> format;
+    if (FAILED(dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, clamped,
+            L"zh-CN", format.put()))) {
+        return nullptr;
+    }
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+    auto inserted = pluginTextFormats_.emplace(key, format);
+    return inserted.first->second.get();
+}
+
+float LauncherWindow::measurePluginText(const std::string& text,
+                                        const float fontSize) {
+    if (text.empty() || !dwriteFactory_.valid()) {
+        return 0.0F;
+    }
+    IDWriteTextFormat* format = pluginTextFormat(fontSize);
+    if (format == nullptr) {
+        return 0.0F;
+    }
+    const std::wstring wide = base::utf8ToWide(text);
+    platform::win32::ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(dwriteFactory_->CreateTextLayout(
+            wide.c_str(), static_cast<UINT32>(wide.size()), format, 4096.0F,
+            fontSize * 1.6F, layout.put()))) {
+        return 0.0F;
+    }
+    DWRITE_TEXT_METRICS metrics{};
+    if (FAILED(layout->GetMetrics(&metrics))) {
+        return 0.0F;
+    }
+    return metrics.widthIncludingTrailingWhitespace;
+}
+
+namespace {
+
+// 读取 UTF-8 文本文件并去掉可能的 BOM。失败（不存在 / 空文件）返回 false。
+bool readSvgMarkupFile(const std::wstring& path, std::wstring* markup) {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        return false;
+    }
+    std::string bytes((std::istreambuf_iterator<char>(stream)),
+                      std::istreambuf_iterator<char>());
+    if (bytes.size() >= 3 &&
+        static_cast<unsigned char>(bytes[0]) == 0xEFU &&
+        static_cast<unsigned char>(bytes[1]) == 0xBBU &&
+        static_cast<unsigned char>(bytes[2]) == 0xBFU) {
+        bytes.erase(0, 3);
+    }
+    if (bytes.empty()) {
+        return false;
+    }
+    *markup = base::utf8ToWide(bytes);
+    return !markup->empty();
+}
+
+// 相对路径里出现 ".." 一律拒绝：插件清单可能来自第三方，
+// 不允许它把图标路径指到插件目录之外。
+bool hasParentTraversal(const std::filesystem::path& path) {
+    for (const std::filesystem::path& part : path) {
+        if (part == L"..") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 扩展名比较（大小写不敏感）
+bool hasExtensionCi(const std::filesystem::path& path, const wchar_t* ext) {
+    const std::wstring actual = path.extension().wstring();
+    const std::wstring expected(ext);
+    if (actual.size() != expected.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        if (std::towlower(static_cast<wint_t>(actual[i])) !=
+            std::towlower(static_cast<wint_t>(expected[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+void LauncherWindow::drawPluginIcon(const std::string& iconId,
+                                    const std::string& fallbackId,
+                                    const std::string& pluginDirectory,
+                                    ID2D1RenderTarget* target,
+                                    ID2D1SolidColorBrush* brush,
+                                    const D2D1_RECT_F& rect,
+                                    const std::uint32_t color) {
+    if (target == nullptr || brush == nullptr) {
+        return;
+    }
+    if (iconId.empty() && fallbackId.empty()) {
+        return;
+    }
+
+    // 解析顺序：插件目录里的 .svg（支持局部彩色）→ 插件目录里的图片。
+    // 图标资源跟着插件走：主程序不必、也不会背任何插件的图标。
+    auto tryIcon = [&](const std::string& id) -> bool {
+        if (id.empty()) {
+            return false;
+        }
+        if (drawPluginSvgFileIcon(id, pluginDirectory, target, brush, rect,
+                                  color)) {
+            return true;
+        }
+        return drawPluginFileIcon(id, pluginDirectory, target, rect);
+    };
+
+    if (tryIcon(iconId)) {
+        return;
+    }
+    // 数据值（例如天气 code "149"）不在 iconMap 里，或映射到了不存在的
+    // 图标：退回 manifest.icon，避免磁贴留下一个空槽。
+    if (fallbackId != iconId) {
+        tryIcon(fallbackId);
+    }
+}
+
+bool LauncherWindow::drawPluginSvgFileIcon(const std::string& storedPath,
+                                           const std::string& pluginDirectory,
+                                           ID2D1RenderTarget* target,
+                                           ID2D1SolidColorBrush* brush,
+                                           const D2D1_RECT_F& rect,
+                                           const std::uint32_t color) {
+    if (target == nullptr || !d2dFactory_.valid() || brush == nullptr ||
+        storedPath.empty()) {
+        return false;
+    }
+
+    std::filesystem::path candidate(base::utf8ToWide(storedPath));
+    const bool relative = !candidate.is_absolute();
+    if (relative && pluginDirectory.empty()) {
+        return false;
+    }
+    if (hasParentTraversal(candidate)) {
+        return false;
+    }
+    // 清单可以只写 "icons/cloud-sun" 而实际文件是 cloud-sun.svg；
+    // 写出别的扩展名（如 .png）则不归这里管，交给图片路径。
+    if (!candidate.has_extension()) {
+        candidate += L".svg";
+    }
+    if (!hasExtensionCi(candidate, L".svg")) {
+        return false;
+    }
+
+    const std::filesystem::path full =
+        relative
+            ? (std::filesystem::path(base::utf8ToWide(pluginDirectory)) /
+               candidate)
+            : candidate;
+
+    const float size = std::min(rect.right - rect.left, rect.bottom - rect.top);
+    if (size < 4.0F) {
+        return false;
+    }
+
+    // 缓存键带上文件修改时间：用户替换插件目录里的 SVG 后，
+    // 下一帧就能自动失效，不必重启。
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(full, ec);
+    if (ec) {
+        return false;  // 文件不存在
+    }
+    const int sizeKey = static_cast<int>(size * 2.0F + 0.5F);
+    const std::string key =
+        base::wideToUtf8(full.wstring()) + "|" + std::to_string(sizeKey) + "|" +
+        std::to_string(
+            static_cast<long long>(stamp.time_since_epoch().count()));
+
+    auto cached = pluginIconCache_.find(key);
+    if (cached == pluginIconCache_.end()) {
+        std::wstring markup;
+        if (!readSvgMarkupFile(full.wstring(), &markup)) {
+            return false;
+        }
+        platform::win32::SvgGlyph glyph;
+        // 约定 SVG 使用 24x24 用户单位（与 Lucide 一致）。
+        const float scale = size / 24.0F;
+        if (!platform::win32::buildSvgGlyph(d2dFactory_.get(), markup.c_str(),
+                                            scale, 0.0F, 0.0F, &glyph)) {
+            return false;
+        }
+        auto inserted = pluginIconCache_.emplace(key, std::move(glyph));
+        if (!inserted.second) {
+            return false;
+        }
+        cached = inserted.first;
+    }
+
+    drawPluginGlyph(cached->second, target, brush, rect, size, color);
+    return true;
+}
+
+// 把解析好的几何画到 rect：填充/描边沿用调用方颜色，
+// 显式颜色图层（如太阳的黄色）保留自身 RGB、只继承调用方的透明度。
+void LauncherWindow::drawPluginGlyph(const platform::win32::SvgGlyph& glyph,
+                                     ID2D1RenderTarget* target,
+                                     ID2D1SolidColorBrush* brush,
+                                     const D2D1_RECT_F& rect,
+                                     const float size,
+                                     const std::uint32_t color) {
+    if (target == nullptr || brush == nullptr) {
+        return;
+    }
+    if (!pluginStrokeStyle_.valid()) {
+        pluginStrokeStyle_ =
+            platform::win32::createRoundStrokeStyle(d2dFactory_.get());
+    }
+
+    const float strokeWidth = 2.0F * (size / 24.0F);
+    target->SetTransform(
+        D2D1::Matrix3x2F::Translation(rect.left, rect.top));
+
+    brush->SetColor(colorFromArgb(color));
+    if (glyph.fillGeometry.get() != nullptr) {
+        target->FillGeometry(glyph.fillGeometry.get(), brush, nullptr);
+    }
+    if (glyph.strokeGeometry.get() != nullptr) {
+        target->DrawGeometry(glyph.strokeGeometry.get(), brush, strokeWidth,
+                             pluginStrokeStyle_.get());
+    }
+    for (const platform::win32::SvgColorLayer& layer : glyph.colorLayers) {
+        if (layer.geometry.get() == nullptr || layer.color == 0) {
+            continue;
+        }
+        const std::uint32_t layerColor =
+            (layer.color & 0x00FFFFFFU) | (color & 0xFF000000U);
+        brush->SetColor(colorFromArgb(layerColor));
+        target->DrawGeometry(layer.geometry.get(), brush, strokeWidth,
+                             pluginStrokeStyle_.get());
+    }
+
+    target->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
+bool LauncherWindow::drawPluginFileIcon(const std::string& storedPath,
+                                        const std::string& pluginDirectory,
+                                        ID2D1RenderTarget* target,
+                                        const D2D1_RECT_F& rect) {
+    if (target == nullptr || storedPath.empty()) {
+        return false;
+    }
+
+    std::filesystem::path candidate(base::utf8ToWide(storedPath));
+    if (!candidate.is_absolute()) {
+        if (pluginDirectory.empty()) {
+            return false;
+        }
+        candidate = std::filesystem::path(base::utf8ToWide(pluginDirectory)) /
+                    candidate;
+    }
+    // 允许 manifest 只写 "sun" 而实际文件是 sun.png。
+    if (!candidate.has_extension()) {
+        candidate += L".png";
+    }
+    if (!platform::win32::isDecodableImageFile(candidate.wstring())) {
+        return false;
+    }
+
+    // 位图依附于创建它的渲染目标：主窗口与预览各自一份缓存。
+    auto& cache = (target == renderTarget_) ? pluginBitmapCache_
+                                            : previewBitmapCache_;
+    const std::wstring key = candidate.wstring();
+    const auto cached = cache.find(key);
+    if (cached == cache.end()) {
+        platform::win32::ImagePixels pixels;
+        platform::win32::ComPtr<ID2D1Bitmap> bitmap;
+        if (platform::win32::decodeImageFile(key, &pixels) &&
+            pixels.valid()) {
+            const std::vector<std::uint32_t> premultiplied =
+                platform::win32::premultiplyBgra(pixels);
+            const D2D1_BITMAP_PROPERTIES properties =
+                D2D1::BitmapProperties(D2D1::PixelFormat(
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    D2D1_ALPHA_MODE_PREMULTIPLIED));
+            target->CreateBitmap(
+                D2D1::SizeU(static_cast<UINT32>(pixels.width),
+                            static_cast<UINT32>(pixels.height)),
+                premultiplied.data(),
+                static_cast<UINT32>(pixels.width) * 4U, properties,
+                bitmap.put());
+        }
+        // 失败也写空条目：磁贴会一直显示缺图，但不必每帧重新读盘解码。
+        auto inserted = cache.emplace(key, std::move(bitmap));
+        if (!inserted.second || inserted.first->second.get() == nullptr) {
+            return false;
+        }
+    }
+
+    ID2D1Bitmap* bitmap = cache.find(key)->second.get();
+    if (bitmap == nullptr) {
+        return false;
+    }
+
+    const D2D1_SIZE_F size = bitmap->GetSize();
+    if (size.width <= 0.0F || size.height <= 0.0F) {
+        return false;
+    }
+    const float boxWidth = rect.right - rect.left;
+    const float boxHeight = rect.bottom - rect.top;
+    const float scale = std::min(boxWidth / size.width, boxHeight / size.height);
+    const float width = size.width * scale;
+    const float height = size.height * scale;
+    const float left = rect.left + (boxWidth - width) * 0.5F;
+    const float top = rect.top + (boxHeight - height) * 0.5F;
+    target->DrawBitmap(
+        bitmap, D2D1::RectF(left, top, left + width, top + height), 1.0F,
+        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    return true;
+}
+
+void LauncherWindow::clearPluginGeometryCache() {
+    pluginIconCache_.clear();
+    pluginBitmapCache_.clear();
+    previewBitmapCache_.clear();
+    pluginStrokeStyle_.reset();
 }
 
 // 停掉跑马灯：清状态 + 杀定时器。悬停离开、文本变短、磁贴被

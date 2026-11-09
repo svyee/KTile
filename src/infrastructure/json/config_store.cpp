@@ -101,6 +101,17 @@ std::string ConfigStore::serializeItems(const core::ItemsDocument& document) {
             writer.member("name", item.name);
             writer.member("target", item.target);
 
+            // 插件磁贴：pluginId + 参数表（参数会替换 manifest 里的
+            // ${param}，例如天气插件的城市名）。非插件项不写，保持 JSON 干净。
+            if (item.type == core::ItemType::Plugin) {
+                writeOptionalString(writer, "pluginId", item.pluginId);
+                writer.key("pluginParams").beginObject();
+                for (const auto& entry : item.pluginParams) {
+                    writer.member(entry.first, entry.second);
+                }
+                writer.endObject();
+            }
+
             writer.key("arguments").beginArray();
             for (const auto& argument : item.arguments) {
                 writer.value(argument);
@@ -280,6 +291,22 @@ ConfigStore::deserializeItems(const std::string& text) {
                     const JsonValue& icon = itemNode.find("icon");
                     if (icon.isString()) {
                         item.icon = icon.asString();
+                    }
+
+                    // 插件磁贴（缺失键 = 普通项目，老数据不受影响）
+                    const JsonValue& pluginId = itemNode.find("pluginId");
+                    if (pluginId.isString() && !pluginId.asString().empty()) {
+                        item.pluginId = pluginId.asString();
+                    }
+                    const JsonValue& pluginParams =
+                        itemNode.find("pluginParams");
+                    if (pluginParams.isObject()) {
+                        for (const auto& entry : pluginParams.members()) {
+                            if (entry.second.isString()) {
+                                item.setPluginParam(entry.first,
+                                                    entry.second.asString());
+                            }
+                        }
                     }
 
                     item.runAsAdministrator =

@@ -5,6 +5,7 @@
 //
 #pragma once
 
+#include "app/plugin_controller.h"
 #include "core/data_model.h"
 #include "infrastructure/filesystem/portable_paths.h"
 #include "infrastructure/json/config_store.h"
@@ -36,12 +37,13 @@ inline constexpr const wchar_t* kApplicationWindowTitle = L"KTile 磁贴快启";
 //   0.9.0 = 功能开发完成、待打包与 Win7 真机验证（M6）；
 //   1.0.0 = 正式版；
 //   1.0.2 = 关于对话框字体优先微软雅黑 / 思源黑体。
+//   1.1.0 = 设置窗口与编辑窗口视觉现代化，设置项拆分为外观 / 行为两页。
 // 改这里时记得同步 app.rc 里的 VERSIONINFO
 //  （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
-inline constexpr const wchar_t* kApplicationVersion = L"1.0.2";
+inline constexpr const wchar_t* kApplicationVersion = L"1.1.0";
 inline constexpr int kApplicationVersionMajor = 1;
-inline constexpr int kApplicationVersionMinor = 0;
-inline constexpr int kApplicationVersionPatch = 2;
+inline constexpr int kApplicationVersionMinor = 1;
+inline constexpr int kApplicationVersionPatch = 0;
 inline constexpr const wchar_t* kSingleInstanceMutexName =
     L"KTile.SingleInstance.{8F3A1C2D-4B5E-4A6F-9C8D-7E6F5A4B3C2D}";
 inline constexpr const wchar_t* kStartupRegistryValueName = L"KTile";
@@ -127,6 +129,10 @@ public:
 
     // 消息窗口定时器回调（日志落盘 / 钩子看门狗）
     void onMessageTimer(UINT_PTR timerId);
+    // 插件刷新完成（工作线程 PostMessage 到消息窗口后由主线程调用）
+    void onPluginDataReady();
+    // 面板可见期间的高频刷新（按插件清单的 visibleRefreshSeconds）
+    void onPluginVisibleTick();
     // 休眠恢复：钩子链顺序可能被电源事件打乱，重装保险一次
     void onPowerResume();
 
@@ -164,6 +170,11 @@ private:
     void showLauncher();
     void hideLauncher();
 
+    // 按「当前标签页里最短的 visibleRefreshSeconds」启停前台刷新定时器。
+    // 面板隐藏或没有插件需要前台刷新时，定时器会被关掉 —— 隐藏期间
+    // 完全不刷新正是这条需求的核心。
+    void updatePluginVisibleTimer();
+
     // ---- 磁贴右键菜单 ----
     // 弹出菜单并分发到具体的动作
     void handleItemContextMenu(HWND owner, std::size_t itemIndex,
@@ -184,6 +195,8 @@ private:
     void applyItemCopyToTab(std::size_t itemIndex, std::size_t targetTab);
     // 添加项目（复用同一个编辑对话框，新建模式 + 落盘）
     void applyItemAdd(HWND owner, const std::wstring& initialTarget);
+    // 添加一块插件磁贴（插件来自 data/plugins 的清单，不需要编辑对话框）
+    void addPluginItem(const std::string& pluginId);
     // 把拖进来的东西加进面板（文件/文件夹直接建磁贴；链接建成网址项目）
     // dropPoint = 松手位置的屏幕坐标：新磁贴就落在光标所在那一格，
     // 压住的已有磁贴按避让规则让位（与拖动磁贴同一套规则）。
@@ -217,6 +230,12 @@ private:
     platform::win32::DropTarget dropTarget_;
 
     std::unique_ptr<ui::LauncherWindow> launcherWindow_;
+
+    // 插件发现 / 懒加载刷新 / 缓存。没有插件时它只是空转，不占后台资源。
+    PluginController pluginController_;
+    // 前台刷新定时器当前生效的秒数（0 = 未启用）。避免每次显示/切页
+    // 都 KillTimer + SetTimer 一遍，也不会在隐藏后留下空转定时器。
+    int pluginVisibleTimerSeconds_ = 0;
 
     // 便携路径与持久化
     infrastructure::PortablePaths paths_;

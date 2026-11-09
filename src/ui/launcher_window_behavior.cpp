@@ -1278,6 +1278,12 @@ void LauncherWindow::show() {
     // 过滤掉「用鼠标点托盘唤出窗口」那次点击的滞留消息。
     outsideClickMonitor_.start(hwnd_);
 
+    // 面板真正可见了：把「懒加载刷新」交给 app 层。
+    // 放在窗口显示之后调用，保证刷新回投时窗口已存在，可以立即重绘。
+    if (panelShownHandler_) {
+        panelShownHandler_();
+    }
+
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -1337,6 +1343,12 @@ void LauncherWindow::hide() {
     clearSearch();
     searchActive_ = false;
     visibleMask_.clear();
+
+    // 面板已隐藏：取消尚未开始的刷新请求（正在跑的请求会跑完并写缓存，
+    // 下次唤出直接命中，这是有意的 —— 中途掐断只会浪费已花掉的网络时间）。
+    if (panelHiddenHandler_) {
+        panelHiddenHandler_();
+    }
 
     // 隐藏即裁剪工作集：启动器绝大部分时间处于隐藏状态，D2D/DWrite
     // 的位图与字体缓存在后台用不上，让系统把物理页收回去。下次唤出

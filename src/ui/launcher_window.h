@@ -16,10 +16,12 @@
 #pragma once
 
 #include "core/data_model.h"
+#include "core/plugin_model.h"
 #include "core/search.h"
 #include "core/tile_layout.h"
 #include "platform/win32/icon_loader.h"
 #include "platform/win32/outside_click_monitor.h"
+#include "platform/win32/svg_path.h"
 #include "platform/win32/unique_handles.h"
 #include "ui/theme.h"
 
@@ -153,6 +155,17 @@ public:
     using ActiveTabChangedHandler = std::function<void(std::size_t)>;
     // 用户拖动窗口移动后（参数是新的左上角，物理像素，屏幕坐标）
     using WindowMovedHandler = std::function<void(int x, int y)>;
+
+    // ---- 插件磁贴 ----
+    //
+    // UI 只负责「把数据画出来」，插件数据的发现/刷新/缓存全部在 app 层。
+    // 这样 UI 不依赖 infrastructure / WinHTTP，core 的布局引擎也能单独测试。
+    using PluginViewProvider = std::function<core::PluginView(const core::LaunchItem&)>;
+    using PluginCatalogProvider =
+        std::function<std::vector<core::PluginCatalogEntry>()>;
+    using AddPluginHandler = std::function<void(const std::string& pluginId)>;
+    // 面板显示 / 隐藏（app 层据此触发懒加载刷新与取消排队）
+    using PanelVisibilityHandler = std::function<void()>;
 
     LauncherWindow();
     ~LauncherWindow();
@@ -311,6 +324,31 @@ public:
     }
     void setAddItemHandler(AddItemHandler handler) {
         addItemHandler_ = std::move(handler);
+    }
+    void setPluginViewProvider(PluginViewProvider handler) {
+        pluginViewProvider_ = std::move(handler);
+    }
+
+    // 把一块插件磁贴渲染进任意 HDC（编辑对话框的左上角预览用）。
+    //
+    // 复用主窗口同一套「布局引擎 → 绘制指令 → 图标解析」，所以预览看到
+    // 的就是磁贴真实的显示效果（含局部彩色图标）。target 是物理像素矩形，
+    // 按 96 DPI 解释；size 决定选哪一档布局（small/wide/tall/large）。
+    bool renderPluginPreview(HDC dc, const RECT& target,
+                             const core::PluginView& view,
+                             core::TileSize size);
+
+    void setPluginCatalogProvider(PluginCatalogProvider handler) {
+        pluginCatalogProvider_ = std::move(handler);
+    }
+    void setAddPluginHandler(AddPluginHandler handler) {
+        addPluginHandler_ = std::move(handler);
+    }
+    void setPanelShownHandler(PanelVisibilityHandler handler) {
+        panelShownHandler_ = std::move(handler);
+    }
+    void setPanelHiddenHandler(PanelVisibilityHandler handler) {
+        panelHiddenHandler_ = std::move(handler);
     }
     void setActiveTabChangedHandler(ActiveTabChangedHandler handler) {
         activeTabChangedHandler_ = std::move(handler);
@@ -649,6 +687,48 @@ private:
     void paintSingleTile(const core::TilePlacement& placement, bool asLifted,
                          bool dimmed = false);
 
+    // ---- 插件磁贴绘制 ----
+    //
+    // 布局计算在 core::buildPluginDrawList（纯函数、已单测），这里只把
+    // Text/Icon/Meter 指令翻译成 D2D/DWrite 调用。
+    void paintPluginTileContent(const core::LaunchItem& item,
+                                const D2D1_RECT_F& rect);
+    // 无数据 / 加载中 / 出错时的占位（图标 + 一行状态文案）
+    void paintPluginPlaceholder(const core::PluginView& view,
+                                const D2D1_RECT_F& rect);
+    // 按字号复用 DWrite 文本格式（居中 + 不换行）
+    IDWriteTextFormat* pluginTextFormat(float fontSize);
+    // 用 DWrite 实测文本宽度（供布局引擎做省略号截断）
+    float measurePluginText(const std::string& text, float fontSize);
+    // 画一枚插件图标。解析顺序：
+    //   插件目录里的 .svg（支持局部彩色）→ 插件目录里的图片（png 等）
+    //   → fallbackId 重复以上顺序。
+    // 图标资源完全由插件自带，主程序不内嵌任何插件图标；
+    // 都失败时留空（不画方框）。
+    //
+    // target/brush 显式传入而不是用成员：主窗口与编辑对话框预览用的是
+    // 各自的 D2D 渲染目标，D2D 1.0 的笔刷不能跨目标复用。
+    void drawPluginIcon(const std::string& iconId, const std::string& fallbackId,
+                        const std::string& pluginDirectory,
+                        ID2D1RenderTarget* target,
+                        ID2D1SolidColorBrush* brush,
+                        const D2D1_RECT_F& rect, std::uint32_t color);
+    bool drawPluginSvgFileIcon(const std::string& storedPath,
+                               const std::string& pluginDirectory,
+                               ID2D1RenderTarget* target,
+                               ID2D1SolidColorBrush* brush,
+                               const D2D1_RECT_F& rect, std::uint32_t color);
+    bool drawPluginFileIcon(const std::string& storedPath,
+                            const std::string& pluginDirectory,
+                            ID2D1RenderTarget* target,
+                            const D2D1_RECT_F& rect);
+    void drawPluginGlyph(const platform::win32::SvgGlyph& glyph,
+                         ID2D1RenderTarget* target,
+                         ID2D1SolidColorBrush* brush,
+                         const D2D1_RECT_F& rect, float size,
+                         std::uint32_t color);
+    void clearPluginGeometryCache();
+
     // 绘制选中高亮框（键盘导航用）
     void paintSelectionFrame(const core::TilePlacement& placement);
 
@@ -862,6 +942,26 @@ private:
     // 渲染目标，设备丢失/重建时置空重取。
     platform::win32::ComPtr<ID2D1Bitmap> appIconBitmap_;
 
+    // ---- 插件绘制缓存 ----
+    //
+    // pluginTextFormats_：key = 字号（0.1 DIP 精度）。插件布局每帧都会
+    // 重新算字号，格式对象必须复用，否则每秒几十次 CreateTextFormat。
+    std::map<int, platform::win32::ComPtr<IDWriteTextFormat>> pluginTextFormats_;
+    // pluginIconCache_：key = 图标 id + 像素尺寸。几何按目标尺寸直接建，
+    // 绘制时只做平移 —— 与钉子/锁图标的做法一致，任意 DPI 都清晰。
+    std::map<std::string, platform::win32::SvgGlyph> pluginIconCache_;
+    // 插件目录里的图片图标（PNG/JPG/ICO...）：完整路径 → 预乘位图。
+    std::map<std::wstring, platform::win32::ComPtr<ID2D1Bitmap>> pluginBitmapCache_;
+    platform::win32::ComPtr<ID2D1StrokeStyle> pluginStrokeStyle_;
+
+    // 编辑对话框预览专用的渲染资源：DCRenderTarget 每次绘制临时绑定到
+    // 对话框 STATIC 的 HDC。笔刷必须来自这个目标（D2D 1.0 限制），
+    // 不能复用主窗口的 borderBrush_。
+    platform::win32::ComPtr<ID2D1DCRenderTarget> previewTarget_;
+    platform::win32::ComPtr<ID2D1SolidColorBrush> previewBrush_;
+    // 预览目标自己的位图缓存（D2D 位图不能跨渲染目标复用）。
+    std::map<std::wstring, platform::win32::ComPtr<ID2D1Bitmap>> previewBitmapCache_;
+
     std::uint32_t dpi_ = 96;
 
     std::uint16_t gridColumns_ = core::kDefaultGridColumns;
@@ -1032,6 +1132,11 @@ private:
     SettingsHandler settingsHandler_;
     SettingsHandler aboutHandler_;
     AddItemHandler addItemHandler_;
+    PluginViewProvider pluginViewProvider_;
+    PluginCatalogProvider pluginCatalogProvider_;
+    AddPluginHandler addPluginHandler_;
+    PanelVisibilityHandler panelShownHandler_;
+    PanelVisibilityHandler panelHiddenHandler_;
     std::function<void(bool)> pinnedChangedHandler_;
     ActiveTabChangedHandler activeTabChangedHandler_;
 };

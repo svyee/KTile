@@ -26,9 +26,11 @@
 #pragma once
 
 #include "core/data_model.h"
+#include "core/plugin_model.h"
 
 #include <Windows.h>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -94,9 +96,15 @@ enum class ItemEditorMode : std::uint8_t {
 //                          都按它来，才能如实画出「跟随默认」的效果。
 // outResult  ：用户点「保存」时写出新值
 // mode       ：新建 / 修改，只影响标题与按钮文案（见 ItemEditorMode）
+// pluginPreview ：插件磁贴的预览渲染回调（dc + 磁贴像素矩形 + 当前尺寸）。
+//                 非插件项目传空即可；由 app 层绑定主窗口的插件渲染路径，
+//                 保证预览与磁贴真实效果一致（含数据、图标、进度条）。
 //
 // 返回 true 表示用户确认；取消/关闭返回 false。
 // 期间主窗口保持可见（owner 关系保证点击判定）。
+using PluginPreviewRenderer =
+    std::function<bool(HDC, const RECT&, core::TileSize)>;
+
 bool showItemEditorDialog(HWND owner,
                           const std::vector<std::wstring>& tabNames,
                           std::size_t initialTab,
@@ -105,7 +113,8 @@ bool showItemEditorDialog(HWND owner,
                           int globalIconScale,
                           const std::optional<std::uint32_t>& globalTileColor,
                           ItemEditorFields* outResult,
-                          ItemEditorMode mode = ItemEditorMode::Edit);
+                          ItemEditorMode mode = ItemEditorMode::Edit,
+                          PluginPreviewRenderer pluginPreview = nullptr);
 
 // 目标路径 → 类型推断。
 //

@@ -18,7 +18,10 @@ namespace core {
 // ================================================================ 常量
 
 // 数据结构版本。变更数据结构时递增，并配套迁移逻辑。
-inline constexpr std::uint32_t kCurrentSchemaVersion = 1;
+//
+// v1 → v2：新增插件磁贴（ItemType::Plugin + pluginId + pluginParams）。
+// 旧文件没有这些字段，反序列化时保持默认值即可，不需要改写原文件。
+inline constexpr std::uint32_t kCurrentSchemaVersion = 2;
 
 // 网格容量约束（单位：格）
 //
@@ -163,6 +166,9 @@ enum class ItemType : std::uint8_t {
     File = 1,
     Folder = 2,
     Url = 3,
+    // 插件磁贴：数据由 data/plugins/<id>/plugin.json 声明，
+    // 磁贴本身只存插件 id 与少量参数（见 LaunchItem::pluginId）。
+    Plugin = 4,
 };
 
 inline const char* itemTypeKey(ItemType type) noexcept {
@@ -171,6 +177,7 @@ inline const char* itemTypeKey(ItemType type) noexcept {
         case ItemType::File:        return "file";
         case ItemType::Folder:      return "folder";
         case ItemType::Url:         return "url";
+        case ItemType::Plugin:      return "plugin";
     }
     return "application";
 }
@@ -183,6 +190,7 @@ inline ItemType itemTypeFromKey(const std::string& key, bool* recognized = nullp
     if (key == "file")        return ItemType::File;
     if (key == "folder")      return ItemType::Folder;
     if (key == "url")         return ItemType::Url;
+    if (key == "plugin")      return ItemType::Plugin;
     if (recognized) {
         *recognized = false;
     }
@@ -211,6 +219,35 @@ struct LaunchItem {
 
     // 自定义图标路径（可空，为空时从 target 提取）
     std::optional<std::string> icon;
+
+    // ---- 插件磁贴（type == Plugin 时有效）----
+    //
+    // 只存插件 id 与少量参数，不存 manifest 内容：插件升级/改版后
+    // 磁贴跟着新 manifest 走，不需要迁移 items.json。
+    // 参数是扁平的字符串键值对（如 "city": "Beijing"），足够覆盖
+    // 天气城市、命令行开关等 v1 场景。
+    std::optional<std::string> pluginId;
+    std::vector<std::pair<std::string, std::string>> pluginParams;
+
+    // 取插件参数（不存在返回空串）
+    std::string pluginParam(const std::string& key) const noexcept {
+        for (const auto& entry : pluginParams) {
+            if (entry.first == key) {
+                return entry.second;
+            }
+        }
+        return std::string();
+    }
+
+    void setPluginParam(const std::string& key, const std::string& value) {
+        for (auto& entry : pluginParams) {
+            if (entry.first == key) {
+                entry.second = value;
+                return;
+            }
+        }
+        pluginParams.emplace_back(key, value);
+    }
 
     // 是否以管理员身份运行
     bool runAsAdministrator = false;

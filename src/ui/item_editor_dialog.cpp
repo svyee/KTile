@@ -7,6 +7,7 @@
 #include "platform/win32/unique_handles.h"
 #include "ui/builtin_item_dialog.h"
 #include "ui/color_picker.h"
+#include "ui/dialog_style.h"
 
 #include <Shlwapi.h>
 #include <commdlg.h>
@@ -40,6 +41,13 @@ namespace {
 
 constexpr int kClientWidth = 620;
 constexpr int kClientHeight = 430;
+
+// 内容卡片：把所有输入控件包进一张白色圆角卡片，与设置窗口同一套视觉。
+// 卡片只影响背景绘制，不改变任何控件的绝对坐标。
+constexpr int kCardLeft = 12;
+constexpr int kCardTop = 8;
+constexpr int kCardRight = kClientWidth - 12;
+constexpr int kCardBottom = 376;
 
 // 左列
 constexpr int kPreviewX = 20;
@@ -125,6 +133,10 @@ constexpr int kIconScaleSliderId = 1019; // 图标大小滑块（50~100）
 constexpr int kIconScaleValueId = 1020;  // 图标大小数值显示
 constexpr int kTileColorSwatchId = 1021; // 背景色样本（SS_OWNERDRAW）
 constexpr int kTileColorClearId = 1023;  // 「默认」恢复跟随全局
+// 说明文字单独给 ID：WM_CTLCOLORSTATIC 靠 ID 区分「该画次级灰」的提示行。
+// 普通标签与提示都传 0 的话，只能一律用正文色。
+constexpr int kWorkingDirectoryHintId = 1030;
+constexpr int kFooterHintId = 1031;
 // 保存/取消直接用 IDOK / IDCANCEL：IsDialogMessageW 处理回车/Esc 时
 // 对普通窗口发送的就是这两个 ID，按钮点击也发同 ID，一套处理两处来源。
 
@@ -408,6 +420,8 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
 
 struct EditorDialogState {
     ItemEditorFields initial;
+    // 插件磁贴的实际效果预览（app 层绑定主窗口的渲染路径）；非插件为空。
+    PluginPreviewRenderer pluginPreview;
     std::vector<std::wstring> tabNames;
     bool accepted = false;
     ItemEditorFields result;
@@ -533,6 +547,15 @@ std::wstring browseForFile(HWND owner,
 HWND addControl(HWND dialog, const wchar_t* windowClass, const wchar_t* text,
                 DWORD style, int x, int y, int width, int height, int id,
                 HFONT font) {
+    // 推按钮统一改自绘：系统按钮的灰底压在白色卡片上很扎眼。
+    // 复选框 / 单选框保持原生 —— 勾选态自绘要重做键盘与视觉状态，
+    // 收益不抵风险；它们的灰底由 WM_CTLCOLORBTN 压成白底即可。
+    if (windowClass != nullptr && wcscmp(windowClass, L"BUTTON") == 0) {
+        const DWORD baseType = style & BS_TYPEMASK;
+        if (baseType == BS_PUSHBUTTON || baseType == BS_DEFPUSHBUTTON) {
+            style = (style & ~BS_TYPEMASK) | BS_OWNERDRAW;
+        }
+    }
     HWND control = CreateWindowExW(
         0, windowClass, text, WS_CHILD | WS_VISIBLE | style,
         scaleFor(dialog, x), scaleFor(dialog, y),
@@ -665,7 +688,8 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kBrowseWorkingDirectoryId, font);
     addControl(dialog, L"STATIC",
                L"程序运行时使用的起始文件夹；通常留空即可。",
-               0, kFieldX, 239, kFieldWidth, 18, 0, font);
+               0, kFieldX, 239, kFieldWidth, 18, kWorkingDirectoryHintId,
+               font);
 
     // ---- 右列：所属页面 ----
     label(L"所属页面：", kLabelX, 264, kLabelWidth);
@@ -685,7 +709,7 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     addControl(dialog, L"STATIC",
                L"名称留空时自动使用目标名称；参数每行一个。\n"
                L"文件夹磁贴可直接把路径粘贴到目标里。",
-               0, kFieldX, 342, kFieldWidth, 34, 0, font);
+               0, kFieldX, 336, kFieldWidth, 34, kFooterHintId, font);
 
     // ---- 保存 / 取消 ----
     // 新建时说「添加」而不是「保存」：用户心里做的是「加一个」，
@@ -939,6 +963,23 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         DeleteObject(borderPen);
     }
 
+    // ---- 插件磁贴：交给主窗口的插件渲染路径画真实内容 ----
+    //
+    // 插件磁贴没有「目标图标」可画 —— 它显示的是插件的实时数据。
+    // 用 GDI 在这里重新实现一套文本/图标/进度条会与磁贴实现逐渐偏离，
+    // 所以直接复用主窗口的布局 + D2D 绘制。回调失败时才退回文字提示。
+    if (state->initial.type == core::ItemType::Plugin &&
+        state->pluginPreview) {
+        if (state->pluginPreview(dc, tile, state->previewSize)) {
+            return;
+        }
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, kPreviewPlaceholder);
+        DrawTextW(dc, L"插件预览不可用", -1, &tile,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        return;
+    }
+
     // ---- 图标 ----
     if (state->hasPixels) {
         drawIconCover(dc, layout.icon, state);
@@ -1190,6 +1231,52 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
     switch (message) {
+        case WM_ERASEBKGND: {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            dialog_style::paintBackground(reinterpret_cast<HDC>(wParam),
+                                          client);
+            return 1;
+        }
+
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            if (dc != nullptr) {
+                RECT card{};
+                card.left = scaleFor(hwnd, kCardLeft);
+                card.top = scaleFor(hwnd, kCardTop);
+                card.right = scaleFor(hwnd, kCardRight);
+                card.bottom = scaleFor(hwnd, kCardBottom);
+                dialog_style::paintCard(dc, card, scaleFor(hwnd, 8));
+            }
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+
+        case WM_CTLCOLORSTATIC: {
+            // 卡片内文字画在白底上；两处说明文字用次级灰，
+            // 与正文标签拉开层次。其余标签与提示都是同一个逻辑。
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            const int controlId =
+                GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+            const bool isHint = controlId == kWorkingDirectoryHintId ||
+                                controlId == kFooterHintId;
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, isHint ? dialog_style::secondaryText()
+                                    : dialog_style::text());
+            return reinterpret_cast<LRESULT>(dialog_style::cardBrush());
+        }
+
+        case WM_CTLCOLORBTN: {
+            // 复选框默认用 COLOR_BTNFACE 填底，在白卡片上就是一块灰方框。
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, dialog_style::text());
+            SetBkColor(dc, dialog_style::card());
+            return reinterpret_cast<LRESULT>(dialog_style::cardBrush());
+        }
+
         case WM_NCCREATE: {
             auto* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA,
@@ -1229,6 +1316,23 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                             : std::optional<std::uint32_t>());
                     return TRUE;
                 }
+            }
+            // 其余 BS_OWNERDRAW 按钮：保存/添加用强调色主按钮，
+            // 浏览 / 重置 / 取消等一律白底细边。
+            if (draw != nullptr && draw->CtlType == ODT_BUTTON) {
+                wchar_t label[64] = {};
+                GetWindowTextW(draw->hwndItem, label, 64);
+                dialog_style::paintButton(
+                    draw->hDC, draw->rcItem, label,
+                    static_cast<HFONT>(GetPropW(hwnd, L"KTileDialogFont")),
+                    draw->CtlID == static_cast<UINT>(IDOK)
+                        ? dialog_style::ButtonKind::Primary
+                        : dialog_style::ButtonKind::Secondary,
+                    (draw->itemState & ODS_SELECTED) != 0,
+                    (draw->itemState & ODS_DISABLED) != 0,
+                    (draw->itemState & ODS_FOCUS) != 0 &&
+                        (draw->itemState & ODS_NOFOCUSRECT) == 0);
+                return TRUE;
             }
             break;
         }
@@ -1479,6 +1583,7 @@ const wchar_t* itemTypeDisplayName(const core::ItemType type) {
         case core::ItemType::File:        return L"文件";
         case core::ItemType::Folder:      return L"文件夹";
         case core::ItemType::Url:         return L"网址";
+        case core::ItemType::Plugin:      return L"插件";
     }
     return L"应用";
 }
@@ -1491,7 +1596,8 @@ bool showItemEditorDialog(HWND owner,
                           const int globalIconScale,
                           const std::optional<std::uint32_t>& globalTileColor,
                           ItemEditorFields* outResult,
-                          const ItemEditorMode mode) {
+                          const ItemEditorMode mode,
+                          PluginPreviewRenderer pluginPreview) {
     if (outResult == nullptr || tabNames.empty()) {
         return false;
     }
@@ -1502,6 +1608,7 @@ bool showItemEditorDialog(HWND owner,
 
     EditorDialogState state;
     state.initial = initial;
+    state.pluginPreview = std::move(pluginPreview);
     state.initial.tabIndex = initialTab;
     state.tabNames = tabNames;
     state.previewSize = initial.tileSize;

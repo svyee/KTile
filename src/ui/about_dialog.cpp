@@ -1,5 +1,7 @@
 // KTile - UI 层：「关于」对话框实现
 #include "ui/about_dialog.h"
+#include "ui/dialog_style.h"
+
 #include <Shellapi.h>
 
 #include <string>
@@ -33,6 +35,13 @@ constexpr int kButtonWidth = 84;
 constexpr int kButtonHeight = 28;
 constexpr int kButtonGap = 8;
 
+// 白色圆角卡片：把标题 / 版本 / 联系方式包成一页，与设置窗口、
+// 编辑窗口同一套视觉。底部的链接按钮与「确定」留在灰底上。
+constexpr int kCardLeft = 12;
+constexpr int kCardTop = 12;
+constexpr int kCardRight = kClientWidth - 12;
+constexpr int kCardBottom = 196;
+
 // 控件 ID。确定按钮用 IDOK：回车（IsDialogMessageW）与点击同 ID，
 // Esc 发 IDCANCEL —— 对纯展示对话框两者都等于「关闭」。
 constexpr int kTitleId = 2001;
@@ -64,6 +73,8 @@ struct DialogState {
     // 由本对话框创建的字体，WM_DESTROY 时释放；系统 Stock 字体不在此列。
     HFONT createdBodyFont = nullptr;
     HFONT createdTitleFont = nullptr;
+    // 自绘按钮要用的正文字体（可能是 Stock，不释放）。
+    HFONT bodyFont = nullptr;
 };
 
 // 把 owner 的 DPI 换算成缩放系数（96 DPI = 1.0）。
@@ -155,6 +166,65 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             break;
         }
 
+        case WM_ERASEBKGND: {
+            RECT client{};
+            GetClientRect(dialog, &client);
+            dialog_style::paintBackground(reinterpret_cast<HDC>(wParam),
+                                          client);
+            return 1;
+        }
+
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(dialog, &paint);
+            if (dc != nullptr) {
+                const double scale = scaleFor(dialog);
+                RECT card{};
+                card.left = scaled(scale, kCardLeft);
+                card.top = scaled(scale, kCardTop);
+                card.right = scaled(scale, kCardRight);
+                card.bottom = scaled(scale, kCardBottom);
+                dialog_style::paintCard(dc, card, scaled(scale, 8));
+            }
+            EndPaint(dialog, &paint);
+            return 0;
+        }
+
+        case WM_CTLCOLORSTATIC: {
+            // 卡片内文字：标题与描述用正文色，版本 / 版权 / 联系方式
+            // 用次级灰。返回卡片画刷，避免出现与卡片不一致的底色。
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            const int controlId = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+            const bool isPrimary =
+                controlId == kTitleId || controlId == kDescId;
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, isPrimary ? dialog_style::text()
+                                       : dialog_style::secondaryText());
+            return reinterpret_cast<LRESULT>(dialog_style::cardBrush());
+        }
+
+        case WM_DRAWITEM: {
+            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (draw != nullptr && draw->CtlType == ODT_BUTTON) {
+                auto* state = reinterpret_cast<DialogState*>(
+                    GetWindowLongPtrW(dialog, GWLP_USERDATA));
+                wchar_t label[64] = {};
+                GetWindowTextW(draw->hwndItem, label, 64);
+                dialog_style::paintButton(
+                    draw->hDC, draw->rcItem, label,
+                    state != nullptr ? state->bodyFont : nullptr,
+                    draw->CtlID == static_cast<UINT>(IDOK)
+                        ? dialog_style::ButtonKind::Primary
+                        : dialog_style::ButtonKind::Secondary,
+                    (draw->itemState & ODS_SELECTED) != 0,
+                    (draw->itemState & ODS_DISABLED) != 0,
+                    (draw->itemState & ODS_FOCUS) != 0 &&
+                        (draw->itemState & ODS_NOFOCUSRECT) == 0);
+                return TRUE;
+            }
+            break;
+        }
+
         case WM_CREATE: {
             auto* state = reinterpret_cast<DialogState*>(
                 GetWindowLongPtrW(dialog, GWLP_USERDATA));
@@ -219,6 +289,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                 uiFamily != nullptr ? uiFamily : L"Microsoft YaHei UI");
             const HFONT titleFont = state->createdTitleFont;
+            state->bodyFont = bodyFont;
 
             // 版本行先拼成具名 wstring：数组里只能存 c_str()，
             // 直接内联临时对象会在表达式结束时就析构（悬垂）。
@@ -274,7 +345,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             const int linkButtonY = clientHeight - margin - buttonHeight;
             const HWND github = CreateWindowExW(
                 0, L"BUTTON", L"Github",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_FLAT | BS_PUSHBUTTON,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 textX, linkButtonY, buttonWidth, buttonHeight, dialog,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGithubId)),
                 instance, nullptr);
@@ -282,7 +353,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
 
             const HWND panDownload = CreateWindowExW(
                 0, L"BUTTON", L"网盘下载",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_FLAT | BS_PUSHBUTTON,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 textX + buttonWidth + scaled(scale, kButtonGap), linkButtonY,
                 buttonWidth, buttonHeight, dialog,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPanDownloadId)),
@@ -291,7 +362,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
 
             const HWND ok = CreateWindowExW(
                 0, L"BUTTON", L"确定",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 clientWidth - margin - buttonWidth,
                 clientHeight - margin - buttonHeight, buttonWidth,
                 buttonHeight, dialog,

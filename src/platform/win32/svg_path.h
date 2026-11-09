@@ -19,16 +19,31 @@
 
 #include <d2d1.h>
 
+#include <cstdint>
+#include <vector>
+
 namespace ktile {
 namespace platform {
 namespace win32 {
 
-// 一段 SVG 片段解析出的两条几何：
-//   strokeGeometry —— 线框（Lucide 的常态，用圆头圆角描边画）
-//   fillGeometry   —— 实心图元（Lucide 里只有个别小圆点标了 currentColor）
+// 一段 SVG 片段解析出的几何：
+//   strokeGeometry —— 使用调用方颜色的线框（Lucide 的常态）
+//   fillGeometry   —— 使用调用方颜色的实心图元
+//   colorLayers    —— 显式指定 stroke="#RRGGBB" 的图元，按颜色分组
+//
+// 为什么单独建图层，而不是把颜色写进几何：D2D 的几何本身不带颜色，
+// 颜色是画笔属性。把「太阳黄色、云线灰白」拆成两条几何，绘制时分别
+// 换画笔颜色即可，仍然是矢量描边，任意 DPI 都清晰。
+struct SvgColorLayer {
+    ComPtr<ID2D1PathGeometry> geometry;
+    // 0xAARRGGBB（解析时统一补成不透明）
+    std::uint32_t color = 0;
+};
+
 struct SvgGlyph {
     ComPtr<ID2D1PathGeometry> strokeGeometry;
     ComPtr<ID2D1PathGeometry> fillGeometry;
+    std::vector<SvgColorLayer> colorLayers;
 };
 
 // 把 SVG 形状片段转成 D2D 几何。

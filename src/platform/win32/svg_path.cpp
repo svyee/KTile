@@ -477,6 +477,42 @@ float numberAttribute(const Attributes& attributes, const wchar_t* name,
     return result;
 }
 
+// 解析 stroke="#RRGGBB" / "#RGB" 形式的显式颜色。
+// 返回 0 表示「没有显式颜色」（currentColor / none / 非法值），
+// 此时沿用调用方的画笔颜色，保持原有单色图标行为不变。
+std::uint32_t hexStrokeColor(const Attributes& attributes) {
+    const wchar_t* value = findAttribute(attributes, L"stroke");
+    if (value == nullptr || *value != L'#') {
+        return 0;
+    }
+    ++value;
+    std::uint32_t rgb = 0;
+    int digits = 0;
+    for (; *value != L'\0' && digits < 6; ++value, ++digits) {
+        const wint_t c = static_cast<wint_t>(*value);
+        std::uint32_t nibble = 0;
+        if (c >= L'0' && c <= L'9') {
+            nibble = static_cast<std::uint32_t>(c - L'0');
+        } else if (c >= L'a' && c <= L'f') {
+            nibble = 10U + static_cast<std::uint32_t>(c - L'a');
+        } else if (c >= L'A' && c <= L'F') {
+            nibble = 10U + static_cast<std::uint32_t>(c - L'A');
+        } else {
+            return 0;
+        }
+        rgb = (rgb << 4) | nibble;
+    }
+    if (digits == 3) {
+        const std::uint32_t r = (rgb >> 8) & 0xFU;
+        const std::uint32_t g = (rgb >> 4) & 0xFU;
+        const std::uint32_t b = rgb & 0xFU;
+        rgb = ((r * 17U) << 16) | ((g * 17U) << 8) | (b * 17U);
+    } else if (digits != 6) {
+        return 0;
+    }
+    return 0xFF000000U | rgb;
+}
+
 // 元素上的 transform="translate(...) scale(...)"（图标只用到这两种）
 Affine parseTransform(const wchar_t* text) {
     Affine transform;
@@ -534,6 +570,7 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
     }
     out->strokeGeometry.reset();
     out->fillGeometry.reset();
+    out->colorLayers.clear();
 
     ComPtr<ID2D1PathGeometry> strokeGeometry;
     ComPtr<ID2D1GeometrySink> strokeSink;
@@ -545,6 +582,15 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
         FAILED(fillGeometry->Open(fillSink.put()))) {
         return false;
     }
+
+    // 显式颜色的图元按颜色分组，各开一条几何（同一图标里颜色通常只有
+    // 一两种，线性查找足够）。
+    struct AccentSink {
+        std::uint32_t color = 0;
+        ComPtr<ID2D1PathGeometry> geometry;
+        ComPtr<ID2D1GeometrySink> sink;
+    };
+    std::vector<AccentSink> accents;
 
     Affine base;
     base.m11 = scale;
@@ -647,7 +693,33 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
 
         const Affine transform =
             compose(base, parseTransform(findAttribute(attributes, L"transform")));
-        PathWriter writer(filled ? fillSink.get() : strokeSink.get(), transform,
+
+        ID2D1GeometrySink* sink = filled ? fillSink.get() : strokeSink.get();
+        const std::uint32_t accentColor =
+            filled ? 0U : hexStrokeColor(attributes);
+        if (accentColor != 0) {
+            AccentSink* matched = nullptr;
+            for (AccentSink& accent : accents) {
+                if (accent.color == accentColor) {
+                    matched = &accent;
+                    break;
+                }
+            }
+            if (matched == nullptr) {
+                AccentSink accent;
+                accent.color = accentColor;
+                if (FAILED(factory->CreatePathGeometry(accent.geometry.put())) ||
+                    FAILED(accent.geometry->Open(accent.sink.put()))) {
+                    ok = false;
+                    break;
+                }
+                accents.push_back(accent);
+                matched = &accents.back();
+            }
+            sink = matched->sink.get();
+        }
+
+        PathWriter writer(sink, transform,
                           filled ? D2D1_FIGURE_BEGIN_FILLED
                                  : D2D1_FIGURE_BEGIN_HOLLOW);
 
@@ -698,6 +770,15 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
     }
     if (FAILED(strokeSink->Close()) || FAILED(fillSink->Close())) {
         return false;
+    }
+    for (AccentSink& accent : accents) {
+        if (FAILED(accent.sink->Close())) {
+            return false;
+        }
+        SvgColorLayer layer;
+        layer.geometry = accent.geometry;
+        layer.color = accent.color;
+        out->colorLayers.push_back(layer);
     }
     out->strokeGeometry = strokeGeometry;
     out->fillGeometry = fillGeometry;

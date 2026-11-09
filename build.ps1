@@ -28,6 +28,9 @@ $TestsDir   = Join-Path $Root "tests"
 $BuildDir   = Join-Path $Root "build"
 $ObjDir     = Join-Path $BuildDir "obj"
 $ThirdParty = Join-Path $Root "third_party"
+# 插件（清单 + 图标）是独立的发布资源：源码在仓库根 plugin/，
+# 构建后原样拷到 exe 同级，主程序不再内嵌任何插件内容。
+$PluginSrc  = Join-Path $Root "plugin"
 
 # ---------------------------------------------------------------- 工具链
 # VS2022 BuildTools + MSVC 14.44 + Windows SDK 10.0.26100.0
@@ -83,7 +86,7 @@ $CommonFlags = @(
 $SystemLibs = @(
     "user32.lib", "gdi32.lib", "shell32.lib", "ole32.lib", "oleaut32.lib",
     "advapi32.lib", "comctl32.lib", "comdlg32.lib", "windowscodecs.lib",
-    "d2d1.lib", "dwrite.lib", "shlwapi.lib", "uuid.lib"
+    "d2d1.lib", "dwrite.lib", "shlwapi.lib", "uuid.lib", "winhttp.lib"
 )
 
 # 主程序链接时带 GUI 子系统（无控制台窗口）
@@ -151,6 +154,9 @@ function Get-CoreSources {
         (Join-Path $SrcDir "core\item_operations.cpp")
         (Join-Path $SrcDir "core\tab_operations.cpp")
         (Join-Path $SrcDir "core\search.cpp")
+        (Join-Path $SrcDir "core\plugin_model.cpp")
+        (Join-Path $SrcDir "core\plugin_binding.cpp")
+        (Join-Path $SrcDir "core\plugin_layout.cpp")
         (Join-Path $SrcDir "base\text_convert.cpp")
     )
     return @($candidates | Where-Object { Test-Path $_ })
@@ -160,10 +166,12 @@ function Get-CoreSources {
 function Get-PersistenceSources {
     $candidates = @(
         (Join-Path $SrcDir "base\text_convert.cpp")
+        (Join-Path $SrcDir "core\plugin_model.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
+        (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
     )
     return @($candidates | Where-Object { Test-Path $_ })
 }
@@ -178,12 +186,16 @@ function Get-AppSources {
         (Join-Path $SrcDir "core\item_operations.cpp")
         (Join-Path $SrcDir "core\tab_operations.cpp")
         (Join-Path $SrcDir "core\search.cpp")
+        (Join-Path $SrcDir "core\plugin_model.cpp")
+        (Join-Path $SrcDir "core\plugin_binding.cpp")
+        (Join-Path $SrcDir "core\plugin_layout.cpp")
         # infrastructure
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
         (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
+        (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
         # platform/win32
         (Join-Path $SrcDir "platform\win32\single_instance.cpp")
         (Join-Path $SrcDir "platform\win32\global_hotkey.cpp")
@@ -200,8 +212,12 @@ function Get-AppSources {
         (Join-Path $SrcDir "platform\win32\builtin_icon.cpp")
         (Join-Path $SrcDir "platform\win32\svg_path.cpp")
         (Join-Path $SrcDir "platform\win32\uuid.cpp")
+        (Join-Path $SrcDir "platform\win32\plugin_providers.cpp")
+        (Join-Path $SrcDir "platform\win32\plugin_http.cpp")
+        (Join-Path $SrcDir "platform\win32\plugin_runner.cpp")
         # ui
         (Join-Path $SrcDir "ui\theme.cpp")
+        (Join-Path $SrcDir "ui\dialog_style.cpp")
         (Join-Path $SrcDir "ui\color_picker.cpp")
         (Join-Path $SrcDir "ui\launcher_window.cpp")
         (Join-Path $SrcDir "ui\launcher_window_behavior.cpp")
@@ -214,6 +230,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "ui\settings_window.cpp")
         # app
         (Join-Path $SrcDir "app\application.cpp")
+        (Join-Path $SrcDir "app\plugin_controller.cpp")
     )
     return @($candidates | Where-Object { Test-Path $_ })
 }
@@ -241,7 +258,7 @@ if ($Tests) {
         # 依据测试文件包含的头，决定需要附带哪些源文件
         $needsCore = $true
         $content = Get-Content $tf.FullName -Raw
-        if ($content -notmatch "tile_layout\.h|item_operations\.h|tab_operations\.h|search\.h") {
+        if ($content -notmatch "tile_layout\.h|item_operations\.h|tab_operations\.h|search\.h|plugin_model\.h|plugin_binding\.h|plugin_layout\.h") {
             $needsCore = $false
         }
         $extra = if ($needsCore) { $coreSources } else { @() }
@@ -333,4 +350,12 @@ if (Invoke-Compile -Source $mainApp -OutputExe $exeOut -ExtraSources $appSources
     Write-Host ""
     Write-Host "产物: $exeOut" -ForegroundColor Green
     Write-Host "大小: $sizeKb KB" -ForegroundColor Green
+
+    # 插件资源：拷到 exe 同级 plugin/。每次都覆盖，保证开发时改过的
+    # 清单/图标立刻生效（build/ 本身是生成目录，不保存用户数据）。
+    if (Test-Path $PluginSrc) {
+        $pluginOut = Join-Path $BuildDir "plugin"
+        Copy-Item -Path (Join-Path $PluginSrc "*") -Destination $pluginOut -Recurse -Force
+        Write-Host "插件: $pluginOut" -ForegroundColor Green
+    }
 }

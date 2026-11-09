@@ -1,0 +1,128 @@
+{
+  "id": "weather",
+  "name": "天气",
+  "description": "三日天气（默认福建泉州，数据来自 Open-Meteo）。改 source.url 里的 latitude / longitude 可定位其他城市，footer 里的城市名需同步修改。",
+  "icon": "icons/cloud-sun",
+  "refreshSeconds": 600,
+  "source": {
+    "type": "http",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude=24.874&longitude=118.676&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=Asia%2FShanghai&forecast_days=3",
+    "method": "GET",
+    "timeoutSeconds": 10,
+    "headers": { "Accept": "application/json", "User-Agent": "KTile/1.0" }
+  },
+  "select": {
+    "current": "current",
+    "daily": "daily"
+  },
+  "icons": {
+    "0": "icons/sun",
+    "1": "icons/cloud-sun",
+    "2": "icons/cloud-sun",
+    "3": "icons/cloud",
+    "45": "icons/cloud",
+    "48": "icons/cloud",
+    "51": "icons/cloud-rain",
+    "53": "icons/cloud-rain",
+    "55": "icons/cloud-rain",
+    "56": "icons/cloud-snow",
+    "57": "icons/cloud-snow",
+    "61": "icons/cloud-rain",
+    "63": "icons/cloud-rain",
+    "65": "icons/cloud-rain",
+    "66": "icons/cloud-snow",
+    "67": "icons/cloud-snow",
+    "71": "icons/cloud-snow",
+    "73": "icons/cloud-snow",
+    "75": "icons/cloud-snow",
+    "77": "icons/cloud-snow",
+    "80": "icons/cloud-rain",
+    "81": "icons/cloud-rain",
+    "82": "icons/cloud-rain",
+    "85": "icons/cloud-snow",
+    "86": "icons/cloud-snow",
+    "95": "icons/alert-circle",
+    "96": "icons/alert-circle",
+    "99": "icons/alert-circle"
+  },
+  "layouts": {
+    "small": {
+      "slots": {
+        "icon": "${current.weather_code}",
+        "main": "${current.temperature_2m}°",
+        "footer": "泉州"
+      }
+    },
+    "default": {
+      "slots": {
+        "icon": "${current.weather_code}",
+        "main": "${current.temperature_2m}°",
+        "sub": "体感 ${current.apparent_temperature}°",
+        "footer": "湿度 ${current.relative_humidity_2m}%"
+      }
+    },
+    "wide": {
+      "direction": "row",
+      "children": [
+        {
+          "slots": {
+            "icon": "${current.weather_code}",
+            "main": "${daily.temperature_2m_max.0}°",
+            "sub": "${daily.temperature_2m_min.0}°",
+            "footer": "今天"
+          }
+        },
+        {
+          "slots": {
+            "icon": "${daily.weather_code.1}",
+            "main": "${daily.temperature_2m_max.1}°",
+            "sub": "${daily.temperature_2m_min.1}°",
+            "footer": "明天"
+          }
+        },
+        {
+          "slots": {
+            "icon": "${daily.weather_code.2}",
+            "main": "${daily.temperature_2m_max.2}°",
+            "sub": "${daily.temperature_2m_min.2}°",
+            "footer": "后天"
+          }
+        }
+      ]
+    },
+    "large": {
+      "direction": "row",
+      "children": [
+        {
+          "slots": {
+            "icon": "${current.weather_code}",
+            "main": "${daily.temperature_2m_max.0}°",
+            "sub": "${daily.temperature_2m_min.0}°",
+            "footer": "今天"
+          }
+        },
+        {
+          "direction": "column",
+          "children": [
+            {
+              "slots": {
+                "icon": "${daily.weather_code.1}",
+                "main": "${daily.temperature_2m_max.1}°",
+                "sub": "${daily.temperature_2m_min.1}°",
+                "footer": "明天"
+              }
+            },
+            {
+              "slots": {
+                "icon": "${daily.weather_code.2}",
+                "main": "${daily.temperature_2m_max.2}°",
+                "sub": "${daily.temperature_2m_min.2}°",
+                "footer": "后天"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

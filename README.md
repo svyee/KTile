@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/Windows-7%20SP1%20~%2011-0078D4?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
 [![Size](https://img.shields.io/badge/single%20binary-~800%20KB-16A34A?style=flat-square)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue?style=flat-square)](CHANGELOG.md)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus)](#)
 
 </div>
@@ -47,6 +47,9 @@ KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁�
 ## 特性
 
 - **磁贴混排** — Small / Wide / Tall / Large 四档尺寸自由组合，行列数可配置
+- **插件磁贴** — 用声明式 `plugin.json` 接入本地指标（CPU/内存/磁盘/电池）、
+  HTTP API 或命令行程序；同一插件在不同尺寸下可展示不同布局
+  （例如大磁贴并列 3 天天气，小磁贴只显示当天）
 - **多标签页** — 分类整理项目；点击、滚轮、`Ctrl+Tab`、`Ctrl+1..9` 切换
 - **即输即搜** — 唤出面板直接打字，磁贴按名称实时过滤
 - **三种添加方式** — 浏览文件、粘贴目标路径、直接从资源管理器拖入
@@ -82,12 +85,29 @@ KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁�
 
 ```
 KTile.exe
+plugin/
+└── <id>/
+    ├── plugin.json   # 插件清单（描述数据源与各尺寸布局）
+    └── icons/*.svg   # 插件自带图标（也可用 png；SVG 支持局部彩色）
 data/
 ├── items.json     # 磁贴数据（可直接手改）
 ├── config.json    # 应用配置
 ├── themes/        # 皮肤（JSON，可自定义配色）
+├── plugins/cache/ # 插件数据快照缓存（自动生成）
 └── res/           # 导入的自定义图标
 ```
+
+插件是纯声明式的：`plugin/<id>/plugin.json` 描述数据源（本地内置 /
+HTTP / 命令行）和每种磁贴尺寸下的布局树，不需要写代码，也不需要常驻进程。
+清单里的 `refreshSeconds` 是「面板唤出时」的缓存 TTL，`visibleRefreshSeconds`
+是「面板正开着时」的高频刷新间隔（如系统监控每 1 秒）；面板隐藏后不再刷新。
+插件目录放在 exe 同级，一个插件一个子文件夹；exe 目录不可写时（如装在
+`Program Files`）自动回落到 `data/plugin/`。仓库根的 `plugin/` 就是随发布包
+分发的示例插件（「天气」默认福建泉州、「系统监控」），构建时由 `build.ps1`
+原样拷到 exe 同级 —— 主程序不内嵌任何插件清单或图标。
+
+在「设置 → 插件管理」里可以安装（选一个 `plugin.json`，整个文件夹会被复制
+进来）、删除插件，或直接为某个插件添加磁贴。
 
 整个目录拷贝到 U 盘 / 新电脑即可迁移。
 
@@ -118,10 +138,11 @@ KTile/
 ├── src/
 │   ├── app/            # 应用层：生命周期、托盘、热键、调试入口
 │   ├── base/           # C++17 兼容层：expected / span / algo / 编码转换
-│   ├── core/           # 领域层：磁贴布局、数据模型、搜索、标签操作
-│   ├── infrastructure/ # 持久化：JSON 解析/写入、便携路径
-│   ├── platform/win32/ # 平台层：D2D 基建、图标提取、拖放、全局热键
+│   ├── core/           # 领域层：磁贴布局、插件模型/绑定/布局、搜索、标签操作
+│   ├── infrastructure/ # 持久化：JSON 解析/写入、便携路径、插件清单与缓存
+│   ├── platform/win32/ # 平台层：D2D 基建、图标提取、拖放、热键、插件数据源
 │   └── ui/             # 界面层：主窗口、编辑对话框、设置窗口、皮肤
+├── plugin/             # 随发布包分发的示例插件（清单 + 图标，构建时拷到 build/）
 ├── tests/              # 单元测试（每个模块一个 test_*.cpp）
 ├── tools/              # 开发期代码生成：Lucide 图标、应用 ico
 ├── scripts/            # 构建环境脚本与诊断探针

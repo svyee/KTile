@@ -1,0 +1,76 @@
+{
+  "id": "system-monitor",
+  "name": "系统监控",
+  "description": "CPU / 内存 / 磁盘 / 电池占用（本地内置数据源）",
+  "icon": "icons/cpu",
+  "refreshSeconds": 5,
+  "visibleRefreshSeconds": 1,
+  "source": { "type": "builtin", "provider": "system" },
+  "select": { "metrics": "metrics" },
+  "layouts": {
+    "small": {
+      "slots": {
+        "icon": "icons/cpu",
+        "main": "${cpu.percent}%",
+        "footer": "CPU"
+      }
+    },
+    "default": {
+      "slots": {
+        "icon": "icons/cpu",
+        "main": "${cpu.percent}%",
+        "sub": "内存 ${memory.percent}%",
+        "footer": "磁盘 ${disk.percent}%"
+      }
+    },
+    "wide": {
+      "direction": "row",
+      "repeat": { "source": "metrics", "map": "item", "max": 3 },
+      "children": [
+        {
+          "slots": {
+            "icon": "${item.icon}",
+            "main": "${item.value}",
+            "footer": "${item.name}"
+          }
+        }
+      ]
+    },
+    "large": {
+      "direction": "column",
+      "children": [
+        {
+          "direction": "row",
+          "children": [
+            {
+              "slots": {
+                "icon": "${metrics.0.icon}",
+                "main": "${metrics.0.value}",
+                "footer": "${metrics.0.name}"
+              }
+            },
+            {
+              "slots": {
+                "icon": "${metrics.1.icon}",
+                "main": "${metrics.1.value}",
+                "footer": "${metrics.1.name}"
+              }
+            }
+          ]
+        },
+        {
+          "direction": "row",
+          "children": [
+            {
+              "slots": {
+                "icon": "${metrics.2.icon}",
+                "main": "${metrics.2.value}",
+                "footer": "${metrics.2.name}"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

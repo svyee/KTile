@@ -267,7 +267,8 @@ void testItemsRoundTrip() {
     }
 
     const auto& restored = loaded.value;
-    CHECK_EQ(static_cast<long long>(restored.schemaVersion), 1);
+    CHECK_EQ(static_cast<long long>(restored.schemaVersion),
+             static_cast<long long>(core::kCurrentSchemaVersion));
     CHECK_EQ(static_cast<long long>(restored.tabs.size()), 2);
 
     const auto& tab0 = restored.tabs[0];
@@ -483,6 +484,43 @@ void testLabelModeRoundTripAndFallback() {
     }
 }
 
+// 插件磁贴：pluginId + 参数表必须原样往返。
+// 参数顺序也要保留 —— 缓存文件名按参数哈希，顺序变了会读不到旧缓存。
+void testPluginItemRoundTrip() {
+    core::ItemsDocument document;
+    document.tabs.clear();
+
+    core::Tab tab("default", "常用");
+    core::LaunchItem item("plug", core::ItemType::Plugin, "天气", "weather");
+    item.pluginId = std::string("weather");
+    item.setPluginParam("city", "上海");
+    item.setPluginParam("units", "metric");
+    tab.items.push_back(item);
+    document.tabs.push_back(tab);
+
+    const std::string text = ConfigStore::serializeItems(document);
+    const auto loaded = ConfigStore::deserializeItems(text);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
+    }
+
+    const auto& restored = loaded.value.tabs[0].items[0];
+    CHECK(restored.type == core::ItemType::Plugin);
+    CHECK(restored.pluginId.has_value());
+    if (restored.pluginId.has_value()) {
+        CHECK_STREQ(*restored.pluginId, "weather");
+    }
+    CHECK_EQ(static_cast<long long>(restored.pluginParams.size()), 2);
+    CHECK_STREQ(restored.pluginParams[0].first, "city");
+    CHECK_STREQ(restored.pluginParams[0].second, "上海");
+    CHECK_STREQ(restored.pluginParams[1].first, "units");
+
+    // 普通项目不应长出 pluginId（读旧数据时字段缺失，不写入默认值）
+    CHECK(!loaded.value.tabs[0].items.empty());
+    CHECK(item.pluginParam("missing").empty());
+}
+
 }  // namespace
 
 int wmain() {
@@ -510,6 +548,7 @@ int wmain() {
     testEmptyDocumentGetsDefaultTab();
     testUnknownTileSizeFallsBack();
     testLabelModeRoundTripAndFallback();
+    testPluginItemRoundTrip();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);
     if (g_failures == 0) {

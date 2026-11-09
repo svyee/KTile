@@ -47,11 +47,17 @@ constexpr UINT kTrayMenuSettings = 2004;
 constexpr std::size_t kTileMenuTabEntries = 32;
 constexpr UINT kTrayMenuAbout = 2005;
 
+// 插件刷新完成消息（工作线程 → 主线程）。
+// 用 WM_APP 段避免与系统消息冲突；消息只带一个「有更新」信号，
+// 具体数据由主线程再向 PluginController 取（快照本身就是线程安全的）。
+constexpr UINT kPluginRefreshMessage = WM_APP + 20;
+
 HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
 
 // 消息窗口定时器
 constexpr UINT_PTR kLogFlushTimerId = 1;        // 日志落盘
 constexpr UINT_PTR kHookWatchdogTimerId = 2;    // 手势钩子看门狗
+constexpr UINT_PTR kPluginVisibleTimerId = 3;   // 面板可见时的插件高频刷新
 constexpr UINT kLogFlushIntervalMs = 2000;
 constexpr UINT kHookWatchdogIntervalMs = 60 * 1000;
 // 手势钩子的强制重装周期：系统负载高时会静默跳过超时的钩子回调
@@ -299,6 +305,12 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
             }
             return TRUE;
 
+        case kPluginRefreshMessage:
+            if (self != nullptr) {
+                self->onPluginDataReady();
+            }
+            return 0;
+
         case WM_HOTKEY: {
             if (self != nullptr && wParam == static_cast<WPARAM>(kToggleHotkeyId)) {
                 self->toggleLauncher();
@@ -344,6 +356,9 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
 Application::Application() = default;
 
 Application::~Application() {
+    // 先停插件工作线程：它会 PostMessage 到消息窗口，窗口销毁后再投递
+    // 只会静默失败，但线程仍可能在读写缓存文件 —— 有序退出更干净。
+    pluginController_.shutdown();
     if (hotkey_.isRegistered()) {
         hotkey_.unregister();
     }
@@ -470,6 +485,36 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         // 可选：模拟拖拽视觉反馈
         launcherWindow_->debugSetDrag(debug.dragSrcX, debug.dragSrcY,
                                       debug.dragDstX, debug.dragDstY);
+
+        // 插件数据是异步刷新的；不在这里等一次，截图里永远只有
+        // 「暂无数据」占位，无法验证插件布局。只影响调试截图路径。
+        // 注意 document_ 在 create() 时已被 move 进窗口，这里必须读窗口
+        // 当前的文档，否则拿到的是空表。
+        const core::ItemsDocument& shotDocument = launcherWindow_->document();
+        const std::size_t shotTab = launcherWindow_->activeTabIndex();
+        if (shotTab < shotDocument.tabs.size()) {
+            pluginController_.refreshItems(shotDocument.tabs[shotTab].items,
+                                           true);
+            for (int attempt = 0; attempt < 40; ++attempt) {
+                bool loading = false;
+                for (const core::LaunchItem& item :
+                     shotDocument.tabs[shotTab].items) {
+                    if (item.type == core::ItemType::Plugin &&
+                        pluginController_.viewFor(item).loading) {
+                        loading = true;
+                        break;
+                    }
+                }
+                if (!loading) {
+                    break;
+                }
+                Sleep(50);
+            }
+        }
+
+        // 调试截图会直接 return，不经过正常退出流程；日志缓冲若不在这里
+        // 刷一次，插件刷新失败信息会随进程结束一起丢掉。
+        infrastructure::applog::flush();
         return launcherWindow_->debugExportPng(L"debug-shot.png") ? 0 : 3;
     }
 
@@ -507,6 +552,11 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
                     kApplicationName,
                     MB_OK | MB_ICONWARNING);
     }
+
+    // 定时器挂在托盘的消息窗口上：窗口建好之前 show() 的入口（如
+    // --debug-editor 先显示面板再开对话框）不会生效，这里补一次。
+    // 正常流程面板此时隐藏，调用是无害的空操作。
+    updatePluginVisibleTimer();
 
     // ---- 调试设置窗口 ----
     //
@@ -567,6 +617,8 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
 
     KillTimer(messageWindow_, kLogFlushTimerId);
     KillTimer(messageWindow_, kHookWatchdogTimerId);
+    KillTimer(messageWindow_, kPluginVisibleTimerId);
+    pluginVisibleTimerSeconds_ = 0;
     infrastructure::applog::markSessionEnd();
     infrastructure::applog::info("正常退出");
     infrastructure::applog::shutdown();
@@ -611,6 +663,54 @@ void Application::onMessageTimer(const UINT_PTR timerId) {
         infrastructure::applog::flush();
     } else if (timerId == kHookWatchdogTimerId) {
         onHookWatchdog();
+    } else if (timerId == kPluginVisibleTimerId) {
+        onPluginVisibleTick();
+    }
+}
+
+void Application::onPluginVisibleTick() {
+    if (!launcherWindow_ || !launcherWindow_->isVisible()) {
+        // 面板已经隐藏（或正在隐藏）：立刻停表，隐藏期间不再刷新。
+        updatePluginVisibleTimer();
+        return;
+    }
+    const core::ItemsDocument& document = launcherWindow_->document();
+    const std::size_t index = launcherWindow_->activeTabIndex();
+    if (index < document.tabs.size()) {
+        // 逐项 TTL 决定谁真的发请求：1 秒节拍只是最小公分母。
+        pluginController_.refreshItems(document.tabs[index].items, false, true);
+    }
+}
+
+void Application::updatePluginVisibleTimer() {
+    if (messageWindow_ == nullptr) {
+        return;
+    }
+
+    int seconds = 0;
+    if (launcherWindow_ && launcherWindow_->isVisible()) {
+        const core::ItemsDocument& document = launcherWindow_->document();
+        const std::size_t index = launcherWindow_->activeTabIndex();
+        if (index < document.tabs.size()) {
+            seconds = pluginController_.foregroundRefreshSeconds(
+                document.tabs[index].items);
+        }
+    }
+
+    if (seconds == pluginVisibleTimerSeconds_) {
+        return;
+    }
+    KillTimer(messageWindow_, kPluginVisibleTimerId);
+    pluginVisibleTimerSeconds_ = seconds;
+    if (seconds > 0) {
+        SetTimer(messageWindow_, kPluginVisibleTimerId,
+                 static_cast<UINT>(seconds) * 1000, nullptr);
+    }
+}
+
+void Application::onPluginDataReady() {
+    if (launcherWindow_) {
+        InvalidateRect(launcherWindow_->hwnd(), nullptr, FALSE);
     }
 }
 
@@ -844,6 +944,8 @@ bool Application::initializeWindow() {
         [this](const core::ItemsDocument& document) {
             document_ = document;
             persistItems();  // 立即落盘，避免崩溃丢失排序/尺寸调整
+            // 磁贴增删可能改变了「本页有没有需要前台刷新的插件」。
+            updatePluginVisibleTimer();
         });
 
     // ---- 回调：钉子状态变更 ----
@@ -857,12 +959,24 @@ bool Application::initializeWindow() {
     // 「上次在哪一页」也是用户偏好，立刻落盘 —— 面板是随时唤出随时用的
     // 东西，进程被结束（关机、任务管理器）时不会有从容的退出时机，
     // 攒到退出再写多半就丢了。
-    launcherWindow_->setActiveTabChangedHandler([this](const std::size_t) {
+    launcherWindow_->setActiveTabChangedHandler([this](const std::size_t tabIndex) {
         if (!launcherWindow_) {
             return;
         }
         config_.appearance.activeTabId = launcherWindow_->activeTabId();
         persistConfig();
+
+        // 面板开着时切页：新页的插件磁贴同样需要懒加载刷新。
+        // 面板隐藏时的切页（例如设置窗口改默认页）不触发，避免无谓开销。
+        if (launcherWindow_->isVisible()) {
+            const core::ItemsDocument& document = launcherWindow_->document();
+            if (tabIndex < document.tabs.size()) {
+                pluginController_.refreshItems(document.tabs[tabIndex].items,
+                                               false);
+            }
+        }
+        // 新页可能挂着「每秒刷新」的插件：前台节拍跟着当前页走。
+        updatePluginVisibleTimer();
     });
 
     // ---- 回调：磁贴右键菜单 ----
@@ -885,6 +999,55 @@ bool Application::initializeWindow() {
         if (launcherWindow_) {
             applyItemAdd(launcherWindow_->hwnd(), std::wstring());
         }
+    });
+
+    // ---- 插件系统 ----
+    //
+    // 初始化放在窗口建好之后：刷新完成的回投需要一个已存在的窗口句柄。
+    // 数据目录与 icon_store/themes 用的是同一个根（便携路径）。
+    // 插件目录放在 exe 同级（便携模式）；exe 目录不可写时跟随 data 目录，
+    // 保证「整个目录可搬移」的约定不被破坏。
+    const std::wstring pluginDirectory =
+        paths_.isPortable() ? paths_.executableDirectory() + L"\\plugin"
+                            : paths_.dataDirectory() + L"\\plugin";
+    pluginController_.initialize(
+        pluginDirectory, paths_.dataDirectory(), [this]() {
+            // 工作线程不碰 UI：只投一个「有更新」信号，绘制留在主线程。
+            if (messageWindow_ != nullptr) {
+                PostMessageW(messageWindow_, kPluginRefreshMessage, 0, 0);
+            }
+        });
+    // initialize() 内部已完成首次发现，这里不重复扫描。
+
+    launcherWindow_->setPluginViewProvider(
+        [this](const core::LaunchItem& item) {
+            return pluginController_.viewFor(item);
+        });
+    launcherWindow_->setPluginCatalogProvider([this]() {
+        return pluginController_.catalog();
+    });
+    launcherWindow_->setAddPluginHandler(
+        [this](const std::string& pluginId) {
+            addPluginItem(pluginId);
+        });
+    // 面板唤出 → 只刷新当前页的插件（命中未过期缓存时直接跳过）。
+    launcherWindow_->setPanelShownHandler([this]() {
+        if (!launcherWindow_) {
+            return;
+        }
+        const core::ItemsDocument& document = launcherWindow_->document();
+        const std::size_t index = launcherWindow_->activeTabIndex();
+        if (index < document.tabs.size()) {
+            pluginController_.refreshItems(document.tabs[index].items, false);
+        }
+        // 面板可见期间按插件的 visibleRefreshSeconds 持续刷新；
+        // 没有插件需要高频刷新时这里什么都不做（不加定时器）。
+        updatePluginVisibleTimer();
+    });
+    launcherWindow_->setPanelHiddenHandler([this]() {
+        pluginController_.cancelPending();
+        // 隐藏即停表：后台不刷新，这是「前台刷新间隔」的另一半语义。
+        updatePluginVisibleTimer();
     });
 
     // ---- 拖放接收：把文件/文件夹/链接拖到面板上即可添加 ----
@@ -1030,6 +1193,13 @@ void Application::launchItem(const core::LaunchItem& item,
         return;
     }
 
+    // 插件磁贴没有可执行目标：点击 = 立即刷新（忽略 TTL），面板保持打开。
+    // 缓存里的旧数据在刷新期间继续显示，不会闪成空白。
+    if (item.type == core::ItemType::Plugin) {
+        pluginController_.requestRefresh(item, true);
+        return;
+    }
+
     const platform::win32::LaunchResult result =
         platform::win32::launchItem(item, forceAdministrator);
     if (result.ok) {
@@ -1163,6 +1333,20 @@ void Application::applyItemEdit(const HWND owner,
         tabNames.push_back(base::utf8ToWideLossy(tab.name));
     }
 
+    // ---- 插件磁贴：给对话框一个「按真实磁贴效果渲染」的回调 ----
+    //
+    // 插件磁贴没有目标图标，预览必须显示插件数据；这里把主窗口的渲染路径
+    // 包成回调，避免在编辑对话框里再实现一套（两套必然逐渐漂移）。
+    ui::PluginPreviewRenderer pluginPreview;
+    if (item.type == core::ItemType::Plugin) {
+        const core::PluginView view = pluginController_.viewFor(item);
+        pluginPreview = [this, view](HDC dc, const RECT& tile,
+                                     core::TileSize size) {
+            return launcherWindow_ != nullptr &&
+                   launcherWindow_->renderPluginPreview(dc, tile, view, size);
+        };
+    }
+
     // ---- 弹对话框（期间主窗口保持可见：owner 关系保证点击判定）----
     // 传全局「默认显示标题」是为了让预览能如实画出「跟随全局设置」那一档的样子
     ui::ItemEditorFields result;
@@ -1170,7 +1354,8 @@ void Application::applyItemEdit(const HWND owner,
             owner, tabNames, initial.tabIndex, initial,
             launcherWindow_->alwaysShowTileLabels(),
             static_cast<int>(config_.appearance.iconScalePercent),
-            config_.appearance.defaultTileColor, &result)) {
+            config_.appearance.defaultTileColor, &result,
+            ui::ItemEditorMode::Edit, std::move(pluginPreview))) {
         return;  // 用户取消
     }
 
@@ -1304,6 +1489,52 @@ void Application::applyItemAdd(const HWND owner,
 
     document_ = launcherWindow_->document();
     persistItems();
+}
+
+void Application::addPluginItem(const std::string& pluginId) {
+    if (!launcherWindow_ || pluginId.empty()) {
+        return;
+    }
+
+    const core::PluginManifest* manifest =
+        pluginController_.store().find(pluginId);
+    if (manifest == nullptr) {
+        return;  // 清单已被删除 / 扫描失败：不添加一块永远画不出的磁贴
+    }
+
+    core::LaunchItem item;
+    item.id = platform::win32::createGuidString();
+    if (item.id.empty()) {
+        item.id = "plugin-" + pluginId + "-" +
+                  std::to_string(GetTickCount64());
+    }
+    item.type = core::ItemType::Plugin;
+    item.name = manifest->name;
+    // target 只作为「插件 id」的冗余记录：启动路径会识别 Plugin 类型并
+    // 走刷新而不是 ShellExecute。保留它也让用户手工编辑 JSON 时一眼可读。
+    item.target = pluginId;
+    item.pluginId = pluginId;
+    item.tileSize = config_.appearance.defaultTileSize;
+
+    core::ItemsDocument updated = launcherWindow_->document();
+    const std::size_t tabIndex = launcherWindow_->activeTabIndex();
+    if (!core::addItem(updated, tabIndex, std::move(item), nullptr)) {
+        return;  // id 撞车等极小概率事件：静默放弃，不弹框打断
+    }
+
+    launcherWindow_->setDocument(std::move(updated));
+    launcherWindow_->recomputeLayout();
+    launcherWindow_->refresh();
+
+    document_ = launcherWindow_->document();
+    persistItems();
+
+    // 刚加进来的插件磁贴没有缓存，立刻排一次刷新（命中 TTL 时控制器
+    // 会自己跳过，所以这里不强制）。
+    const core::ItemsDocument& current = launcherWindow_->document();
+    if (tabIndex < current.tabs.size()) {
+        pluginController_.refreshItems(current.tabs[tabIndex].items, false);
+    }
 }
 
 void Application::addDroppedSources(
@@ -1566,6 +1797,49 @@ void Application::openSettings() {
         }
     }
 
+    // ---- 插件管理页回调 ----
+    //
+    // 设置窗口不直接碰磁盘：安装/删除都转发给 PluginController，
+    // 由它负责重新扫描清单并通知界面刷新。这里只做「模型 → 显示字段」翻译。
+    ui::SettingsPluginHooks pluginHooks;
+    pluginHooks.list = [this]() {
+        std::vector<ui::SettingsPluginInfo> rows;
+        for (const core::PluginManifest& manifest :
+             pluginController_.store().manifests()) {
+            ui::SettingsPluginInfo info;
+            info.id = manifest.id;
+            info.name = manifest.name;
+            switch (manifest.source.kind) {
+                case core::PluginSourceKind::Builtin:
+                    info.sourceLabel = "本地";
+                    break;
+                case core::PluginSourceKind::Http:
+                    info.sourceLabel = "网络";
+                    break;
+                case core::PluginSourceKind::Command:
+                    info.sourceLabel = "命令行";
+                    break;
+            }
+            info.refreshSeconds = manifest.refreshSeconds;
+            info.visibleRefreshSeconds = manifest.visibleRefreshSeconds;
+            rows.push_back(std::move(info));
+        }
+        return rows;
+    };
+    pluginHooks.install = [this](const std::wstring& manifestPath,
+                                 std::string* error) {
+        return pluginController_.installPlugin(manifestPath, error);
+    };
+    pluginHooks.remove = [this](const std::string& id, std::string* error) {
+        return pluginController_.removePlugin(id, error);
+    };
+    pluginHooks.openFolder = [this](const std::string& id) {
+        pluginController_.openPluginFolder(id);
+    };
+    pluginHooks.addTile = [this](const std::string& id) {
+        addPluginItem(id);
+    };
+
     ui::SettingsResult result;
     const bool accepted = ui::showSettingsWindow(
         launcherWindow_->hwnd(),
@@ -1588,7 +1862,8 @@ void Application::openSettings() {
         columnsInUse,
         rowsInUse,
         &result,
-        &preview);
+        &preview,
+        &pluginHooks);
 
     // 设置窗口已关闭：解除模态保护（无论确定还是取消都要解）。
     launcherWindow_->setModalGuard(false);

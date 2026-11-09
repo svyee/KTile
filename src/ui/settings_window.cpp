@@ -3,6 +3,7 @@
 #include "base/text_convert.h"
 #include "core/data_model.h"
 #include "ui/color_picker.h"
+#include "ui/dialog_style.h"
 #include "ui/theme.h"
 
 #include <commctrl.h>
@@ -21,27 +22,48 @@ namespace {
 // 这样做的好处：换一台 150% 缩放屏时不必重算任何数字，只需保证
 // 这里写的是设计稿尺寸。
 
-constexpr int kDialogWidth = 380;  // 容得下「文字标签」一行三个单选项
-// 高度按分组累加得出：
-//   背景       标题(24) + 皮肤(26) + 背景图(27) + 不透明度(30)
-//   磁贴       标题+分隔线(34) + 背景色(30) + 不透明度(30)
-//   图标与标签 标题+分隔线(34) + 图标大小(30) + 文字标签(26)
-//   布局       网格(28) + 提示(24) + 标签栏位置(26)
-//   窗口       出现位置(26)
-//   启动与唤醒 开机自启(26) + 唤醒方式(62)
-// 每个分组的标题另占 24，非首组再加 10 的分隔线间距。
-// 改任何一行的行高都要回来重算这个数，否则底部按钮会压到内容上。
-// （648 DIP 是本机 150% DPI、1027px 工作区下的上限，再高就超屏。）
-constexpr int kDialogHeight = 648;
+// 窗口尺寸：左侧一列竖向标签 + 右侧一列表单。
+// 「常规设置」拆成「外观 / 行为」两页后，单页只有一个方向变长，
+// 所以窗口从 820×400 收窄成 700×470 —— 横向不再挤两栏，
+// 150% 缩放下也不会顶到工作区顶部。
+constexpr int kDialogWidth = 700;
+constexpr int kDialogHeight = 470;
 
-constexpr int kMargin = 16;          // 左右页边距
+constexpr int kMargin = 16;          // 窗口四周边距
+constexpr int kContentTop = 14;      // 内容区起始 y
+
+// ---- 左侧竖向标签栏 ----
+constexpr int kSidebarLeft = 16;
+constexpr int kSidebarTop = 16;
+constexpr int kSidebarWidth = 110;
+constexpr int kSidebarTabHeight = 34;
+constexpr int kSidebarTabGap = 4;
+
+// ---- 右侧内容区：单列表单 ----
+constexpr int kContentLeft = kSidebarLeft + kSidebarWidth + 16;        // 142
+constexpr int kContentRight = kDialogWidth - kMargin;                  // 684
+constexpr int kContentWidth = kContentRight - kContentLeft;            // 542
+constexpr int kColumnWidth = 500;    // 表单内容宽度（卡片另加左右内边距）
+// 单列布局下所有控件都以 kContentLeft 为基准。保留这个别名，
+// 各分组的创建代码不必逐行改 x 坐标。
+constexpr int kColumnRightX = kContentLeft;
+
 constexpr int kRowGap = 12;          // 行间垂直间距
 constexpr int kLabelWidth = 76;      // 标签列宽度
-constexpr int kSliderWidth = 190;    // 滑块宽度（分组标题已承担前缀，可放宽）
+constexpr int kComboWidth = 260;     // 下拉框宽度（单列下不铺满，视觉更稳）
+// 内容卡片：把控件整体包进白色圆角卡片，是「现代设置页」最明显的
+// 视觉特征。卡片几何只影响背景绘制，不改变任何控件的绝对坐标。
+// 每页高度按各自内容量算，切页时白卡高度随之变化，灰底留白即
+// 「这页到这儿为止」的视觉信号。
+constexpr int kCardInset = 10;       // 卡片相对内容边界的左右外扩
+constexpr int kCardTop = 8;
+constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
+constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
+constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
+constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
-constexpr int kSpinnerWidth = 96;    // 数字输入框宽度
+constexpr int kSpinnerWidth = 76;    // 数字输入框宽度
 constexpr int kSpinnerHeight = 24;
-constexpr int kGroupGap = 18;        // 分组之间的额外间隔
 constexpr int kButtonWidth = 78;
 constexpr int kButtonHeight = 26;
 
@@ -104,6 +126,35 @@ constexpr int kHintId = 1120;
 constexpr int kOkId = 1130;
 constexpr int kCancelId = 1131;
 
+// ---- 分页与插件管理页 ----
+//
+// 分页用自绘 owner-draw 按钮竖排在左侧，而不是 SysTabControl32：
+// 后者会画一块带边框的「页体」，而本对话框的各页是绝对坐标平铺的，
+// 把控件塞进页体还得处理坐标重映射；按钮分页只做显隐，零几何改动。
+// 「常规设置」按内容分成两页：外观（长什么样）与行为（怎么唤出）。
+constexpr int kAppearanceTabId = 1135;
+constexpr int kPluginsTabId = 1136;
+constexpr int kBehaviorTabId = 1137;
+
+constexpr int kPluginListId = 1138;
+constexpr int kPluginInstallId = 1170;
+constexpr int kPluginAddTileId = 1171;
+constexpr int kPluginOpenFolderId = 1172;
+constexpr int kPluginRemoveId = 1173;
+constexpr int kPluginHintId = 1174;
+
+// 插件页：说明 + 列表 + 操作按钮 + 脚注（均在右侧内容区内自上而下排布）
+constexpr int kPluginIntroTop = kContentTop;
+constexpr int kPluginIntroHeight = 18;
+constexpr int kPluginListTop = kPluginIntroTop + kPluginIntroHeight + 6;
+constexpr int kPluginListHeight = 196;
+constexpr int kPluginButtonTop = kPluginListTop + kPluginListHeight + 8;
+constexpr int kPluginHintTop = kPluginButtonTop + kButtonHeight + 8;
+// 内容区收窄到 542 后，脚注第三行会折成两行，高度要给够，
+// 否则 STATIC 的白底会从卡片下沿冒出去。
+constexpr int kPluginHintHeight = 88;
+constexpr int kPluginButtonWidth = 96;
+
 // 分组标题的控件 ID。用一段连续区间而不是逐个常量，是为了在
 // WM_CTLCOLORSTATIC 里一次判定「这批是分组标题，画成灰色」。
 constexpr int kSectionHeaderIdBase = 1201;
@@ -121,7 +172,10 @@ constexpr const wchar_t* kPropColumnsEdit = L"KTileSetColumnsEdit";
 constexpr const wchar_t* kPropRowsEdit = L"KTileSetRowsEdit";
 constexpr const wchar_t* kPropHint = L"KTileSetHint";
 constexpr const wchar_t* kPropFont = L"KTileSetFont";
+// 分页标签「选中态」用的加粗字体（由 kPropFont 派生，随窗口销毁）。
+constexpr const wchar_t* kPropTabFont = L"KTileSetTabFont";
 constexpr const wchar_t* kPropSectionFont = L"KTileSetSectionFont";
+constexpr const wchar_t* kPropPluginList = L"KTileSetPluginList";
 
 // ---------------------------------------------------------------- 状态
 
@@ -167,6 +221,19 @@ struct SettingsDialogState {
 
     // 实时预览回调（不拥有；指向 showSettingsWindow 栈上的对象）
     const SettingsPreviewHooks* preview = nullptr;
+
+    // 插件管理页回调（不拥有；为空时该页只显示说明文字）
+    const SettingsPluginHooks* plugins = nullptr;
+
+    // 分页：0 = 外观，1 = 行为，2 = 插件管理。
+    // 各页控件在 WM_CREATE 里已经按绝对坐标摆好，切页只做 ShowWindow，
+    // 不重新布局 —— 这样切回来时滚动条/焦点都还是原来的样子。
+    int activePage = 0;
+    std::vector<HWND> appearanceControls;
+    std::vector<HWND> behaviorControls;
+    std::vector<HWND> pluginControls;
+    // 列表行与 ListView 下标一一对应，选中项据此反查 id
+    std::vector<SettingsPluginInfo> pluginRows;
 
     bool accepted = false;
 };
@@ -289,6 +356,186 @@ void refreshHint(HWND dialog, const SettingsDialogState* state) {
     SetWindowTextW(hint, text.c_str());
 }
 
+// ---------------------------------------------------------------- 分页与插件列表
+
+// 取列表当前选中的插件 id。没有选中项返回空串。
+std::wstring selectedPluginId(HWND dialog, const SettingsDialogState* state) {
+    if (state == nullptr) {
+        return std::wstring();
+    }
+    HWND list = static_cast<HWND>(GetPropW(dialog, kPropPluginList));
+    if (list == nullptr) {
+        return std::wstring();
+    }
+    const int index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (index < 0 ||
+        static_cast<std::size_t>(index) >= state->pluginRows.size()) {
+        return std::wstring();
+    }
+    return base::utf8ToWide(state->pluginRows[static_cast<std::size_t>(index)].id);
+}
+
+// 重新填充插件列表。
+//
+// 每次切到插件页、安装/删除成功后都会调用 —— 插件的真相在磁盘上，
+// 缓存一份列表到对话框生命周期结束只会看到过期数据。
+void refreshPluginList(HWND dialog, SettingsDialogState* state) {
+    HWND list = static_cast<HWND>(GetPropW(dialog, kPropPluginList));
+    if (list == nullptr || state == nullptr) {
+        return;
+    }
+
+    // 记住选中项：刷新后尽量停在原来那个插件上，避免每次操作后跳回顶部
+    std::wstring previous;
+    const int previousIndex = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (previousIndex >= 0 &&
+        static_cast<std::size_t>(previousIndex) < state->pluginRows.size()) {
+        previous = selectedPluginId(dialog, state);
+    }
+
+    state->pluginRows.clear();
+    ListView_DeleteAllItems(list);
+
+    if (state->plugins != nullptr && state->plugins->list) {
+        state->pluginRows = state->plugins->list();
+    }
+
+    for (std::size_t i = 0; i < state->pluginRows.size(); ++i) {
+        const SettingsPluginInfo& row = state->pluginRows[i];
+        const std::wstring name = base::utf8ToWide(row.name);
+        const std::wstring id = base::utf8ToWide(row.id);
+        const std::wstring source = base::utf8ToWide(row.sourceLabel);
+        const std::wstring refresh =
+            row.refreshSeconds > 0
+                ? std::to_wstring(row.refreshSeconds) + L" 秒"
+                : std::wstring(L"—");
+        const std::wstring visibleRefresh =
+            row.visibleRefreshSeconds > 0
+                ? std::to_wstring(row.visibleRefreshSeconds) + L" 秒"
+                : std::wstring(L"—");
+
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = static_cast<int>(i);
+        item.pszText = const_cast<LPWSTR>(name.c_str());
+        const int index = ListView_InsertItem(list, &item);
+        if (index < 0) {
+            continue;
+        }
+        ListView_SetItemText(list, index, 1, const_cast<LPWSTR>(id.c_str()));
+        ListView_SetItemText(list, index, 2, const_cast<LPWSTR>(source.c_str()));
+        ListView_SetItemText(list, index, 3,
+                             const_cast<LPWSTR>(refresh.c_str()));
+        ListView_SetItemText(list, index, 4,
+                             const_cast<LPWSTR>(visibleRefresh.c_str()));
+    }
+
+    // 恢复选中项
+    if (!previous.empty()) {
+        for (std::size_t i = 0; i < state->pluginRows.size(); ++i) {
+            if (base::utf8ToWide(state->pluginRows[i].id) == previous) {
+                ListView_SetItemState(list, static_cast<int>(i),
+                                      LVIS_SELECTED | LVIS_FOCUSED,
+                                      LVIS_SELECTED | LVIS_FOCUSED);
+                break;
+            }
+        }
+    }
+
+    // 按钮的可用性跟着列表走：没选中任何插件时，「添加磁贴 / 打开目录 /
+    // 删除」点了也没有意义，灰掉比弹提示更直接。
+    const bool hasSelection = !selectedPluginId(dialog, state).empty();
+    // 「打开目录」始终可用（没选中时打开插件根目录）；
+    // 其余两项必须有选中项才有意义。
+    const int buttonIds[] = {kPluginAddTileId, kPluginRemoveId};
+    for (const int id : buttonIds) {
+        HWND button = GetDlgItem(dialog, id);
+        if (button != nullptr) {
+            EnableWindow(button, hasSelection ? TRUE : FALSE);
+        }
+    }
+}
+
+// 切换分页：每页的控件各管各的，互不重叠。
+void switchSettingsPage(HWND dialog, SettingsDialogState* state,
+                        const int page) {
+    if (state == nullptr) {
+        return;
+    }
+    state->activePage = page;
+
+    for (const HWND control : state->appearanceControls) {
+        ShowWindow(control, page == 0 ? SW_SHOW : SW_HIDE);
+    }
+    for (const HWND control : state->behaviorControls) {
+        ShowWindow(control, page == 1 ? SW_SHOW : SW_HIDE);
+    }
+    for (const HWND control : state->pluginControls) {
+        ShowWindow(control, page == 2 ? SW_SHOW : SW_HIDE);
+    }
+
+    // 自绘标签不靠勾选态，切页后直接让三枚按钮重画；
+    // 卡片高度也按页变化，所以整窗也要重画一次。
+    InvalidateRect(GetDlgItem(dialog, kAppearanceTabId), nullptr, TRUE);
+    InvalidateRect(GetDlgItem(dialog, kBehaviorTabId), nullptr, TRUE);
+    InvalidateRect(GetDlgItem(dialog, kPluginsTabId), nullptr, TRUE);
+    InvalidateRect(dialog, nullptr, TRUE);
+
+    if (page == 2) {
+        refreshPluginList(dialog, state);
+    }
+}
+
+// 画一枚竖向分页标签：选中态是「浅强调色圆角胶囊 + 强调色加粗文字」，
+// 未选中为灰字。比系统按钮的左边竖条更接近现代设置页的导航样式。
+void paintSettingsTab(const HDC dc, const RECT& rect, const wchar_t* text,
+                      const bool active, HFONT normalFont, HFONT activeFont) {
+    if (dc == nullptr || text == nullptr) {
+        return;
+    }
+
+    FillRect(dc, &rect, dialog_style::backgroundBrush());
+
+    if (active) {
+        const COLORREF accentColor = dialog_style::accent();
+        // 浅强调色底：把强调色以 12% 混进白底。
+        const COLORREF soft = RGB(
+            static_cast<int>(GetRValue(accentColor) * 0.12F + 255 * 0.88F),
+            static_cast<int>(GetGValue(accentColor) * 0.12F + 255 * 0.88F),
+            static_cast<int>(GetBValue(accentColor) * 0.12F + 255 * 0.88F));
+        HBRUSH brush = CreateSolidBrush(soft);
+        const HGDIOBJ oldBrush = SelectObject(dc, brush);
+        const HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+        RECT pill = rect;
+        InflateRect(&pill, -3, -4);
+        RoundRect(dc, pill.left, pill.top, pill.right, pill.bottom, 10, 10);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(brush);
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, active ? dialog_style::accent()
+                            : dialog_style::secondaryText());
+
+    HFONT font =
+        active && activeFont != nullptr ? activeFont : normalFont;
+    HGDIOBJ previousFont =
+        font != nullptr ? SelectObject(dc, font) : nullptr;
+
+    // 文字左侧留出胶囊内边距。
+    RECT textRect = rect;
+    const int inset = (rect.bottom - rect.top) / 3;
+    textRect.left += inset;
+    textRect.right -= inset;
+    DrawTextW(dc, text, -1, &textRect,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    if (previousFont != nullptr) {
+        SelectObject(dc, previousFont);
+    }
+}
+
 // ---------------------------------------------------------------- 消息处理
 
 LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
@@ -297,6 +544,35 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
     switch (message) {
+        case WM_ERASEBKGND: {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            dialog_style::paintBackground(reinterpret_cast<HDC>(wParam), client);
+            return 1;
+        }
+
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            if (dc != nullptr && state != nullptr) {
+                int cardHeight = kCardHeightAppearance;
+                if (state->activePage == 1) {
+                    cardHeight = kCardHeightBehavior;
+                } else if (state->activePage == 2) {
+                    cardHeight = kCardHeightPlugins;
+                }
+                RECT card{};
+                card.left = scaleFor(hwnd, kContentLeft - kCardInset);
+                card.top = scaleFor(hwnd, kCardTop);
+                card.right =
+                    card.left + scaleFor(hwnd, kContentWidth + kCardInset * 2);
+                card.bottom = card.top + scaleFor(hwnd, cardHeight);
+                dialog_style::paintCard(dc, card, scaleFor(hwnd, 8));
+            }
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+
         case WM_NCCREATE: {
             auto* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA,
@@ -333,6 +609,22 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             SetPropW(hwnd, kPropSectionFont, sectionFont);
 
+            // 分页标签选中态字体：同字号加粗，让「当前页」一眼可辨。
+            HFONT tabFont = nullptr;
+            if (font != nullptr) {
+                LOGFONTW logFont{};
+                if (GetObjectW(font, sizeof(LOGFONTW), &logFont) ==
+                    static_cast<int>(sizeof(LOGFONTW))) {
+                    logFont.lfWeight = FW_BOLD;
+                    tabFont = CreateFontIndirectW(&logFont);
+                }
+            }
+            SetPropW(hwnd, kPropTabFont, tabFont);
+
+            // 控件归属哪个分页：创建时顺手记进对应集合，切页只做显隐。
+            // 分页按钮与底部确定/取消不参与显隐，所以它们创建时 sink 为空。
+            std::vector<HWND>* sink = nullptr;
+
             // 统一的控件创建 + 字体设置助手
             auto makeControl = [&](const wchar_t* className, const wchar_t* text,
                                    const DWORD style, const DWORD exStyle,
@@ -350,6 +642,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     SendMessageW(control, WM_SETFONT,
                                  reinterpret_cast<WPARAM>(font), TRUE);
                 }
+                if (control != nullptr && sink != nullptr) {
+                    sink->push_back(control);
+                }
                 return control;
             };
 
@@ -360,50 +655,73 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                    0, x, y, w, h, -1);
             };
 
-            int y = kMargin;
+            // ---- 左侧竖向标签栏 ----
+            //
+            // 自绘标签竖排在左栏：选中页画浅强调色胶囊 + 加粗文字，
+            // 未选中页灰字。切页只改显隐，勾选态由 activePage 驱动重绘
+            // （见 WM_DRAWITEM）。
+            makeControl(L"BUTTON", L"外观",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
+                            BS_OWNERDRAW,
+                        0, kSidebarLeft, kSidebarTop, kSidebarWidth,
+                        kSidebarTabHeight, kAppearanceTabId);
+            makeControl(L"BUTTON", L"行为",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                        kSidebarLeft,
+                        kSidebarTop + kSidebarTabHeight + kSidebarTabGap,
+                        kSidebarWidth, kSidebarTabHeight, kBehaviorTabId);
+            makeControl(L"BUTTON", L"插件管理",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                        kSidebarLeft,
+                        kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 2,
+                        kSidebarWidth, kSidebarTabHeight, kPluginsTabId);
 
-            // 分组标题：加粗小一号 + 上方细分隔线（首组不画）。
-            // 设置项按用途归入「背景 / 磁贴 / 图标与标签 / 布局 / 窗口 /
-            // 启动与唤醒」，顺序按「改得最勤 → 一动就得重开程序」排。
+            sink = &state->appearanceControls;
+            // 单列表单：外观页的四个分组自上而下排成一列。
+            // 拆页之后每页只有 1~2 个分组，不再需要并排两栏。
+            int yLeft = kContentTop;
+
+            // 分组标题：加粗小一号 + 上方细分隔线（栏首不画）。
             auto makeSection = [&](const wchar_t* text, const int id,
-                                   const bool withRule) {
+                                   const int x, int& y, const bool withRule) {
                 if (withRule) {
-                    y += 4;
+                    y += 3;
                     makeControl(L"STATIC", L"",
                                 WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, 0,
-                                kMargin, y, kDialogWidth - 2 * kMargin, 2, -1);
+                                x, y, kColumnWidth, 2, -1);
                     y += 4;
                 }
                 y += 2;
                 HWND header = makeControl(
                     L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                    kMargin + 8, y, kDialogWidth - 2 * kMargin - 8, 18, id);
+                    x + 8, y, kColumnWidth - 8, 18, id);
                 if (header != nullptr && sectionFont != nullptr) {
                     SendMessageW(header, WM_SETFONT,
                                  reinterpret_cast<WPARAM>(sectionFont), TRUE);
                 }
-                y += 24;
+                y += 22;
             };
 
-            // ==================== 背景 ====================
+            // ==================== 外观页：背景 ====================
             //
             // 与「磁贴」分组的分工：
             //   · 背景 = 窗口这一层（皮肤、背景图、整体不透明度）；
             //   · 磁贴 = 每块磁贴自己画的底色与浓度。
             // 两者叠起来才是最终画面，所以相邻摆放，方便对照着调。
 
-            makeSection(L"背景", kSectionAppearanceId, false);
+            makeSection(L"背景", kSectionAppearanceId, kContentLeft, yLeft,
+                        false);
 
             // 皮肤下拉：选项来自 <data>\themes\*.json（即枚举结果）。
             // 枚举为空（目录被整个删了）时退回内置预置名，保证下拉
             // 永远有得选 —— 选了不存在文件的名字，应用层会回落默认配色。
             // 皮肤决定所有基础配色（含磁贴底），所以归在「背景」里。
-            makeLabel(L"皮肤", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"皮肤", kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
             HWND themeCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                0, kMargin + kLabelWidth, y,
-                kDialogWidth - kMargin * 2 - kLabelWidth, 160,
+                0, kContentLeft + kLabelWidth, yLeft,
+                kComboWidth, 160,
                 kThemeComboId);
             if (themeCombo != nullptr) {
                 int selectIndex = -1;
@@ -426,23 +744,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 SendMessageW(themeCombo, CB_SETCURSEL,
                              selectIndex >= 0 ? selectIndex : 0, 0);
             }
-            y += 26;
+            yLeft += 26;
 
             // 背景图：选图 / 清除。
             // 不再显示当前文件名 —— 文件名是随机串，对用户没有信息量，
             // 反而把这一行挤得乱七八糟；设置了什么背景，主窗口一眼可见。
-            makeLabel(L"背景图", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"背景图", kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
             makeControl(
                 L"BUTTON", L"选择图片...",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, kMargin + kLabelWidth, y, 82, 23,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                0, kContentLeft + kLabelWidth, yLeft, 82, 23,
                 kBackgroundBrowseId);
             makeControl(
                 L"BUTTON", L"清除",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, kMargin + kLabelWidth + 88, y, 52, 23,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                0, kContentLeft + kLabelWidth + 88, yLeft, 52, 23,
                 kBackgroundClearId);
-            y += 27;
+            yLeft += 27;
 
             // ---- 不透明度（窗口）----
             //
@@ -453,11 +771,12 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //     窗口整体仍然不透明。
             // 用滑块而不是数字框：这两项都是「边拖边看」的观感调整，
             // 输完数字才知道效果就失去意义了。
-            makeLabel(L"不透明度", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"不透明度", kContentLeft + 8, yLeft + 5,
+                      kLabelWidth - 8, 18);
             HWND windowOpacitySlider = makeControl(
                 TRACKBAR_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
-                0, kMargin + kLabelWidth, y - 2, kSliderWidth, 26,
+                0, kContentLeft + kLabelWidth, yLeft - 2, kSliderWidth, 26,
                 kWindowOpacitySliderId);
             if (windowOpacitySlider != nullptr) {
                 SendMessageW(windowOpacitySlider, TBM_SETRANGE, TRUE,
@@ -470,14 +789,14 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     std::to_wstring(state->initialWindowOpacity) + L"%";
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                            kMargin + kLabelWidth + kSliderValueOffset, y + 5,
-                            44, 18, kWindowOpacityValueId);
+                            kContentLeft + kLabelWidth + kSliderValueOffset,
+                            yLeft + 5, 44, 18, kWindowOpacityValueId);
             }
-            y += 30;
+            yLeft += 30;
 
             // ==================== 磁贴 ====================
 
-            makeSection(L"磁贴", kSectionTileId, true);
+            makeSection(L"磁贴", kSectionTileId, kContentLeft, yLeft, true);
 
             // ---- 背景色 ----
             //
@@ -485,23 +804,24 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 色块本身就是按钮（SS_NOTIFY）：点它弹内置色表，既好点也能
             // 看清当前颜色。「跟随皮肤」按钮 = 清空，回到皮肤自带的 tileFill。
             // 与下面的「不透明度」是一对：一个定色相，一个定浓度。
-            makeLabel(L"背景色", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"背景色", kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
             makeControl(L"STATIC", L"",
                         WS_CHILD | WS_VISIBLE | SS_OWNERDRAW | SS_NOTIFY, 0,
-                        kMargin + kLabelWidth, y, 82, 23,
+                        kContentLeft + kLabelWidth, yLeft, 82, 23,
                         kDefaultTileColorSwatchId);
             makeControl(L"BUTTON", L"跟随皮肤",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                        0, kMargin + kLabelWidth + 86, y, 70, 23,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                        0, kContentLeft + kLabelWidth + 86, yLeft, 70, 23,
                         kDefaultTileColorClearId);
-            y += 30;
+            yLeft += 30;
 
             // ---- 不透明度（磁贴）----
-            makeLabel(L"不透明度", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"不透明度", kContentLeft + 8, yLeft + 5,
+                      kLabelWidth - 8, 18);
             HWND tileOpacitySlider = makeControl(
                 TRACKBAR_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
-                0, kMargin + kLabelWidth, y - 2, kSliderWidth, 26,
+                0, kContentLeft + kLabelWidth, yLeft - 2, kSliderWidth, 26,
                 kTileOpacitySliderId);
             if (tileOpacitySlider != nullptr) {
                 SendMessageW(tileOpacitySlider, TBM_SETRANGE, TRUE,
@@ -514,25 +834,27 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     std::to_wstring(state->initialTileOpacity) + L"%";
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                            kMargin + kLabelWidth + kSliderValueOffset, y + 5,
-                            44, 18, kTileOpacityValueId);
+                            kContentLeft + kLabelWidth + kSliderValueOffset,
+                            yLeft + 5, 44, 18, kTileOpacityValueId);
             }
-            y += 30;
+            yLeft += 30;
 
             // ==================== 图标与标签 ====================
 
-            makeSection(L"图标与标签", kSectionIconLabelId, true);
+            makeSection(L"图标与标签", kSectionIconLabelId, kContentLeft,
+                        yLeft, true);
 
             // ---- 图标大小 ----
             //
             // 图标相对磁贴内框的统一缩放（50~100）。格子尺寸完全不变，
             // 只改格子里的图标 —— 喜欢留白多就调小，喜欢图标大就调满。
             // 单个磁贴还可以在「修改项目」里单独覆盖这一值。
-            makeLabel(L"图标大小", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"图标大小", kContentLeft + 8, yLeft + 5,
+                      kLabelWidth - 8, 18);
             HWND iconScaleSlider = makeControl(
                 TRACKBAR_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
-                0, kMargin + kLabelWidth, y - 2, kSliderWidth, 26,
+                0, kContentLeft + kLabelWidth, yLeft - 2, kSliderWidth, 26,
                 kIconScaleSliderId);
             if (iconScaleSlider != nullptr) {
                 SendMessageW(iconScaleSlider, TBM_SETRANGE, TRUE,
@@ -545,10 +867,10 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     std::to_wstring(state->initialIconScale) + L"%";
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                            kMargin + kLabelWidth + kSliderValueOffset, y + 5,
-                            44, 18, kIconScaleValueId);
+                            kContentLeft + kLabelWidth + kSliderValueOffset,
+                            yLeft + 5, 44, 18, kIconScaleValueId);
             }
-            y += 30;
+            yLeft += 30;
 
             // ---- 文字标签（三态）----
             //
@@ -558,21 +880,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //   · 移动时显示 → showTileLabels = true， alwaysShowTileLabels = false
             //   · 始终不显示 → showTileLabels = false
             // 配置字段保持不变（旧配置文件仍可直接读），只是换了呈现方式。
-            makeLabel(L"文字标签", kMargin + 8, y + 3, kLabelWidth - 8, 18);
+            makeLabel(L"文字标签", kContentLeft + 8, yLeft + 3,
+                      kLabelWidth - 8, 18);
             HWND titleAlways = makeControl(
                 L"BUTTON", L"始终显示",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth, y, 76, 20, kTitleAlwaysRadioId);
+                0, kContentLeft + kLabelWidth, yLeft, 68, 20,
+                kTitleAlwaysRadioId);
             HWND titleDynamic = makeControl(
                 L"BUTTON", L"移动时显示",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth + 80, y, 90, 20,
+                0, kContentLeft + kLabelWidth + 72, yLeft, 80, 20,
                 kTitleDynamicRadioId);
             HWND titleNever = makeControl(
                 L"BUTTON", L"始终不显示",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth + 174, y, 90, 20,
+                0, kContentLeft + kLabelWidth + 158, yLeft, 80, 20,
                 kTitleNeverRadioId);
 
             // 初值：先看总闸，再看「常驻与否」。隐藏状态下两项都勾不上。
@@ -595,21 +919,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 SendMessageW(titleNever, BM_SETCHECK,
                              labelsShown ? BST_UNCHECKED : BST_CHECKED, 0);
             }
-            y += 26;
+            yLeft += 26;
 
-            // ==================== 布局 ====================
-
-            makeSection(L"布局", kSectionLayoutId, true);
+            // ==================== 外观页：布局 ====================
+            //
+            // 磁贴格数属于「长什么样」，留在外观页；规则线把两组分开。
+            makeSection(L"布局", kSectionLayoutId, kColumnRightX, yLeft, true);
 
             // 列数 / 行数并排：两者一起决定磁贴格数，拆成两行纯属浪费。
             // 上下调节器用 UDS_ALIGNRIGHT 吸附在编辑框右侧内部，
             // 所以编辑框宽度里要给箭头留出约 17px。
-            makeLabel(L"网格", kMargin + 8, y + 3, 30, 18);
+            makeLabel(L"网格", kColumnRightX + 8, yLeft + 3, 30, 18);
             HWND columnsEdit = makeControl(
                 L"EDIT", std::to_wstring(state->initialColumns).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
                 WS_EX_CLIENTEDGE,
-                kMargin + 56, y, 88, kSpinnerHeight, kColumnsEditId);
+                kColumnRightX + 56, yLeft, kSpinnerWidth, kSpinnerHeight,
+                kColumnsEditId);
             SetPropW(hwnd, kPropColumnsEdit, columnsEdit);
             makeControl(
                 UPDOWN_CLASSW, L"",
@@ -629,12 +955,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 }
             }
 
-            makeLabel(L"行数", kMargin + 162, y + 3, 30, 18);
+            makeLabel(L"行数", kColumnRightX + 140, yLeft + 3, 30, 18);
             HWND rowsEdit = makeControl(
                 L"EDIT", std::to_wstring(state->initialRows).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
                 WS_EX_CLIENTEDGE,
-                kMargin + 192, y, 88, kSpinnerHeight, kRowsEditId);
+                kColumnRightX + 172, yLeft, kSpinnerWidth, kSpinnerHeight,
+                kRowsEditId);
             SetPropW(hwnd, kPropRowsEdit, rowsEdit);
             makeControl(
                 UPDOWN_CLASSW, L"",
@@ -653,24 +980,26 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                  static_cast<LPARAM>(state->initialRows));
                 }
             }
-            y += kSpinnerHeight + 4;
+            yLeft += kSpinnerHeight + 4;
 
             // 提示行（灰色小字）。ID 必须显式给 —— makeLabel 一律用 -1，
             // 而 WM_CTLCOLORSTATIC 靠 ID 区分「该画灰的说明文字」。
             HWND hint = makeControl(
                 L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                kMargin + 8, y, kDialogWidth - 2 * kMargin - 8, 18, kHintId);
+                kColumnRightX + 8, yLeft, kColumnWidth - 8, 18, kHintId);
             SetPropW(hwnd, kPropHint, hint);
-            y += 24;
+            yLeft += 24;
 
             // 标签栏位置：单选（顶部 / 底部）。
             // 纯几何平移，不重排磁贴、不改窗口尺寸，切换零风险。
-            makeLabel(L"标签栏位置", kMargin + 8, y + 3, kLabelWidth - 8, 18);
+            makeLabel(L"标签栏位置", kColumnRightX + 8, yLeft + 3,
+                      kLabelWidth - 8, 18);
             HWND tabTop = makeControl(
                 L"BUTTON", L"顶部",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth, y, 60, 20, kTabTopRadioId);
+                0, kColumnRightX + kLabelWidth, yLeft, 60, 20,
+                kTabTopRadioId);
             if (tabTop != nullptr) {
                 SendMessageW(tabTop, BM_SETCHECK,
                              state->initialTabBarAtBottom ? BST_UNCHECKED
@@ -680,7 +1009,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             HWND tabBottom = makeControl(
                 L"BUTTON", L"底部",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
-                0, kMargin + kLabelWidth + 64, y, 60, 20,
+                0, kColumnRightX + kLabelWidth + 64, yLeft, 60, 20,
                 kTabBottomRadioId);
             if (tabBottom != nullptr) {
                 SendMessageW(tabBottom, BM_SETCHECK,
@@ -688,21 +1017,27 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                                           : BST_UNCHECKED,
                              0);
             }
-            y += 26;
 
-            // ==================== 窗口 ====================
+            // ==================== 行为页：窗口 ====================
+            //
+            // 「外观」答的是长什么样，「行为」答的是在哪儿、怎么出现。
+            // 两页各自从内容区顶部开始，切换只改显隐。
+            sink = &state->behaviorControls;
+            int yRight = kContentTop;
 
-            makeSection(L"窗口", kSectionWindowId, true);
+            makeSection(L"窗口", kSectionWindowId, kColumnRightX, yRight,
+                        false);
 
             // 出现位置：下拉。展示顺序与 core::WindowPlacement 的枚举值
             // 刻意不同（枚举要保已存配置不错位，Center 只能追加末尾），
             // 取值时经 kPlacementOptions 映射，不拿 CB_GETCURSEL 当枚举用。
-            makeLabel(L"出现位置", kMargin + 8, y + 5, kLabelWidth - 8, 18);
+            makeLabel(L"出现位置", kColumnRightX + 8, yRight + 5,
+                      kLabelWidth - 8, 18);
             HWND placementCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                0, kMargin + kLabelWidth, y,
-                kDialogWidth - kMargin * 2 - kLabelWidth, 160,
+                0, kColumnRightX + kLabelWidth, yRight,
+                kComboWidth, 160,
                 kWindowPlacementComboId);
             if (placementCombo != nullptr) {
                 for (int i = 0; i < kPlacementOptionCount; ++i) {
@@ -721,31 +1056,33 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 SendMessageW(placementCombo, CB_SETCURSEL,
                              static_cast<WPARAM>(index), 0);
             }
-            y += 26;
+            yRight += 26;
 
             // ==================== 启动与唤醒 ====================
 
-            makeSection(L"启动与唤醒", kSectionStartupId, true);
+            makeSection(L"启动与唤醒", kSectionStartupId, kColumnRightX,
+                        yRight, true);
 
             HWND startup = makeControl(
                 L"BUTTON", L"开机自动启动",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTOCHECKBOX,
-                0, kMargin + 8, y,
-                kDialogWidth - 2 * kMargin - 8, 20, kStartupCheckId);
+                0, kColumnRightX + 8, yRight, kColumnWidth - 8, 20,
+                kStartupCheckId);
             if (startup != nullptr) {
                 SendMessageW(startup, BM_SETCHECK,
                              state->initialStartup ? BST_CHECKED : BST_UNCHECKED,
                              0);
             }
-            y += 26;
+            yRight += 26;
 
             // 唤醒快捷键（2x2 单选）：
             // 前两项是系统级注册热键（零开销），后两项是手势，需要装
             // 低级键盘钩子（RegisterHotKey 表达不了双击/单键）。
             // 做成预设而不是「录制组合键」：录制要处理修饰键、冲突检测、
             // 反馈文案，收益却很低 —— 这四个已经覆盖绝大多数诉求。
-            makeLabel(L"唤醒方式", kMargin + 8, y + 3, kLabelWidth - 8, 18);
+            makeLabel(L"唤醒方式", kColumnRightX + 8, yRight + 3,
+                      kLabelWidth - 8, 18);
             {
                 struct PresetRadio {
                     int id;
@@ -757,16 +1094,16 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 const PresetRadio radios[] = {
                     {kHotkeyAltSpaceRadioId, L"Alt+Space",
                      core::HotkeyPreset::AltSpace,
-                     kMargin + kLabelWidth, y},
+                     kColumnRightX + kLabelWidth, yRight},
                     {kHotkeyCtrlSpaceRadioId, L"Ctrl+Space",
                      core::HotkeyPreset::CtrlSpace,
-                     kMargin + kLabelWidth + 98, y},
+                     kColumnRightX + kLabelWidth + 98, yRight},
                     {kHotkeyDoubleCtrlRadioId, L"双击 Ctrl",
                      core::HotkeyPreset::DoubleCtrl,
-                     kMargin + kLabelWidth, y + 22},
+                     kColumnRightX + kLabelWidth, yRight + 22},
                     {kHotkeyWinKeyRadioId, L"单按 Win 键",
                      core::HotkeyPreset::WinKey,
-                     kMargin + kLabelWidth + 98, y + 22},
+                     kColumnRightX + kLabelWidth + 98, yRight + 22},
                 };
                 for (const auto& radio : radios) {
                     const bool checked =
@@ -785,22 +1122,113 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 // 单按 Win 会被我们接管，所以把「Ctrl+Win 仍开开始菜单」
                 // 这条补偿写在界面上，否则用户会以为开始菜单坏了。
                 makeLabel(L"单按 Win 时，Ctrl+Win 仍打开开始菜单。",
-                          kMargin + 8, y + 44,
-                          kDialogWidth - 2 * kMargin - 8, 18);
+                          kColumnRightX + 8, yRight + 44,
+                          kColumnWidth - 8, 18);
             }
-            y += 62;
+            yRight += 62;
+
+            // ==================== 插件管理页 ====================
+            //
+            // 这一页不读写任何配置，只管理磁盘上的插件目录：
+            //   · 安装 = 把用户选中的 plugin.json 所在文件夹整体复制进来；
+            //   · 删除 = 移除整个插件目录；
+            //   · 添加磁贴 = 把插件挂到当前标签页。
+            // 文件操作全部经应用层回调，UI 层不碰磁盘。
+            sink = &state->pluginControls;
+
+            // 一句话说明插件目录的位置；具体路径太长，放不下就不硬塞，
+            // 用户点「打开目录」能直接看到真实位置。
+            makeLabel(L"每个插件一个子文件夹，内含 plugin.json。",
+                      kContentLeft, kPluginIntroTop, kContentWidth,
+                      kPluginIntroHeight);
+
+            HWND pluginList = makeControl(
+                WC_LISTVIEWW, L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT |
+                    LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                WS_EX_CLIENTEDGE,
+                kContentLeft, kPluginListTop, kContentWidth,
+                kPluginListHeight, kPluginListId);
+            if (pluginList != nullptr) {
+                // 整行选中 + 双缓冲：列表只有几行，但拖动滚动条时
+                // 双缓冲能彻底消掉 Win7 上偶发的白条闪烁。
+                ListView_SetExtendedListViewStyle(
+                    pluginList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+
+                struct ColumnSpec {
+                    const wchar_t* text;
+                    int width;
+                };
+                const ColumnSpec columns[] = {
+                    {L"名称", 130}, {L"ID", 170}, {L"来源", 76},
+                    {L"刷新", 76}, {L"前台", 70},
+                };
+                const int columnCount =
+                    static_cast<int>(sizeof(columns) / sizeof(columns[0]));
+                for (int i = 0; i < columnCount; ++i) {
+                    LVCOLUMNW column{};
+                    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                    column.pszText = const_cast<LPWSTR>(columns[i].text);
+                    column.cx = scaleFor(hwnd, columns[i].width);
+                    column.fmt = LVCFMT_LEFT;
+                    ListView_InsertColumn(pluginList, i, &column);
+                }
+                SetPropW(hwnd, kPropPluginList, pluginList);
+            }
+
+            // 操作按钮一行排开（内容区宽度下四个 96px 按钮绰绰有余）
+            makeControl(
+                L"BUTTON", L"安装插件...",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft, kPluginButtonTop, kPluginButtonWidth,
+                kButtonHeight, kPluginInstallId);
+            makeControl(
+                L"BUTTON", L"添加磁贴",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft + kPluginButtonWidth + 8, kPluginButtonTop,
+                kPluginButtonWidth, kButtonHeight, kPluginAddTileId);
+            makeControl(
+                L"BUTTON", L"打开目录",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft + (kPluginButtonWidth + 8) * 2, kPluginButtonTop,
+                kPluginButtonWidth, kButtonHeight, kPluginOpenFolderId);
+            makeControl(
+                L"BUTTON", L"删除插件",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft + (kPluginButtonWidth + 8) * 3, kPluginButtonTop,
+                kPluginButtonWidth, kButtonHeight, kPluginRemoveId);
+
+            makeControl(
+                L"STATIC",
+                L"安装：选择 plugin.json，整个文件夹会被复制进来。\r\n"
+                L"删除：连同图标与脚本一起移除，不可恢复。\r\n"
+                L"前台刷新：清单里的 visibleRefreshSeconds（秒），面板显示时按此节奏"
+                L"刷新；0 表示只在唤出时刷新。",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                kContentLeft, kPluginHintTop, kContentWidth,
+                kPluginHintHeight, kPluginHintId);
+
+            // 行为页与插件页的控件先全部隐藏，启动时停在外观页
+            for (const HWND control : state->behaviorControls) {
+                ShowWindow(control, SW_HIDE);
+            }
+            for (const HWND control : state->pluginControls) {
+                ShowWindow(control, SW_HIDE);
+            }
 
             // ---- 底部按钮（贴右下角） ----
+            // 确定/取消在两个分页下都在，因此不加入任何一页的集合。
+            sink = nullptr;
             const int buttonY = kDialogHeight - kMargin - kButtonHeight;
             makeControl(
                 L"BUTTON", L"确定",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0,
                 kDialogWidth - kMargin - 2 * kButtonWidth - 8, buttonY,
                 kButtonWidth, kButtonHeight, kOkId);
             makeControl(
                 L"BUTTON", L"取消",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0,
                 kDialogWidth - kMargin - kButtonWidth, buttonY,
                 kButtonWidth, kButtonHeight, kCancelId);
@@ -814,11 +1242,78 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             return 0;
         }
 
+        case WM_NOTIFY: {
+            // 插件列表的两类通知：选中变化（决定按钮可用性）与双击行
+            // （快捷添加到当前标签页）。
+            const NMHDR* header = reinterpret_cast<const NMHDR*>(lParam);
+            if (header == nullptr || state == nullptr ||
+                header->idFrom != static_cast<UINT>(kPluginListId)) {
+                break;
+            }
+            HWND list = static_cast<HWND>(GetPropW(hwnd, kPropPluginList));
+            if (list == nullptr) {
+                break;
+            }
+            if (header->code == LVN_ITEMCHANGED) {
+                const int index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+                const bool hasSelection =
+                    index >= 0 &&
+                    static_cast<std::size_t>(index) < state->pluginRows.size();
+                EnableWindow(GetDlgItem(hwnd, kPluginAddTileId),
+                             hasSelection ? TRUE : FALSE);
+                EnableWindow(GetDlgItem(hwnd, kPluginRemoveId),
+                             hasSelection ? TRUE : FALSE);
+                return 0;
+            }
+            if (header->code == NM_DBLCLK) {
+                const std::wstring id = selectedPluginId(hwnd, state);
+                if (!id.empty() && state->plugins != nullptr &&
+                    state->plugins->addTile) {
+                    state->plugins->addTile(base::wideToUtf8Lossy(id));
+                    MessageBoxW(hwnd, L"已添加到当前标签页。", L"插件管理",
+                                MB_OK | MB_ICONINFORMATION);
+                }
+                return 0;
+            }
+            break;
+        }
+
         case WM_DRAWITEM: {
+            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+
+            // 分页标签：按 activePage 决定谁画选中态。
+            if (draw != nullptr && draw->CtlType == ODT_BUTTON &&
+                (draw->CtlID == static_cast<UINT>(kAppearanceTabId) ||
+                 draw->CtlID == static_cast<UINT>(kBehaviorTabId) ||
+                 draw->CtlID == static_cast<UINT>(kPluginsTabId))) {
+                wchar_t text[64] = {};
+                GetWindowTextW(draw->hwndItem, text, 64);
+                int tabPage = 2;
+                if (draw->CtlID == static_cast<UINT>(kAppearanceTabId)) {
+                    tabPage = 0;
+                } else if (draw->CtlID == static_cast<UINT>(kBehaviorTabId)) {
+                    tabPage = 1;
+                }
+                const bool active =
+                    state != nullptr && state->activePage == tabPage;
+                paintSettingsTab(
+                    draw->hDC, draw->rcItem, text, active,
+                    static_cast<HFONT>(GetPropW(hwnd, kPropFont)),
+                    static_cast<HFONT>(GetPropW(hwnd, kPropTabFont)));
+                // 鼠标点击后系统会置 ODS_NOFOCUSRECT，此时不画虚线框；
+                // 只有键盘 Tab 过来才画，和原生按钮的行为一致。
+                if ((draw->itemState & ODS_FOCUS) != 0 &&
+                    (draw->itemState & ODS_NOFOCUSRECT) == 0) {
+                    RECT focus = draw->rcItem;
+                    InflateRect(&focus, -2, -2);
+                    DrawFocusRect(draw->hDC, &focus);
+                }
+                return TRUE;
+            }
+
             // 自绘控件只有「磁贴背景色」样本一块。
             // SS_OWNERDRAW 的 STATIC 在 WM_DRAWITEM 里的 CtlType 是
             // ODT_STATIC（不是 ODT_BUTTON），按 CtlID 判定即可。
-            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
             if (draw != nullptr && draw->CtlType == ODT_STATIC &&
                 draw->CtlID == static_cast<UINT>(kDefaultTileColorSwatchId)) {
                 paintColorSwatch(
@@ -828,12 +1323,136 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         : std::optional<std::uint32_t>());
                 return TRUE;
             }
+
+            // 其余 BS_OWNERDRAW 按钮：确定用强调色主按钮，其余白底细边。
+            if (draw != nullptr && draw->CtlType == ODT_BUTTON) {
+                wchar_t text[64] = {};
+                GetWindowTextW(draw->hwndItem, text, 64);
+                dialog_style::paintButton(
+                    draw->hDC, draw->rcItem, text,
+                    static_cast<HFONT>(GetPropW(hwnd, kPropFont)),
+                    draw->CtlID == static_cast<UINT>(kOkId)
+                        ? dialog_style::ButtonKind::Primary
+                        : dialog_style::ButtonKind::Secondary,
+                    (draw->itemState & ODS_SELECTED) != 0,
+                    (draw->itemState & ODS_DISABLED) != 0,
+                    (draw->itemState & ODS_FOCUS) != 0 &&
+                        (draw->itemState & ODS_NOFOCUSRECT) == 0);
+                return TRUE;
+            }
             break;
         }
 
         case WM_COMMAND: {
-            const int controlId = LOWORD(wParam);
+            int controlId = LOWORD(wParam);
             const int notification = HIWORD(wParam);
+
+            // IsDialogMessageW 对普通窗口的回车 / Esc 固定发 IDOK / IDCANCEL，
+            // 而本对话框的确定 / 取消用的是自有 ID（1130 / 1131）。
+            // 不映射的话回车与 Esc 都落空 —— 尤其按钮改成 owner-draw 之后
+            // 系统也不再靠 BS_DEFPUSHBUTTON 推断默认按钮。
+            if (controlId == IDOK) {
+                controlId = kOkId;
+            } else if (controlId == IDCANCEL) {
+                controlId = kCancelId;
+            }
+
+            // ---- 分页切换 ----
+            if ((controlId == kAppearanceTabId ||
+                 controlId == kBehaviorTabId ||
+                 controlId == kPluginsTabId) &&
+                notification == BN_CLICKED) {
+                int page = 2;
+                if (controlId == kAppearanceTabId) {
+                    page = 0;
+                } else if (controlId == kBehaviorTabId) {
+                    page = 1;
+                }
+                switchSettingsPage(hwnd, state, page);
+                return 0;
+            }
+
+            // ---- 插件管理：安装（选择 plugin.json → 复制整个目录）----
+            if (controlId == kPluginInstallId && notification == BN_CLICKED) {
+                if (state != nullptr && state->plugins != nullptr &&
+                    state->plugins->install) {
+                    wchar_t file[MAX_PATH] = {};
+                    OPENFILENAMEW ofn{};
+                    ofn.lStructSize = sizeof(ofn);
+                    ofn.hwndOwner = hwnd;
+                    ofn.lpstrFilter =
+                        L"插件清单 (plugin.json)\\0plugin.json\\0"
+                        L"所有文件\\0*.*\\0";
+                    ofn.lpstrFile = file;
+                    ofn.nMaxFile = MAX_PATH;
+                    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+                    if (GetOpenFileNameW(&ofn) != FALSE) {
+                        std::string error;
+                        if (state->plugins->install(file, &error)) {
+                            refreshPluginList(hwnd, state);
+                        } else {
+                            const std::wstring message = base::utf8ToWide(
+                                error.empty() ? std::string("安装失败") : error);
+                            MessageBoxW(hwnd, message.c_str(),
+                                        L"安装插件失败",
+                                        MB_OK | MB_ICONWARNING);
+                        }
+                    }
+                }
+                return 0;
+            }
+
+            // ---- 插件管理：添加磁贴 / 打开目录 / 删除 ----
+            if ((controlId == kPluginAddTileId ||
+                 controlId == kPluginOpenFolderId ||
+                 controlId == kPluginRemoveId) &&
+                notification == BN_CLICKED) {
+                if (state == nullptr || state->plugins == nullptr) {
+                    return 0;
+                }
+                const std::wstring id = selectedPluginId(hwnd, state);
+                if (controlId == kPluginOpenFolderId) {
+                    // 没选中任何插件也能用：打开插件根目录，方便用户
+                    // 手工往里放文件夹。
+                    if (state->plugins->openFolder) {
+                        state->plugins->openFolder(base::wideToUtf8Lossy(id));
+                    }
+                    return 0;
+                }
+                if (id.empty()) {
+                    MessageBoxW(hwnd, L"请先在列表中选择一个插件。",
+                                L"插件管理", MB_OK | MB_ICONINFORMATION);
+                    return 0;
+                }
+                if (controlId == kPluginAddTileId) {
+                    if (state->plugins->addTile) {
+                        state->plugins->addTile(base::wideToUtf8Lossy(id));
+                        MessageBoxW(hwnd, L"已添加到当前标签页。",
+                                    L"插件管理", MB_OK | MB_ICONINFORMATION);
+                    }
+                    return 0;
+                }
+
+                const std::wstring question =
+                    L"确定删除插件「" + id +
+                    L"」？\r\n整个插件目录会被移除，且不可恢复。";
+                if (MessageBoxW(hwnd, question.c_str(), L"删除插件",
+                                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
+                    IDYES) {
+                    return 0;
+                }
+                std::string error;
+                if (state->plugins->remove &&
+                    state->plugins->remove(base::wideToUtf8Lossy(id), &error)) {
+                    refreshPluginList(hwnd, state);
+                } else {
+                    const std::wstring message = base::utf8ToWide(
+                        error.empty() ? std::string("删除失败") : error);
+                    MessageBoxW(hwnd, message.c_str(), L"删除插件失败",
+                                MB_OK | MB_ICONWARNING);
+                }
+                return 0;
+            }
 
             // ---- 皮肤：切换即预览 ----
             //
@@ -1258,23 +1877,31 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
         }
 
         case WM_CTLCOLORSTATIC: {
-            // 分组标题与提示行画成灰色，一眼区分「标题 / 说明」与可操作
-            // 的正文。背景必须交回系统画刷 + TRANSPARENT：STATIC 默认
-            // 会用窗口背景色自己填一遍，一旦这里返回别的画刷就会出现
-            // 一块和对话框底色不一致的方框。
+            // 所有 STATIC 都在白色卡片内，统一白底 + 正文色；
+            // 提示行用次级灰拉开层次。返回画刷必须与卡片一致，
+            // 否则文字后面会出现一块与卡片不同的色块。
+            HDC dc = reinterpret_cast<HDC>(wParam);
             const int controlId =
                 GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
             const bool isSection = controlId >= kSectionHeaderIdBase &&
                                    controlId < kSectionHeaderIdEnd;
-            if (isSection || controlId == kHintId) {
-                HDC dc = reinterpret_cast<HDC>(wParam);
-                SetBkMode(dc, TRANSPARENT);
-                SetTextColor(dc, isSection ? RGB(96, 96, 96)
-                                           : RGB(122, 122, 122));
-                return reinterpret_cast<LRESULT>(
-                    GetSysColorBrush(COLOR_BTNFACE));
-            }
-            break;
+            const bool isHint =
+                controlId == kHintId || controlId == kPluginHintId;
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, (isHint && !isSection)
+                                 ? dialog_style::secondaryText()
+                                 : dialog_style::text());
+            return reinterpret_cast<LRESULT>(dialog_style::cardBrush());
+        }
+
+        case WM_CTLCOLORBTN: {
+            // 单选框 / 复选框不在卡片里时会被系统用 COLOR_BTNFACE 填底，
+            // 在白色卡片上就是一块灰方框；这里统一改成白底。
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, dialog_style::text());
+            SetBkColor(dc, dialog_style::card());
+            return reinterpret_cast<LRESULT>(dialog_style::cardBrush());
         }
 
         case WM_CLOSE:
@@ -1295,9 +1922,15 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             if (sectionFont != nullptr) {
                 DeleteObject(sectionFont);
             }
+            HFONT tabFont =
+                static_cast<HFONT>(RemovePropW(hwnd, kPropTabFont));
+            if (tabFont != nullptr) {
+                DeleteObject(tabFont);
+            }
             RemovePropW(hwnd, kPropColumnsEdit);
             RemovePropW(hwnd, kPropRowsEdit);
             RemovePropW(hwnd, kPropHint);
+            RemovePropW(hwnd, kPropPluginList);
 
             // 通知模态循环「本对话框已关闭」。
             //
@@ -1459,16 +2092,18 @@ bool showSettingsWindow(HWND owner,
                         const std::uint16_t columnsInUse,
                         const std::uint16_t rowsInUse,
                         SettingsResult* out,
-                        const SettingsPreviewHooks* preview) {
+                        const SettingsPreviewHooks* preview,
+                        const SettingsPluginHooks* plugins) {
     if (out == nullptr) {
         return false;
     }
 
-    // 上下调节器属于 comctl32 的「Common Controls」。
+    // 上下调节器与插件列表都属于 comctl32 的「Common Controls」。
     // 主程序启动时未必初始化过，这里补一次（重复调用无害）。
     INITCOMMONCONTROLSEX controls{};
     controls.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    controls.dwICC = ICC_UPDOWN_CLASS | ICC_STANDARD_CLASSES;
+    controls.dwICC = ICC_UPDOWN_CLASS | ICC_STANDARD_CLASSES |
+                     ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&controls);
 
     const HINSTANCE instance = reinterpret_cast<HINSTANCE>(
@@ -1493,6 +2128,7 @@ bool showSettingsWindow(HWND owner,
     state.columnsInUse = columnsInUse;
     state.rowsInUse = rowsInUse;
     state.preview = preview;
+    state.plugins = plugins;
 
     // ---- 尺寸：客户区按设计稿，换算成含标题栏边框的窗口尺寸 ----
     RECT desired{0, 0, scaleFor(owner, kDialogWidth),

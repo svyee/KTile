@@ -27,6 +27,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ktile {
 namespace ui {
@@ -66,6 +67,38 @@ struct SettingsResult {
     std::optional<std::optional<std::uint32_t>> defaultTileColor;
     // 图标相对磁贴内框的统一缩放（50~100）
     std::optional<int> iconScalePercent;
+};
+
+// 插件管理页的一行（只读展示）。
+//
+// UI 层不认识 PluginController，也不解析 plugin.json：应用层把清单里的
+// 字段翻译成这份「显示用」数据，设置窗口只负责画列表与转发用户动作。
+struct SettingsPluginInfo {
+    std::string id;
+    std::string name;
+    // 数据源类型的中文标签（本地 / 网络 / 命令行）
+    std::string sourceLabel;
+    // 刷新间隔（秒）。<= 0 表示未设置。
+    int refreshSeconds = 0;
+    // 面板可见时的高频刷新间隔（秒）。<= 0 表示只在唤出时刷新。
+    int visibleRefreshSeconds = 0;
+};
+
+// 插件管理页的宿主回调（可选）。
+//
+// 安装 / 删除会直接改动磁盘上的插件目录，所以这些动作用回调交给应用层，
+// 而不是在 UI 层直接操作文件 —— 与「设置窗口只收集结果」的整体约定一致。
+struct SettingsPluginHooks {
+    // 拉取当前已发现的插件列表（每次切到插件页 / 操作成功后都会调用）
+    std::function<std::vector<SettingsPluginInfo>()> list;
+    // 安装：参数是用户选择的 plugin.json 绝对路径。
+    std::function<bool(const std::wstring& manifestPath, std::string* error)> install;
+    // 删除：参数是插件 id。
+    std::function<bool(const std::string& id, std::string* error)> remove;
+    // 在资源管理器中打开插件目录（id 为空表示插件根目录）。
+    std::function<void(const std::string& id)> openFolder;
+    // 把插件添加成当前标签页的一块磁贴。
+    std::function<void(const std::string& id)> addTile;
 };
 
 // 实时预览回调（可选）。
@@ -121,6 +154,7 @@ struct SettingsPreviewHooks {
 //   rowsInUse            当前布局已占用的最大行数
 //   out                  结果输出
 //   preview              实时预览回调（可为 nullptr）
+//   plugins              插件管理页回调（可为 nullptr；为空时安装/删除按钮隐藏）
 bool showSettingsWindow(HWND owner,
                         std::uint16_t currentColumns,
                         std::uint16_t currentRows,
@@ -139,7 +173,8 @@ bool showSettingsWindow(HWND owner,
                         std::uint16_t columnsInUse,
                         std::uint16_t rowsInUse,
                         SettingsResult* out,
-                        const SettingsPreviewHooks* preview = nullptr);
+                        const SettingsPreviewHooks* preview = nullptr,
+                        const SettingsPluginHooks* plugins = nullptr);
 
 }  // namespace ui
 }  // namespace ktile
