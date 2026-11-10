@@ -539,6 +539,9 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
             cursor.y += debug.radialHoverY;
             radialWindow->updateCursor(cursor);
         }
+        // 可选：钉住滚动相位（默认 0 = 标签开头），让导出结果可复现
+        radialWindow->setMarqueePhaseForDebug(
+            static_cast<float>(debug.radialScrollMs));
         const bool ok = radialWindow->debugExportPng(L"radial-shot.png");
         radialWindow->hide();
         return ok ? 0 : 4;

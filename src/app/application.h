@@ -109,6 +109,10 @@ struct DebugOptions {
     // 而不是用户的通用轮盘。没有这个开关，插件自带的图标与扇区布局就只能
     // 在真实前台应用里肉眼看，自动化无从验证。
     std::string radialPluginId;
+    // --debug-radial-scroll=<ms>：配合 --debug-radial，把超宽标签的滚动
+    // 进度拨到指定毫秒。滚动是时间相关的，不钉住相位，导出的截图每次都不一样，
+    // 也就没法自动比对「第一帧是开头、第二帧滚到了尾」。
+    int radialScrollMs = 0;
 
     // 是否有任何开关被打开
     bool any() const noexcept {

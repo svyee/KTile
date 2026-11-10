@@ -176,6 +176,14 @@ int WINAPI wWinMain(HINSTANCE instance,
     debugOptions.radialPluginId = ktile::base::wideToUtf8Lossy(
         flagValue(L"--debug-radial-plugin="));
 
+    // --debug-radial-scroll=<ms>：把超宽标签的滚动进度拨到指定毫秒
+    {
+        const std::wstring value = flagValue(L"--debug-radial-scroll=");
+        if (!value.empty()) {
+            debugOptions.radialScrollMs = _wtoi(value.c_str());
+        }
+    }
+
     if (debugOptions.shot) {
         // 可选参数（都在 = 之后给出）：
         //   --debug-shot=x,y                 模拟悬停到 (x,y)

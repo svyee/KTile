@@ -223,13 +223,17 @@ app/            组装与生命周期
 5. **`.rc` 中文**：`rc.exe` 编码不可靠，版本资源保持纯 ASCII。
 6. **热键手势钩子顺序**：低级键盘钩子是 LIFO，Explorer 重启会插到前面。
    已通过监听 `TaskbarCreated` 重装钩子解决，不要简化掉。
-7. **图标路径**：自定义图标 / 内置图标必须存 `data` 相对路径；存绝对路径会
+7. **轮盘标签的可用宽度不能用卡片宽度**：花瓣卡片是斜的，能容下的水平文字
+   宽度随角度变化（50×48 的卡片在正上方给 48 DIP、斜下方只有 38 DIP）。一律
+   走 `core::radialLabelWindowWidth`，绘制层再按它做 `PushAxisAlignedClip`。
+   直接按卡片宽度排的后果就是「字跑到按钮外面」（1.2.1 踩过）。
+8. **图标路径**：自定义图标 / 内置图标必须存 `data` 相对路径；存绝对路径会
    破坏“拷走即迁移”。唯一的例外是轮盘插件图标：它们在**加载期**从
    `slugin/<id>/` 解析成绝对路径，只存在于内存，从不写进任何 JSON。
-8. **测试依赖自动探测**：测试文件 `#include` 的模块名必须能匹配
+9. **测试依赖自动探测**：测试文件 `#include` 的模块名必须能匹配
    `build.ps1` 里的正则，否则依赖源文件不会被编译进去。
-9. **调试截图路径**：`--debug-shot` 输出到**当前工作目录**的
-   `debug-shot.png`，建议从仓库根目录运行。
+10. **调试截图路径**：`--debug-shot` 输出到**当前工作目录**的
+    `debug-shot.png`，建议从仓库根目录运行。
 
 ## 12. 关键文件导航
 
@@ -243,7 +247,7 @@ app/            组装与生命周期
 | `src/core/tab_operations.{h,cpp}` | 标签页增删改与排序 |
 | `src/core/search.{h,cpp}` | 子串搜索与高亮区间 |
 | `src/core/radial_menu.{h,cpp}` | 轮盘动作模型、角度→扇区命中（纯函数，有单测） |
-| `src/ui/radial_menu_window.{h,cpp}` | 轮盘卡片环绘制、标签自适应排版、命中测试、出现动画 |
+| `src/ui/radial_menu_window.{h,cpp}` | 轮盘花瓣卡片绘制、按角度算的标签窗口与跑马灯、命中测试、出现动画 |
 | `src/ui/radial_editor_dialog.{h,cpp}` | 轮盘编辑器（扇区动作 / 进程黑名单） |
 | `src/core/radial_plugin.{h,cpp}` | 轮盘插件模型：进程匹配（priority + id 字典序）、插件校验 |
 | `src/infrastructure/radial_plugin_store.{h,cpp}` | 扫描 `slugin/<id>/radial.json`，图标相对路径在加载期转绝对 |

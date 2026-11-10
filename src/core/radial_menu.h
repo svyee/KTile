@@ -250,6 +250,20 @@ std::optional<std::uint8_t> hitTestSector(float dx, float dy,
                                            float innerRadius, float outerRadius,
                                            std::uint8_t sectorCount) noexcept;
 
+// 花瓣卡片里一行水平文字可用多宽（DIP）。
+//
+// 卡片按「宽 cardWidth 沿切向、高 cardHeight 沿径向、圆角 corner」摆放，并像
+// 花瓣一样沿径向旋转 angleDeg；卡片里的文字却是水平的。于是同一段文字在不同
+// 角度能占的宽度并不一样 —— 正上方最宽（等于卡片宽），斜下方最窄（卡片斜
+// 着，短边在挡路）。这个函数返回「文字带（相对卡片中心偏移 bandCenterOffset、
+// 高 bandHeight 的水平条）里每一行都完整落在卡片内」的最大宽度。
+//
+// 用途是给绘制层一个硬边界：文字在这个宽度内排版/滚动，就绝不会画到卡片外。
+// 返回 0 表示放不下任何东西（参数非法时也是 0，调用方按「没有窗口」处理）。
+float radialLabelWindowWidth(float cardWidth, float cardHeight, float corner,
+                             float angleDeg, float bandCenterOffset,
+                             float bandHeight) noexcept;
+
 // 校验配置：扇区数合法、actions.size() == sectorCount、黑名单无空项。
 bool validateRadialConfig(const RadialConfig& config) noexcept;
 

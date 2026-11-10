@@ -96,6 +96,79 @@ std::optional<std::uint8_t> hitTestSector(float dx, float dy,
     return sectorFromAngle(angleDeg, sectorCount);
 }
 
+namespace {
+
+// 圆角矩形内部判定（局部坐标，以卡片中心为原点）。
+bool insideRoundedRect(float x, float y, float halfWidth, float halfHeight,
+                       float corner) noexcept {
+    const float ax = (x < 0.0F) ? -x : x;
+    const float ay = (y < 0.0F) ? -y : y;
+    if (ax > halfWidth || ay > halfHeight) return false;
+    if (ax <= halfWidth - corner || ay <= halfHeight - corner) return true;
+    const float dx = ax - (halfWidth - corner);
+    const float dy = ay - (halfHeight - corner);
+    return dx * dx + dy * dy <= corner * corner;
+}
+
+}  // namespace
+
+float radialLabelWindowWidth(float cardWidth, float cardHeight, float corner,
+                             float angleDeg, float bandCenterOffset,
+                             float bandHeight) noexcept {
+    if (!(cardWidth > 0.0F) || !(cardHeight > 0.0F) || !(bandHeight > 0.0F)) {
+        return 0.0F;
+    }
+    const float halfWidth = cardWidth * 0.5F;
+    const float halfHeight = cardHeight * 0.5F;
+    float radius = corner;
+    if (!(radius > 0.0F)) radius = 0.0F;
+    if (radius > halfWidth) radius = halfWidth;
+    if (radius > halfHeight) radius = halfHeight;
+
+    const float rad = angleDeg * 3.14159265358979323846F / 180.0F;
+    const float ca = std::cos(rad);
+    const float sa = std::sin(rad);
+
+    // 文字带上一行（屏幕空间的水平线）的两端是否都在卡片里。
+    // 屏幕坐标相对卡片中心 -> 卡片局部坐标就是反向旋转：D2D 的 Rotation(θ)
+    // 在 y 向下的坐标系里是顺时针，逆变换即 (x·cos + y·sin, -x·sin + y·cos)。
+    auto rowInside = [&](float u, float v) {
+        const float lx = u * ca + v * sa;
+        const float ly = -u * sa + v * ca;
+        return insideRoundedRect(lx, ly, halfWidth, halfHeight, radius);
+    };
+
+    // 圆角矩形是凸的，两端点都在里面就说明整行都在里面，逐行检查两头即可。
+    constexpr int kRows = 15;
+    auto fits = [&](float halfWindow) {
+        for (int i = 0; i < kRows; ++i) {
+            const float v = bandCenterOffset - bandHeight * 0.5F +
+                            bandHeight * static_cast<float>(i) /
+                                static_cast<float>(kRows - 1);
+            if (!rowInside(halfWindow, v) || !rowInside(-halfWindow, v)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!fits(0.0F)) return 0.0F;
+
+    // 二分：fits 对 halfWindow 单调（同样的行，窗口越窄越容易满足）。
+    // 24 次迭代把误差压到 25/2^24 ≈ 0.000002 DIP，远超绘制精度。
+    float lo = 0.0F;
+    float hi = halfWidth;
+    for (int i = 0; i < 24; ++i) {
+        const float mid = (lo + hi) * 0.5F;
+        if (fits(mid)) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo * 2.0F;
+}
+
 // ================================================================ 配置校验
 
 bool validateRadialConfig(const RadialConfig& config) noexcept {

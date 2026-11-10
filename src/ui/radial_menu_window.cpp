@@ -200,6 +200,16 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
     centerScreen_ = centerScreen;
     highlightedValid_ = false;
 
+    // 换了一份菜单，标签的排版结果（窗口宽度随角度、字号随文字）全部作废
+    labelLayoutCache_.clear();
+    marqueeMs_ = 0.0F;
+    frameHasScroll_ = false;
+    // 跑马灯从零开始：用户看到的第一帧必须是标签开头，不能是滚到一半的中段
+    if (marqueeRunning_ && hwnd_ != nullptr) {
+        KillTimer(hwnd_, kMarqueeTimerId);
+    }
+    marqueeRunning_ = false;
+
     // 外甩取消半径：低于卡片环外缘的值没有意义（会切掉卡片自己），夹到下限。
     cancelRadiusDip_ = cancelRadiusDip > 0 ? static_cast<float>(cancelRadiusDip)
                                            : kOuterRadiusDip;
@@ -297,6 +307,8 @@ void RadialMenuWindow::releaseAt(POINT screenPoint) {
 void RadialMenuWindow::hide() {
     if (hwnd_ != nullptr) {
         KillTimer(hwnd_, kAnimTimerId);
+        KillTimer(hwnd_, kMarqueeTimerId);
+        marqueeRunning_ = false;
         animating_ = false;
         animScale_ = 1.0F;
         if (IsWindowVisible(hwnd_)) {
@@ -523,59 +535,108 @@ float RadialMenuWindow::measureLabelWidth(const std::wstring& text, float fontDi
     return metrics.widthIncludingTrailingWhitespace;
 }
 
-RadialMenuWindow::LabelFit RadialMenuWindow::fitLabel(
+RadialMenuWindow::LabelLayout RadialMenuWindow::layoutLabel(
     const std::string& cacheKey, const std::wstring& text,
-    float availableWidth) {
-    const auto cached = labelFitCache_.find(cacheKey);
-    if (cached != labelFitCache_.end()) {
+    float windowWidth) {
+    const auto cached = labelLayoutCache_.find(cacheKey);
+    if (cached != labelLayoutCache_.end()) {
         return cached->second;
     }
 
     const int baseStep = static_cast<int>(std::lround(kLabelFontDip * 2.0F));
     const int minStep = static_cast<int>(std::lround(kLabelMinFontDip * 2.0F));
-    LabelFit fit;
-    fit.text = text;
-    fit.fontStep = baseStep;
+    LabelLayout layout;
+    layout.windowWidth = windowWidth;
+    layout.fontStep = baseStep;
+    layout.naturalWidth = measureLabelWidth(text, kLabelFontDip);
 
-    const float natural = measureLabelWidth(text, kLabelFontDip);
-    if (availableWidth <= 0.0F || natural <= availableWidth || natural <= 0.0F) {
-        labelFitCache_.emplace(cacheKey, fit);
-        return fit;   // 放得下，原样用基准字号
-    }
-
-    // 第一步：按比例缩字号，缩到下限为止
-    const float scaled = kLabelFontDip * availableWidth / natural;
-    fit.fontStep = static_cast<int>(std::lround(scaled * 2.0F));
-    if (fit.fontStep < minStep) {
-        fit.fontStep = minStep;
-    }
-    if (measureLabelWidth(text, static_cast<float>(fit.fontStep) / 2.0F) <=
-        availableWidth) {
-        labelFitCache_.emplace(cacheKey, fit);
-        return fit;
-    }
-
-    // 第二步：缩到下限还放不下 —— 截断加省略号。
-    // 宁可少显示几个字，也不许在字中间切一刀：半个汉字看起来像渲染坏了。
-    fit.fontStep = minStep;
-    const std::wstring ellipsis = L"\u2026";
-    if (measureLabelWidth(ellipsis, kLabelMinFontDip) > availableWidth) {
-        labelFitCache_.emplace(cacheKey, fit);   // 连省略号都放不下，交给裁剪
-        return fit;
-    }
-    for (std::size_t keep = text.size(); keep > 0; --keep) {
-        const std::wstring candidate = text.substr(0, keep - 1) + ellipsis;
-        if (measureLabelWidth(candidate, kLabelMinFontDip) <= availableWidth) {
-            fit.text = candidate;
-            break;
+    // 差一点点：逐个字号往下试，缩到放得下为止。
+    //
+    // 只试到 kLabelMinFontDip（8.5 DIP）：这个幅度（10 → 8.5）在轮盘上几乎
+    // 看不出来，却能把「10 DIP 差半个字」这类最常见的情况整整齐齐收进卡片，
+    // 不必让每一格都滚动。
+    //
+    // 为什么不按比例一次算好字号：算出来的字号落地时会被量化到 0.5 DIP，
+    // 差一点点就可能仍然超出（47.5 > 47），于是「算过了却还要滚」，白缩一圈。
+    if (windowWidth > 0.0F && layout.naturalWidth > windowWidth) {
+        for (int step = baseStep - 1; step >= minStep; --step) {
+            const float fontDip = static_cast<float>(step) / 2.0F;
+            const float measured = measureLabelWidth(text, fontDip);
+            if (measured <= windowWidth) {
+                layout.fontStep = step;
+                layout.naturalWidth = measured;
+                break;
+            }
+        }
+        // 缩到下限也放不下：那就用最小字号去滚，而不是拿 10 DIP 去滚 ——
+        // 字号小的那份要滚的距离更短，看到的字更多。
+        if (layout.fontStep == baseStep) {
+            const float fontDip = static_cast<float>(minStep) / 2.0F;
+            const float measured = measureLabelWidth(text, fontDip);
+            if (measured > 0.0F) {
+                layout.fontStep = minStep;
+                layout.naturalWidth = measured;
+            }
         }
     }
-    if (fit.text == text) {
-        // 一个字符都装不下：至少留一个字 + 省略号，剩下的让裁剪兜底
-        fit.text = text.substr(0, 1) + ellipsis;
+
+    labelLayoutCache_.emplace(cacheKey, layout);
+    return layout;
+}
+
+float RadialMenuWindow::labelWindowWidthFor(std::uint8_t index, bool hasIcon) {
+    // 窗口宽度由角度决定：花瓣斜过来之后，短边挡在文字带前面。正上方最宽
+    // （47 DIP），斜下方 135°/315° 最窄（33 DIP）。没有图标时文字带回到卡片
+    // 中间，能宽出来不少。
+    const float sectorWidth = 360.0F / static_cast<float>(menu_.sectorCount);
+    const float angle = static_cast<float>(index) * sectorWidth;
+    const float bandCenter =
+        hasIcon ? kLabelCenterOffsetDip : 0.0F;
+    return core::radialLabelWindowWidth(
+        kCellWidthDip, kCellHeightDip, kCellCornerDip, angle, bandCenter,
+        kLabelHeightDip);
+}
+
+float RadialMenuWindow::marqueeOffsetDip(float overflowDip) const {
+    if (!(overflowDip > 0.0F)) return 0.0F;
+
+    const float moveMs = overflowDip / kMarqueeSpeedDipPerSec * 1000.0F;
+    const float cycle = 2.0F * (kMarqueeHoldMs + moveMs);
+    float t = std::fmod(marqueeMs_, cycle);
+    if (t < 0.0F) t += cycle;
+
+    // 往返：停 → 左移到尾 → 停 → 回开头。两端都留停顿，第一段尤其重要：
+    // 轮盘是「看一眼就选」的界面，字一上来就滑走等于没写成。
+    if (t < kMarqueeHoldMs) return 0.0F;
+    t -= kMarqueeHoldMs;
+    if (t < moveMs) {
+        const float k = t / moveMs;
+        return overflowDip * (k * k * (3.0F - 2.0F * k));   // smoothstep
     }
-    labelFitCache_.emplace(cacheKey, fit);
-    return fit;
+    t -= moveMs;
+    if (t < kMarqueeHoldMs) return overflowDip;
+    t -= kMarqueeHoldMs;
+    const float k = t / moveMs;
+    return overflowDip * (1.0F - k * k * (3.0F - 2.0F * k));
+}
+
+void RadialMenuWindow::tickMarquee() {
+    marqueeMs_ = static_cast<float>(GetTickCount64() - marqueeStartTick_);
+    render();
+}
+
+void RadialMenuWindow::syncMarqueeTimer() {
+    if (hwnd_ == nullptr) return;
+    if (frameHasScroll_ && !marqueeRunning_) {
+        marqueeRunning_ = true;
+        // 从 0 起算（show() 里也清过）：停留期从第一帧开始，用户看到的一定
+        // 是标签开头，而不是滚到一半的中段。
+        marqueeStartTick_ = GetTickCount64();
+        SetTimer(hwnd_, kMarqueeTimerId, kMarqueeTickMs, nullptr);
+    } else if (!frameHasScroll_ && marqueeRunning_) {
+        marqueeRunning_ = false;
+        KillTimer(hwnd_, kMarqueeTimerId);
+    }
 }
 
 bool RadialMenuWindow::createDeviceResources() {
@@ -692,7 +753,7 @@ void RadialMenuWindow::discardDeviceResources() {
     // 排版缓存与格式缓存一起清：格式来自旧的 DWrite 工厂，工厂都重建了，
     // 留着的旧结果虽然还能用，但换机器/换字体后量出来的宽度会不一样
     labelFormats_.clear();
-    labelFitCache_.clear();
+    labelLayoutCache_.clear();
     wicFactory_.reset();
     renderTarget_.reset();
     dwriteFactory_.reset();
@@ -726,25 +787,24 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     const bool empty = index >= menu_.actions.size() ||
                        menu_.actions[index].isEmpty();
 
-    // 卡片矩形：以扇区中心 pos 为中心的 62x40 圆角卡片
-    // 卡片位置：挂在半径 kCellCenterRadiusDip 的圆上。卡片本身**不随角度
-    // 旋转**（以前是像花瓣一样沿径向歪着的）。
+    // 卡片：挂在半径 kCellCenterRadiusDip 的圆上，并像花瓣一样**沿径向旋转**
+    // —— 正上方那张正着，右侧的朝右倒，下方那张整个倒过来。这个倾斜是外观的
+    // 主体，去掉之后就成了普通的一圈方块。
     //
-    // 为什么放弃旋转：卡片里要放一行水平文字，而图标和文字都不跟着转。一个
-    // 62x40 的矩形转过 45° 之后，能容下的居中水平文字宽度只剩三十几 DIP——
-    // 四个汉字（40 DIP）就会从斜边探出去，看着就是「字跑到按钮外面」。
-    // 改成轴对齐之后，8 个卡片长得一模一样、标签也在同一高度，辨识起来反而
-    // 更省力；「环」的感觉靠位置维持，不靠歪着的卡片。
-    // 相邻卡片也不会打挤：45° 方向上是 68.6 DIP 的横向错开（> 62），横向那一对
-    // 则是 68.6 DIP 的纵向错开（> 40），总有一个方向是让开的。
+    // 旋转的代价是卡片里的水平文字能占的宽度随角度变化（见 labelWindowWidthFor）：
+    // 50x46 的卡片转到 45° 时只剩 38 DIP，转到 135° 只剩 33 DIP。所以文字宽度
+    // 必须按角度算、放不下就滚动，不能像以前那样按卡片宽排 —— 那正是「字顶出
+    // 按钮」的根源。
     const D2D1_POINT_2F pos =
         D2D1::Point2F(centerX + pointOnCircle(angle, kCellCenterRadiusDip).x,
                       centerY + pointOnCircle(angle, kCellCenterRadiusDip).y);
 
-    const float left = pos.x - kCellWidthDip * 0.5F;
-    const float top = pos.y - kCellHeightDip * 0.5F;
+    // 卡片矩形先在「正上方」摆好，再整体绕菜单中心转到自己的角度 ——
+    // 不能直接摆在 pos 上再转，那会转两次（pos 已经是转过的位置）。
+    const float cellCenterY = centerY - kCellCenterRadiusDip;
     const D2D1_RECT_F rect = D2D1::RectF(
-        left, top, left + kCellWidthDip, top + kCellHeightDip);
+        centerX - kCellWidthDip * 0.5F, cellCenterY - kCellHeightDip * 0.5F,
+        centerX + kCellWidthDip * 0.5F, cellCenterY + kCellHeightDip * 0.5F);
     const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(
         rect, kCellCornerDip, kCellCornerDip);
 
@@ -754,15 +814,20 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     const float popScale = animScale_;
     const D2D1_MATRIX_3X2_F base =
         D2D1::Matrix3x2F::Scale(popScale, popScale, center);
-    renderTarget_->SetTransform(base);
+    const D2D1_MATRIX_3X2_F rotated =
+        base * D2D1::Matrix3x2F::Rotation(angle, center);
 
-    // 伪阴影（D2D 1.0 没有模糊效果，用偏移的半透明圆角矩形近似）
-    const D2D1_ROUNDED_RECT shadow = D2D1::RoundedRect(
-        D2D1::RectF(rect.left, rect.top + 2.0F, rect.right, rect.bottom + 2.0F),
-        kCellCornerDip, kCellCornerDip);
+    // 伪阴影（D2D 1.0 没有模糊效果，用偏移的半透明圆角矩形近似）。
+    // 偏移写在旋转**之后**（矩阵右乘 Translation）：光是同一个方向来的，
+    // 阴影就该永远朝屏幕下方，不能跟着花瓣各倒各的。
+    const D2D1_ROUNDED_RECT shadow = D2D1::RoundedRect(rect, kCellCornerDip,
+                                                        kCellCornerDip);
     if (!empty) {
+        renderTarget_->SetTransform(rotated *
+                                    D2D1::Matrix3x2F::Translation(0.0F, 2.0F));
         renderTarget_->FillRoundedRectangle(shadow, shadowBrush_.get());
     }
+    renderTarget_->SetTransform(rotated);
 
     if (empty) {
         // 空槽位只画一个很淡的轮廓：环的"骨架"要看得见，但不能抢戏，
@@ -777,6 +842,10 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
             rounded, highlighted ? highlightBrush_.get() : borderBrush_.get(),
             highlighted ? 2.0F : 1.0F);
     }
+
+    // 图标和文字保持正向（不随花瓣旋转）：旋转过的中英文认起来要费脑，
+    // 而轮盘是「一眼扫过去」的界面。倾斜感由卡片提供就够了。
+    renderTarget_->SetTransform(base);
 
     if (!empty && index < menu_.actions.size()) {
         const core::RadialAction& action = menu_.actions[index];
@@ -794,9 +863,10 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
         if (hasIcon) {
             const float half = kIconSizeDip * 0.5F;
-            // 图标中心比卡片中心稍高，给下方文字留位：19 DIP 的图标占
-            // -16.5~+2.5，文字框从 +3 开始，两者刚好不打架。
-            const float iconCenterY = pos.y - 7.0F;
+            // 图标中心在卡片中心上方 9 DIP：19 DIP 的图标占 -18.5~+0.5，
+            // 标签带占 +2~+16，两者留 1.5 DIP 的间隙，整组在 46 高的卡片里
+            // 上下各余 6.5 / 7 DIP，看起来是居中的。
+            const float iconCenterY = pos.y + kIconCenterOffsetDip;
 
             if (icon != nullptr) {
                 const D2D1_RECT_F dest = D2D1::RectF(
@@ -864,26 +934,68 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
         if (!action.name.empty()) {
             const std::wstring wideName = base::utf8ToWideLossy(action.name);
-            // 有图标：文字框落在图标下方（顶边距卡片中心 3 DIP，下沿离卡片
-            // 下沿还有 40/2-3-14 = 3 DIP，圆角啃不到字）。
-            // 没图标：文字框垂直居中。
-            const float labelTop = hasIcon ? pos.y + kLabelTopOffsetDip
-                                           : pos.y - kLabelHeightDip * 0.5F;
-            const float labelWidth = kCellWidthDip - kLabelSidePaddingDip * 2.0F;
-            const D2D1_RECT_F textRect = D2D1::RectF(
-                pos.x - kCellWidthDip * 0.5F + kLabelSidePaddingDip, labelTop,
-                pos.x + kCellWidthDip * 0.5F - kLabelSidePaddingDip,
-                labelTop + kLabelHeightDip);
-            const LabelFit fit = fitLabel(action.name, wideName, labelWidth);
-            // 兜底裁剪：字号与截断已经处理过绝大多数情况，但「极短卡片 + 全角
-            // 标点」这类边角仍可能超出去，宁可切掉也不许画到卡片外——
-            // 「字跑到按钮外面」是最难解释的一类观感问题。
-            renderTarget_->DrawText(
-                fit.text.c_str(), static_cast<UINT32>(fit.text.size()),
-                labelFormatForSize(static_cast<float>(fit.fontStep) / 2.0F),
-                textRect,
-                highlighted ? accentTextBrush_.get() : textBrush_.get(),
-                D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            // 标签带的宽度不是卡片宽度：卡片斜着，能容下多宽由角度决定。
+            // 没有图标时文字带回到卡片中间，能宽出十来 DIP。
+            const float bandCenter =
+                hasIcon ? kLabelCenterOffsetDip : 0.0F;
+            const float windowWidth = labelWindowWidthFor(index, hasIcon);
+
+            if (windowWidth > 1.0F) {
+                // 缓存键带扇区下标：同一个「复制路径」在正上方能放下、
+                // 在斜下方要滚动，窗口宽度不同就是两份排版。
+                std::string cacheKey = std::to_string(index);
+                cacheKey += hasIcon ? "|1|" : "|0|";
+                cacheKey += action.name;
+
+                const LabelLayout layout =
+                    layoutLabel(cacheKey, wideName, windowWidth);
+                const float overflow = layout.overflowDip();
+
+                float offset = 0.0F;
+                if (overflow > 0.5F) {
+                    // 记下来交给 render()：只要有任何一格在滚，就把跑马灯
+                    // 定时器开起来；全都不滚就一个定时器都不留。
+                    frameHasScroll_ = true;
+                    offset = marqueeOffsetDip(overflow);
+                }
+
+                const float winLeft = pos.x - windowWidth * 0.5F;
+                const float winTop =
+                    pos.y + bandCenter - kLabelHeightDip * 0.5F;
+                const D2D1_RECT_F window = D2D1::RectF(
+                    winLeft, winTop, winLeft + windowWidth,
+                    winTop + kLabelHeightDip);
+
+                // 硬裁剪。这个窗口是「按卡片形状算出来的、整条都在卡片里」的
+                // 区域，所以裁到它之外的字一定在卡片外 —— 无论字号、滚动相位、
+                // 中文标点怎么折腾，都不可能再出现「字跑到按钮外面」。
+                //
+                // 先把变换复位再推裁剪框：不依赖「PushAxisAlignedClip 会不会
+                // 套用当前变换」这个各版本说法不一的细节。坐标仍是 DIP ——
+                // 渲染目标已经 SetDpi，DIP→像素由它负责，这里不要乘缩放。
+                renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+                renderTarget_->PushAxisAlignedClip(
+                    window, D2D1_ANTIALIAS_MODE_ALIASED);
+                renderTarget_->SetTransform(base);
+
+                // 排版框至少和窗口一样宽，文字才会在窗口里居中；
+                // 超宽时框就是文字的自然宽度，从窗口左沿开始往外排。
+                const float drawWidth = (layout.naturalWidth > windowWidth)
+                                            ? layout.naturalWidth
+                                            : windowWidth;
+                const D2D1_RECT_F textRect = D2D1::RectF(
+                    window.left - offset, window.top,
+                    window.left - offset + drawWidth, window.bottom);
+                renderTarget_->DrawText(
+                    wideName.c_str(), static_cast<UINT32>(wideName.size()),
+                    labelFormatForSize(
+                        static_cast<float>(layout.fontStep) / 2.0F),
+                    textRect,
+                    highlighted ? accentTextBrush_.get() : textBrush_.get());
+
+                renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
+                renderTarget_->PopAxisAlignedClip();
+            }
         }
     }
 
@@ -913,6 +1025,10 @@ void RadialMenuWindow::render() {
     if (!renderTarget_) return;
 
     drawToDib();
+    // 绘制过程会顺手告诉我们「这一帧有没有超宽标签」，据此决定跑马灯
+    // 定时器要不要继续跑 —— 放在 drawToDib 之后，就不必在 show() 里
+    // 额外量一遍文字（那还得把图标先解析一次才能知道文字带在哪）。
+    syncMarqueeTimer();
 
     POINT srcPos = {0, 0};
     SIZE wndSize = {windowSizePx_, windowSizePx_};
@@ -939,6 +1055,10 @@ void RadialMenuWindow::drawToDib() {
 
     renderTarget_->BeginDraw();
     renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0));
+
+    // 每帧重置：这一帧画完就知道「有没有标签需要滚动」，
+    // render() 据此决定跑马灯定时器开不开。
+    frameHasScroll_ = false;
 
     for (std::uint8_t i = 0; i < menu_.sectorCount; ++i) {
         paintCell(i, highlightedValid_ && highlightedSector_ == i);
@@ -1024,6 +1144,10 @@ LRESULT RadialMenuWindow::windowProc(UINT message, WPARAM wParam, LPARAM lParam)
         case WM_TIMER:
             if (wParam == kAnimTimerId) {
                 tickAnimation();
+                return 0;
+            }
+            if (wParam == kMarqueeTimerId) {
+                tickMarquee();
                 return 0;
             }
             break;

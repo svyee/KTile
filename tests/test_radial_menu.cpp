@@ -349,6 +349,63 @@ static void testValidateRadialPlugin() {
     CHECK(!validateRadialPlugin(nine));
 }
 
+// ---------------------------------------------------------------- 标签窗口
+//
+// 花瓣卡片里的文字是水平的，卡片却是斜的：能放多宽随角度变。这组用例钉住的
+// 是「算出来的窗口整条都在卡片里」，因为绘制层拿它当硬裁剪边界用 —— 算宽了，
+// 字就会跑到按钮外面（这正是 1.2.1 之前那个 bug）。
+
+static bool nearf(float a, float b, float eps = 0.01F) {
+    return std::fabs(a - b) <= eps;
+}
+
+static void testLabelWindowCenteredEqualsCardWidth() {
+    // 正上方 + 文字带居中：整张卡片宽都能用
+    const float w = radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 0.0F, 0.0F, 14.0F);
+    CHECK(nearf(w, 50.0F));
+    // 没有旋转时，倒过来也一样
+    CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 180.0F, 0.0F, 14.0F), w));
+}
+
+static void testLabelWindowNarrowsWhenRotated() {
+    const float centered =
+        radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 45.0F, 0.0F, 14.0F);
+    const float dropped =
+        radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 45.0F, 8.0F, 14.0F);
+
+    CHECK(centered < 50.0F);   // 斜着一定比正着窄
+    CHECK(dropped < centered); // 文字带越往下越窄（下面是圆角 + 斜边）
+    CHECK(dropped > 35.0F);    // 还得放得下四个汉字，否则花瓣就没法用了
+}
+
+static void testLabelWindowMirrorSymmetry() {
+    // 45° 与 315° 是左右镜像，窗口宽度必须一样。不一样就说明端点判断只算了
+    // 一侧（踩过：只检查右端时，左端会悄悄顶出卡片，函数却报「放得下」）。
+    for (float offset : {0.0F, 8.0F}) {
+        CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 45.0F, offset, 14.0F),
+                    radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 315.0F, offset, 14.0F)));
+        CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 135.0F, offset, 14.0F),
+                    radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 225.0F, offset, 14.0F)));
+    }
+}
+
+static void testLabelWindowNeverExceedsCard() {
+    for (int deg = 0; deg < 360; deg += 15) {
+        const float w = radialLabelWindowWidth(
+            50.0F, 48.0F, 14.0F, static_cast<float>(deg), 8.0F, 14.0F);
+        CHECK(w <= 50.0F);
+        CHECK(w >= 0.0F);
+    }
+}
+
+static void testLabelWindowDegenerate() {
+    CHECK(nearf(radialLabelWindowWidth(0.0F, 48.0F, 14.0F, 0.0F, 0.0F, 14.0F), 0.0F));
+    CHECK(nearf(radialLabelWindowWidth(50.0F, 0.0F, 14.0F, 0.0F, 0.0F, 14.0F), 0.0F));
+    CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 0.0F, 0.0F, 0.0F), 0.0F));
+    // 文字带整个跑到卡片外：没有可用窗口，不能返回负数糊弄调用方
+    CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 0.0F, 100.0F, 14.0F), 0.0F));
+}
+
 // ---------------------------------------------------------------- 入口
 
 int wmain() {
@@ -374,6 +431,11 @@ int wmain() {
     testValidateRejectsSuppressionConflict();
     testFindPluginForProcess();
     testValidateRadialPlugin();
+    testLabelWindowCenteredEqualsCardWidth();
+    testLabelWindowNarrowsWhenRotated();
+    testLabelWindowMirrorSymmetry();
+    testLabelWindowNeverExceedsCard();
+    testLabelWindowDegenerate();
 
     wprintf(L"\n%d failures\n", g_failures);
     return g_failures;

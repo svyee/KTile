@@ -73,6 +73,12 @@ public:
     // 把当前菜单渲染到 DIB 并导出 PNG（供 --debug-radial 视觉验证）。
     bool debugExportPng(const wchar_t* fileName);
 
+    // 调试用：把跑马灯进度拨到指定毫秒（--debug-radial-scroll）。
+    //
+    // 滚动与时间相关，不钉住相位导出的截图每次都不一样，也就无法自动比对
+    // 「第一帧是标签开头、后面滚到了尾巴」。只在 debugExportPng 之前调用有意义。
+    void setMarqueePhaseForDebug(float ms) { marqueeMs_ = ms; }
+
 private:
     static LRESULT CALLBACK windowProcThunk(HWND hwnd, UINT message,
                                             WPARAM wParam, LPARAM lParam);
@@ -102,26 +108,38 @@ private:
     // 取扇区动作的矢量图标（快捷键 / 内置命令），没有返回 nullptr
     const platform::win32::SvgGlyph* glyphForAction(const core::RadialAction& action);
 
-    // 标签排版结果：可能被截断的文字 + 字号（以 0.5 DIP 为单位的整数）
-    struct LabelFit {
-        std::wstring text;
-        int fontStep = 20;
+    // 一行标签在某个扇区里的排版结果
+    struct LabelLayout {
+        float windowWidth = 0.0F;   // 这个角度下最多能占多宽（DIP）
+        float naturalWidth = 0.0F;  // 按 fontStep 排出来实际多宽
+        int fontStep = 20;          // 字号（以 0.5 DIP 为单位的整数）
+        float overflowDip() const noexcept {
+            const float over = naturalWidth - windowWidth;
+            return (over > 0.0F) ? over : 0.0F;
+        }
     };
 
-    // 把一段标签塞进给定宽度里（带缓存）。
+    // 算标签排版（带缓存）。
     //
-    // 卡片宽度固定，标签长度却由用户 / 插件作者决定：5 个汉字正好 50 DIP，
-    // 6 个就超了。于是分三步走：放得下就原样用 → 放不下按比例缩字号（下限
-    // kLabelMinFontDip）→ 缩到下限还放不下就截断加省略号。
-    //
-    // 为什么不截断成一行省略号了事：轮盘一格本来就只放两三个字，能完整显示
-    // 就别截；为什么缩到下限就不再缩：8 DIP 在 100% DPI 下只有 11 像素高，
-    // 再小等于把字变成灰点，还不如让用户改个短名。
-    LabelFit fitLabel(const std::string& cacheKey, const std::wstring& text,
-                      float availableWidth);
+    // 标签长度由用户 / 插件作者决定，卡片能给的宽度又随角度变化。于是：
+    // 放得下就 10 DIP 原样排 → 差一点就按比例缩到 9 DIP（这个幅度看不出来）
+    // → 还放不下就保持 9 DIP，剩下的交给横向滚动。不再截断加省略号：
+    // 轮盘上「复制文件路…」和「复制文件路径」是两回事，用户分不出来。
+    LabelLayout layoutLabel(const std::string& cacheKey, const std::wstring& text,
+                            float windowWidth);
 
-    // 用量出来的自然宽度（DIP）
+    // 量一段文字的自然宽度（DIP）
     float measureLabelWidth(const std::wstring& text, float fontDip);
+
+    // 某个扇区的标签窗口宽度（带缓存，见 core::radialLabelWindowWidth）
+    float labelWindowWidthFor(std::uint8_t index, bool hasIcon);
+
+    // 当前时刻标签该左移多少 DIP（两端口等待 + 往返滑动）
+    float marqueeOffsetDip(float overflowDip) const;
+
+    void tickMarquee();
+    // 按「这一帧有没有超宽标签」决定跑马灯定时器开/关
+    void syncMarqueeTimer();
 
     // 创建（或取缓存）指定字号的标签格式
     IDWriteTextFormat* labelFormatForSize(float size);
@@ -165,10 +183,10 @@ private:
     // 自定义 SVG 图标缓存（键含文件修改时间，插件改了图标下一帧生效）
     std::unordered_map<std::wstring, platform::win32::SvgGlyph> customGlyphCache_;
 
-    // 标签排版缓存：标签原文 → 排版结果（截断后的文字 + 字号）。
-    // 菜单内容在一次显示期间不会变，缓存到窗口生命周期即可；
-    // 万一以后卡片宽度变成可配置，这个键要跟着带上宽度。
-    std::unordered_map<std::string, LabelFit> labelFitCache_;
+    // 标签排版缓存：扇区下标 + 标签原文 + 是否有图标 → 排版结果。
+    // 键里带下标是因为窗口宽度随角度变（同一个「复制路径」在正上方和斜下方
+    // 能占的宽度不一样）。
+    std::unordered_map<std::string, LabelLayout> labelLayoutCache_;
     // 字号 → IDWriteTextFormat。字号已量化成 0.5 DIP 步进，实际同时存在的
     // 也就两三种。
     std::unordered_map<int, platform::win32::ComPtr<IDWriteTextFormat>> labelFormats_;
@@ -190,6 +208,18 @@ private:
     bool animating_ = false;
     ULONGLONG animStartTick_ = 0;
 
+    // 跑马灯
+    //
+    // 只在「有标签放不下」时开定时器：轮盘一次性显示 1~2 秒，这期间多跑一个
+    // 30ms 的定时器可以接受；没有超宽标签就一个定时器都不开，不破坏
+    // 「无输入时全静默」的约定。
+    static constexpr UINT_PTR kMarqueeTimerId = 0x52;
+    static constexpr UINT kMarqueeTickMs = 30;
+    float marqueeMs_ = 0.0F;        // 已经滚了多久
+    ULONGLONG marqueeStartTick_ = 0;
+    bool marqueeRunning_ = false;
+    bool frameHasScroll_ = false;   // 当前这一帧是否有标签需要滚动
+
     ActionHandler actionHandler_;
     CloseHandler closeHandler_;
 
@@ -197,34 +227,42 @@ private:
 
     // 布局（DIP）
     //
-    // 这些数值是「花瓣环」的基准：8 个 62x40 的圆角卡片挂在半径 97 的
-    // 圆上，相邻卡片中心弧长约 74 DIP。宽度不能再窄：卡片里要放得下
-    // 5 个汉字（10 DIP 字号 = 50 DIP），50 DIP 宽的卡片装不下，字会顶出
-    // 圆角；「新建文件夹」这种 5 字标签在真实配置里很常见。
+    // 「花瓣环」：8 个 50x48 的圆角卡片挂在半径 97 的圆上，各自沿径向旋转，
+    // 相邻卡片中心弧长约 74 DIP、对角余量约 5 DIP —— 看得出是分开的花瓣，
+    // 又不会散成一地。
     //
-    // 62 宽在 8 扇区下也不会互相压住：相邻卡片永远相差 45°，横向
-    // 68.6 DIP（> 62）或纵向 68.6 DIP（> 40），总有一个方向是错开的。
+    // 高度从 40 加到 48 是给文字让路：卡片斜到 45° 之后，一行水平文字能占的
+    // 宽度由卡片**高度**（径向那一边）和文字带的位置决定。40 高、文字带偏下
+    // 时只剩 24 DIP，连三个字都放不下。
     static constexpr float kHubRadiusDip = 21.0F;
     static constexpr float kCellCenterRadiusDip = 97.0F;
-    static constexpr float kCellWidthDip = 62.0F;
-    static constexpr float kCellHeightDip = 40.0F;
-    static constexpr float kCellCornerDip = 12.0F;
-    static constexpr float kIconSizeDip = 19.0F;
-    static constexpr float kGlyphStrokeDip = 1.6F;
+    static constexpr float kCellWidthDip = 50.0F;
+    static constexpr float kCellHeightDip = 48.0F;
+    static constexpr float kCellCornerDip = 14.0F;
+    static constexpr float kIconSizeDip = 17.0F;
+    static constexpr float kGlyphStrokeDip = 1.5F;
 
     // 标签文字（DIP）
     //
-    // 基准 10 DIP；标签比可用宽度还长时按比例缩，缩到 8 DIP 为止——再小在
-    // 100% DPI 下只剩 11 像素高，宁可让用户把标签改短。
-    // 文字框左右各留 4 DIP、高 14 DIP：上边贴着图标、下边距离卡片下沿 6 DIP。
-    // 之前文字框底边正好压在卡片下沿上，12 DIP 的圆角会把最后几个字啃掉一块，
-    // 看起来像「字跑到按钮外面去了」。
+    // 卡片里的内容是一列：图标在上、一行标签在下。两者都尽量靠卡片中间 ——
+    // 文字带每往下挪 1 DIP，斜位卡片能给的宽度就少 2 DIP（见
+    // core::radialLabelWindowWidth）：带中心 +8 时正上方 48 DIP、斜下方 38 DIP，
+    // 再往下就装不下四个汉字了。
     static constexpr float kLabelFontDip = 10.0F;
-    static constexpr float kLabelMinFontDip = 8.0F;
-    static constexpr float kLabelSidePaddingDip = 4.0F;
+    // 缩字号的底线：只在「差一点点」时用（10 → 8.5 看不出来），再小宁愿滚动
+    static constexpr float kLabelMinFontDip = 8.5F;
     static constexpr float kLabelHeightDip = 14.0F;
-    // 文字框相对卡片中心的垂直偏移（有图标时）
-    static constexpr float kLabelTopOffsetDip = 3.0F;
+    // 图标中心 / 标签带中心相对卡片中心的垂直偏移
+    static constexpr float kIconCenterOffsetDip = -8.5F;
+    static constexpr float kLabelCenterOffsetDip = 8.0F;
+
+    // 跑马灯（DIP / 毫秒）
+    //
+    // 两端各停 700 ms 再走：轮盘是「看一眼就选」的界面，字一上来就滑走等于
+    // 没写成。速度 26 DIP/s 约等于每秒 2.5 个汉字，跟得上读。
+    static constexpr float kMarqueeHoldMs = 700.0F;
+    static constexpr float kMarqueeSpeedDipPerSec = 26.0F;
+
     // 调用方/命中测试共用的窗口半径（DIP）：覆盖花瓣外缘 + 阴影
     static constexpr float kWindowRadiusDip = 142.0F;
     // 命中测试用的内/外半径（与花瓣布局对应）
