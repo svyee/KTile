@@ -137,7 +137,13 @@ public:
     // 定时器都会调这里把顺序抢回来。
     // 非手势热键（普通 RegisterHotKey）不受钩子链影响，直接返回。
     void reinstallGestureHotkey(const char* reason);
-
+    // 重装轮盘鼠标钩子（reason 只用于写日志）。
+    //
+    // 与手势钩子同一套理由：WH_MOUSE_LL 也是 LIFO 链，Explorer 重启、
+    // 休眠恢复、系统静默跳过超时回调都会让它失效，而失效的表现是
+    // 「Ctrl+右键突然没反应了」——用户不会想到要重启程序。
+    // 轮盘正在显示时不重装：重装会重置状态机，手势做到一半会被截断。
+    void reinstallRadialHook(const char* reason);
     // 消息窗口定时器回调（日志落盘 / 钩子看门狗）
     void onMessageTimer(UINT_PTR timerId);
     // 插件刷新完成（工作线程 PostMessage 到消息窗口后由主线程调用）
@@ -275,6 +281,7 @@ private:
     bool loggingReady_ = false;
     // 上一次安装/重装手势钩子的时刻（看门狗定期重装用）
     ULONGLONG lastGestureInstallTick_ = 0;
+    ULONGLONG lastRadialInstallTick_ = 0;
 
     core::ApplicationConfig config_;
     core::ItemsDocument document_;

@@ -292,6 +292,7 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
     if (message == taskbarCreatedMessageId()) {
         if (self != nullptr) {
             self->reinstallGestureHotkey("Explorer 重启（TaskbarCreated）");
+            self->reinstallRadialHook("Explorer 重启（TaskbarCreated）");
         }
         return 0;
     }
@@ -668,6 +669,7 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     if (radialConfig_.trigger.enabled) {
         if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
             infrastructure::applog::info("轮盘菜单钩子已安装");
+            lastRadialInstallTick_ = GetTickCount64();
         } else {
             infrastructure::applog::error("轮盘菜单钩子安装失败");
         }
@@ -809,9 +811,26 @@ void Application::onPluginDataReady() {
 }
 
 void Application::onHookWatchdog() {
+    if (messageWindow_ == nullptr) {
+        return;
+    }
+
+    // 轮盘钩子先检查：它和手势钩子是两条独立的钩子链，一边挂了不影响
+    // 另一边，所以不能因为「没配手势」就整段跳过。
+    if (radialConfig_.trigger.enabled) {
+        const bool menuVisible = radialWindow_ && radialWindow_->isVisible();
+        if (!radialHook_.isInstalled()) {
+            infrastructure::applog::error("看门狗：轮盘钩子丢失，立即重装");
+            reinstallRadialHook("看门狗（钩子丢失）");
+        } else if (GetTickCount64() - lastRadialInstallTick_ >=
+                       kForceReinstallIntervalMs &&
+                   !menuVisible) {
+            reinstallRadialHook("看门狗（定期重装）");
+        }
+    }
+
     const core::HotkeyConfig& config = config_.activation.hotkey;
-    if (config.gesture == core::HotkeyGesture::None ||
-        messageWindow_ == nullptr) {
+    if (config.gesture == core::HotkeyGesture::None) {
         return;
     }
     if (!gestureHotkey_.isInstalled()) {
@@ -828,9 +847,29 @@ void Application::onHookWatchdog() {
     }
 }
 
+void Application::reinstallRadialHook(const char* reason) {
+    if (!radialConfig_.trigger.enabled || messageWindow_ == nullptr) {
+        return;
+    }
+    // 轮盘正显示时别动钩子：install 内部先 uninstall，状态机会被重置，
+    // 用户手里正按着的那次拖动就断了。等下一次看门狗或事件再收尾。
+    if (radialWindow_ && radialWindow_->isVisible()) {
+        return;
+    }
+    infrastructure::applog::info(std::string("重装轮盘钩子（") +
+                                 (reason != nullptr ? reason : "?") + "）");
+    radialHook_.uninstall();
+    if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
+        lastRadialInstallTick_ = GetTickCount64();
+    } else {
+        infrastructure::applog::error("重装轮盘钩子失败（下次看门狗再试）");
+    }
+}
+
 void Application::onPowerResume() {
     infrastructure::applog::info("系统从休眠/睡眠恢复");
     reinstallGestureHotkey("休眠恢复");
+    reinstallRadialHook("休眠恢复");
 }
 
 bool Application::initializeConfig() {
@@ -2279,9 +2318,11 @@ void Application::openSettings() {
     if (result.radial.has_value()) {
         radialConfig_ = *result.radial;
         radialHook_.uninstall();
+        lastRadialInstallTick_ = 0;
         if (radialConfig_.trigger.enabled && messageWindow_ != nullptr) {
             if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
                 infrastructure::applog::info("设置变更：轮盘触发方式已重装钩子");
+                lastRadialInstallTick_ = GetTickCount64();
             } else {
                 infrastructure::applog::error("设置变更：轮盘钩子重装失败");
             }
