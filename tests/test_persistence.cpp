@@ -13,8 +13,13 @@
 #include "infrastructure/json/json_parser.h"
 #include "infrastructure/json/json_writer.h"
 #include "infrastructure/json/radial_store.h"
+#include "infrastructure/radial_plugin_store.h"
+
+#include <Windows.h>
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace ktile;
@@ -715,6 +720,127 @@ void testRadialSchemaVersionStamped() {
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 160);
 }
 
+// ---------------------------------------------------------------- 轮盘插件扫描
+//
+// 这一段真的碰磁盘：接口语义（相对图标路径在加载期变绝对、坏插件只跳过自己、
+// 没有 radial.json 的目录不算插件）没法用纯字符串测出来。
+void writeTextFile(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream stream(path, std::ios::binary);
+    stream << text;
+}
+
+void testRadialPluginStoreDiscovery() {
+    std::error_code error;
+    wchar_t tempBuffer[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempBuffer);
+    const std::filesystem::path root =
+        std::filesystem::path(tempBuffer) / L"ktile_slugin_test";
+    std::filesystem::remove_all(root, error);
+
+    std::filesystem::create_directories(root / L"editor" / L"icons", error);
+    std::filesystem::create_directories(root / L"broken", error);
+    // 只有图标目录、没有 radial.json：必须被忽略而不是当成坏插件报错
+    std::filesystem::create_directories(root / L"empty-dir" / L"icons", error);
+
+    writeTextFile(root / L"editor" / L"radial.json",
+                  "{\"schemaVersion\": 1, \"name\": \"Editor\","
+                  " \"processes\": [\"editor.exe\"], \"priority\": 2,"
+                  " \"menu\": {\"name\": \"m\", \"sectorCount\": 4,"
+                  " \"actions\": ["
+                  "  {\"type\": \"shortcut\", \"name\": \"copy\","
+                  "   \"modifiers\": [\"control\"], \"key\": \"C\","
+                  "   \"icon\": \"icons/copy.svg\"},"
+                  "  {\"type\": \"shortcut\", \"name\": \"save\","
+                  "   \"icon\": \"C:/absolute/save.svg\"},"
+                  "  {}, {} ]}}");
+    writeTextFile(root / L"broken" / L"radial.json",
+                  "{\"schemaVersion\": 1, \"name\": \"Broken\","
+                  " \"processes\": [], \"menu\": {\"name\": \"m\","
+                  " \"sectorCount\": 4, \"actions\": [{}, {}, {}, {}]}}");
+
+    RadialPluginStore store;
+    store.discover(root.wstring());
+    const auto& plugins = store.plugins();
+    CHECK_EQ(static_cast<long long>(plugins.size()), 2);
+
+    // 目录名即 id；带不带 radial.json 决定它算不算插件
+    bool sawEditor = false;
+    bool sawBroken = false;
+    for (const auto& plugin : plugins) {
+        if (plugin.id == "editor") {
+            sawEditor = true;
+            CHECK(plugin.valid);
+            CHECK(plugin.name == "Editor");
+            CHECK_EQ(static_cast<long long>(plugin.priority), 2);
+            CHECK_EQ(static_cast<long long>(plugin.processes.size()), 1);
+            CHECK(!plugin.directory.empty());
+            CHECK_EQ(static_cast<long long>(plugin.menu.sectorCount), 4);
+            CHECK_EQ(static_cast<long long>(plugin.menu.actions.size()), 4);
+
+            // 相对图标 → 加载期就解析成绝对路径（相对插件目录）
+            const auto& first = plugin.menu.actions[0];
+            CHECK(first.icon.has_value());
+            if (first.icon.has_value()) {
+                const std::filesystem::path iconPath(*first.icon);
+                CHECK(iconPath.is_absolute());
+                CHECK(iconPath.filename() == L"copy.svg");
+                CHECK(iconPath.parent_path().filename() == L"icons");
+            }
+            // 绝对路径原样保留
+            const auto& second = plugin.menu.actions[1];
+            CHECK(second.icon.has_value());
+            if (second.icon.has_value()) {
+                CHECK(second.icon->find("\\absolute\\save.svg") !=
+                          std::string::npos ||
+                      second.icon->find("/absolute/save.svg") !=
+                          std::string::npos);
+            }
+            // 快捷键动作的修饰键解析成枚举（"control" 不能掉成 Alt）
+            CHECK_EQ(static_cast<long long>(first.modifiers.size()), 1);
+            if (!first.modifiers.empty()) {
+                CHECK(first.modifiers[0] == core::HotkeyModifier::Control);
+            }
+        } else if (plugin.id == "broken") {
+            sawBroken = true;
+            CHECK(!plugin.valid);
+            CHECK(!plugin.error.empty());
+        }
+    }
+    CHECK(sawEditor);
+    CHECK(sawBroken);
+
+    // 目录不存在：空结果，不是错误
+    RadialPluginStore missing;
+    missing.discover((root / L"no-such-dir").wstring());
+    CHECK_EQ(static_cast<long long>(missing.plugins().size()), 0);
+
+    std::filesystem::remove_all(root, error);
+}
+
+// schemaVersion 比本程序新：整份不加载（字段语义可能已经变了）
+void testRadialPluginRejectsFutureSchema() {
+    std::error_code error;
+    wchar_t tempBuffer[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempBuffer);
+    const std::filesystem::path root =
+        std::filesystem::path(tempBuffer) / L"ktile_slugin_future";
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / L"future", error);
+    writeTextFile(root / L"future" / L"radial.json",
+                  "{\"schemaVersion\": 99, \"name\": \"Future\","
+                  " \"processes\": [\"future.exe\"], \"menu\": {\"name\": \"m\","
+                  " \"sectorCount\": 4, \"actions\": [{}, {}, {}, {}]}}");
+
+    RadialPluginStore store;
+    store.discover(root.wstring());
+    CHECK_EQ(static_cast<long long>(store.plugins().size()), 1);
+    if (!store.plugins().empty()) {
+        CHECK(!store.plugins()[0].valid);
+        CHECK(!store.plugins()[0].error.empty());
+    }
+    std::filesystem::remove_all(root, error);
+}
+
 }  // namespace
 
 int wmain() {
@@ -749,6 +875,8 @@ int wmain() {
     testRadialSuppressionFilteredOnLoad();
     testRadialLegacyMenusArrayMigrated();
     testRadialSchemaVersionStamped();
+    testRadialPluginStoreDiscovery();
+    testRadialPluginRejectsFutureSchema();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);
     if (g_failures == 0) {

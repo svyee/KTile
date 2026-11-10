@@ -5,6 +5,7 @@
 #include "core/builtin_items.h"
 #include "core/lucide_icons.h"
 #include "platform/win32/icon_loader.h"
+#include "platform/win32/icon_store.h"   // isDecodableImageFile
 #include "platform/win32/svg_path.h"
 
 #include <Windows.h>
@@ -12,6 +13,9 @@
 #include <dwrite.h>
 
 #include <cmath>
+#include <cwctype>
+#include <filesystem>
+#include <string>
 
 namespace ktile {
 namespace ui {
@@ -32,6 +36,22 @@ float easeOutCubic(float t) {
     if (t > 1.0F) t = 1.0F;
     const float inv = 1.0F - t;
     return 1.0F - inv * inv * inv;
+}
+
+// 扩展名比较（大小写不敏感）。清单里写 ".SVG" 也得认。
+bool hasExtensionCi(const std::filesystem::path& path, const wchar_t* ext) {
+    const std::wstring actual = path.extension().wstring();
+    const std::wstring expected(ext);
+    if (actual.size() != expected.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        if (std::towlower(static_cast<wint_t>(actual[i])) !=
+            std::towlower(static_cast<wint_t>(expected[i]))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------- 快捷动作图标
@@ -293,25 +313,39 @@ bool RadialMenuWindow::isVisible() const noexcept {
 // ================================================================ 图标
 
 ID2D1Bitmap* RadialMenuWindow::iconForAction(const core::RadialAction& action) {
-    // 只有"外部资源类"动作有图标；Shortcut / Builtin 没有
-    if (action.type == core::RadialActionType::Shortcut ||
-        action.type == core::RadialActionType::Builtin) {
+    const bool vectorOnly = (action.type == core::RadialActionType::Shortcut ||
+                             action.type == core::RadialActionType::Builtin);
+    const std::string custom = action.icon.value_or(std::string());
+
+    // 快捷键 / 内置命令本身没有可提取的文件图标，但插件可以塞一张位图给它
+    // （图标外置是插件的核心诉求，插件里几乎全是快捷键动作 —— 这里要是
+    //   一律返回 nullptr，插件作者放的图标就全部白发）。
+    // 只认可解码位图：SVG 走 customGlyphForAction，让 loadIconFromFile 去
+    // 处理 .svg 只会拿到「图片文件」的通用空白页图标。
+    if (vectorOnly) {
+        if (custom.empty()) return nullptr;
+        if (!platform::win32::isDecodableImageFile(base::utf8ToWideLossy(custom))) {
+            return nullptr;
+        }
+    } else if (action.target.empty()) {
         return nullptr;
     }
-    if (action.target.empty()) return nullptr;
 
-    const std::string custom = action.icon.value_or(std::string());
     const std::string key = action.target + "|" + custom;
     auto it = iconCache_.find(key);
     if (it != iconCache_.end()) {
         return it->second.get();
     }
 
-    platform::win32::UniqueHIcon icon = platform::win32::loadItemIcon(
-        action.target, custom,
-        action.type == core::RadialActionType::Folder,
-        action.type == core::RadialActionType::Url,
-        platform::win32::IconSizeHint::Small);
+    platform::win32::UniqueHIcon icon =
+        vectorOnly
+            ? platform::win32::loadIconFromFile(base::utf8ToWideLossy(custom),
+                                                platform::win32::IconSizeHint::Small)
+            : platform::win32::loadItemIcon(
+                  action.target, custom,
+                  action.type == core::RadialActionType::Folder,
+                  action.type == core::RadialActionType::Url,
+                  platform::win32::IconSizeHint::Small);
 
     if (!icon.valid() || !wicFactory_ || !renderTarget_) {
         iconCache_.emplace(key, platform::win32::ComPtr<ID2D1Bitmap>());
@@ -353,6 +387,56 @@ ID2D1Bitmap* RadialMenuWindow::iconForAction(const core::RadialAction& action) {
 // 快捷键（Ctrl+C 等）与内置命令（ktile:lock 等）没有可提取的文件图标，
 // 但都可以映射到 Lucide 形状。几何按 24x24 基准建一次，之后靠
 // SetTransform 平移到卡片位置 —— 旋转/缩放动画不会让图标模糊。
+
+const platform::win32::SvgGlyph* RadialMenuWindow::customGlyphForAction(
+    const core::RadialAction& action) {
+    if (!action.icon.has_value() || action.icon->empty() || !d2dFactory_.valid()) {
+        return nullptr;
+    }
+
+    std::filesystem::path candidate(base::utf8ToWideLossy(*action.icon));
+    // 清单可以只写 "icons/copy" 而实际文件是 copy.svg（和磁贴插件同一约定）
+    if (!candidate.has_extension()) {
+        candidate += L".svg";
+    }
+    if (!hasExtensionCi(candidate, L".svg")) {
+        return nullptr;  // 位图交给 iconForAction
+    }
+
+    std::error_code error;
+    const auto stamp = std::filesystem::last_write_time(candidate, error);
+    if (error) {
+        return nullptr;  // 文件不存在
+    }
+    const std::wstring key =
+        candidate.wstring() + L"|" +
+        std::to_wstring(static_cast<long long>(stamp.time_since_epoch().count()));
+
+    auto it = customGlyphCache_.find(key);
+    if (it == customGlyphCache_.end()) {
+        std::wstring markup;
+        if (!platform::win32::readSvgMarkupFile(candidate.wstring(), &markup)) {
+            return nullptr;
+        }
+        platform::win32::SvgGlyph glyph;
+        // 与内置 Lucide 图标同一约定：24x24 用户单位。放不进 24 框的 SVG
+        // （比如自己画的 512 viewBox）会得到一个大到看不见的图形，插件文档
+        // 里把这条写清楚了 —— 不做自动缩放，因为无法从标记里可靠取到 viewBox。
+        const float scale = kIconSizeDip / 24.0F;
+        if (!platform::win32::buildSvgGlyph(d2dFactory_.get(), markup.c_str(),
+                                            scale, 0.0F, 0.0F, &glyph)) {
+            return nullptr;
+        }
+        if (glyph.strokeGeometry.get() == nullptr &&
+            glyph.fillGeometry.get() == nullptr &&
+            glyph.colorLayers.empty()) {
+            return nullptr;
+        }
+        it = customGlyphCache_.emplace(key, std::move(glyph)).first;
+    }
+    return &it->second;
+}
+
 const platform::win32::SvgGlyph* RadialMenuWindow::glyphForAction(
     const core::RadialAction& action) {
     if (!d2dFactory_ || !renderTarget_) return nullptr;
@@ -478,6 +562,8 @@ bool RadialMenuWindow::createDeviceResources() {
             D2D1::ColorF(0.94F, 0.95F, 0.96F, 0.92F), hubBrush_.put());
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.80F, 0.82F, 0.86F, 0.85F), hubBorderBrush_.put());
+        renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0.12F, 0.16F, 0.22F, 1.0F), glyphAccentBrush_.put());
         glyphStrokeStyle_ =
             platform::win32::createRoundStrokeStyle(d2dFactory_.get());
     }
@@ -488,6 +574,7 @@ bool RadialMenuWindow::createDeviceResources() {
 void RadialMenuWindow::discardDeviceResources() {
     iconCache_.clear();
     glyphCache_.clear();
+    customGlyphCache_.clear();
     cellBrush_.reset();
     emptyCellBrush_.reset();
     emptyOutlineBrush_.reset();
@@ -498,6 +585,7 @@ void RadialMenuWindow::discardDeviceResources() {
     accentTextBrush_.reset();
     hubBrush_.reset();
     hubBorderBrush_.reset();
+    glyphAccentBrush_.reset();
     glyphStrokeStyle_.reset();
     labelFormat_.reset();
     wicFactory_.reset();
@@ -581,9 +669,14 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
     if (!empty && index < menu_.actions.size()) {
         const core::RadialAction& action = menu_.actions[index];
-        ID2D1Bitmap* icon = iconForAction(action);
-        const platform::win32::SvgGlyph* glyph =
-            (icon == nullptr) ? glyphForAction(action) : nullptr;
+        // 图标解析顺序：动作自带的 SVG（插件目录里的）→ 可提取的位图/文件图标
+        // → 内置 Lucide 符号。自带的排第一，是因为插件作者放图标就是要它生效。
+        const platform::win32::SvgGlyph* glyph = customGlyphForAction(action);
+        ID2D1Bitmap* icon =
+            (glyph != nullptr) ? nullptr : iconForAction(action);
+        if (glyph == nullptr && icon == nullptr) {
+            glyph = glyphForAction(action);
+        }
         const bool hasIcon = icon != nullptr || glyph != nullptr;
         ID2D1SolidColorBrush* iconBrush =
             highlighted ? accentTextBrush_.get() : textBrush_.get();
@@ -631,6 +724,26 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
                 if (glyph->fillGeometry) {
                     renderTarget_->FillGeometry(glyph->fillGeometry.get(),
                                                 iconBrush);
+                }
+                // 显式带颜色的图层（插件 SVG 里写 stroke="#e5484d" 之类）：
+                // 保留它自己的 RGB，只继承当前图标的透明度 —— 高亮反色时
+                // 彩色图标不该忽明忽暗地跳成别的颜色。
+                if (!glyph->colorLayers.empty() && glyphAccentBrush_.valid()) {
+                    const D2D1_COLOR_F base = iconBrush->GetColor();
+                    for (const platform::win32::SvgColorLayer& layer :
+                         glyph->colorLayers) {
+                        if (!layer.geometry || layer.color == 0) continue;
+                        const std::uint32_t rgb = layer.color & 0x00FFFFFFU;
+                        const float alpha =
+                            static_cast<float>((layer.color >> 24) & 0xFFU) /
+                            255.0F * base.a;
+                        glyphAccentBrush_->SetColor(D2D1::ColorF(
+                            static_cast<std::uint32_t>(rgb), alpha));
+                        renderTarget_->DrawGeometry(layer.geometry.get(),
+                                                    glyphAccentBrush_.get(),
+                                                    kGlyphStrokeDip,
+                                                    glyphStrokeStyle_.get());
+                    }
                 }
                 renderTarget_->SetTransform(base);
             }

@@ -11,6 +11,7 @@
 #include "infrastructure/filesystem/portable_paths.h"
 #include "infrastructure/json/config_store.h"
 #include "infrastructure/json/radial_store.h"
+#include "infrastructure/radial_plugin_store.h"
 #include "platform/win32/drop_target.h"
 #include "platform/win32/global_hotkey.h"
 #include "platform/win32/radial_mouse_hook.h"
@@ -104,12 +105,17 @@ struct DebugOptions {
     bool radial = false;
     int radialHoverX = 0;
     int radialHoverY = 0;
+    // --debug-radial-plugin=<id>：配合 --debug-radial，改渲染**插件**的菜单
+    // 而不是用户的通用轮盘。没有这个开关，插件自带的图标与扇区布局就只能
+    // 在真实前台应用里肉眼看，自动化无从验证。
+    std::string radialPluginId;
 
     // 是否有任何开关被打开
     bool any() const noexcept {
         return shot || settings || settingsKeepAlive || about || editor ||
                newItem || !search.empty() || !addPaths.empty() ||
-               dragSrcX >= 0 || opacityPercent > 0 || radial;
+               dragSrcX >= 0 || opacityPercent > 0 || radial ||
+               !radialPluginId.empty();
     }
 };
 
@@ -181,6 +187,12 @@ private:
     void loadRadialConfig();
     // 保存轮盘菜单配置
     void persistRadialConfig();
+    // 扫描 <exe>/slugin/*/radial.json（按应用轮盘插件）
+    void loadRadialPlugins();
+    // 取某个轮盘插件的目录绝对路径；id 不存在时退回 slugin 根目录
+    std::wstring radialPluginDirectoryOf(const std::string& id) const;
+    // 调试用：取某个插件提供的菜单；找不到时退回通用轮盘
+    const core::RadialMenu& debugRadialPluginMenu(const std::string& id);
     // 首次运行或数据缺失时植入示例磁贴（便于用户直观看到界面）
     void seedSampleDocument();
     // 把当前状态写回磁盘
@@ -291,6 +303,9 @@ private:
     // ---- 轮盘菜单 ----
     core::RadialConfig radialConfig_;
     infrastructure::RadialStore radialStore_;
+    // slugin/<id>/radial.json 提供的按应用轮盘。只读，启动时（以及用户点
+    // 「重新扫描」时）加载一次；插件里的 menu 地址在下次扫描前保持稳定。
+    infrastructure::RadialPluginStore radialPluginStore_;
     platform::win32::RadialMouseHook radialHook_;
     std::unique_ptr<ui::RadialMenuWindow> radialWindow_;
     // 轮盘当前显示的方案（显示期间保持引用，避免悬空）

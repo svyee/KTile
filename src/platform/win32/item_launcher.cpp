@@ -160,6 +160,52 @@ LaunchResult revealItemInExplorer(const core::LaunchItem& item) {
                        lastErrorMessage(static_cast<HRESULT>(code))};
 }
 
+LaunchResult openPathWithDefaultProgram(const std::wstring& path) {
+    if (path.empty()) {
+        return {false, L"路径为空。"};
+    }
+
+    HINSTANCE instance = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
+                                       nullptr, SW_SHOWNORMAL);
+    intptr_t code = reinterpret_cast<intptr_t>(instance);
+    if (code > 32) {
+        return {true, std::wstring()};
+    }
+
+    // 没有文件关联：记事本兜底。
+    //
+    // 只在「没有关联」这类错误上兜底，其它失败（文件被删、权限不足）记事本
+    // 同样打不开，硬试一次只会把原始错误码盖成一个更含糊的报错。
+    if (code == SE_ERR_NOASSOC || code == SE_ERR_ASSOCINCOMPLETE ||
+        code == SE_ERR_DDEFAIL) {
+        const std::wstring quoted = L"\"" + path + L"\"";
+        // notepad.exe 交给 PATH 解析：System32 一定在 PATH 里，
+        // 而写死 C:\Windows 在系统装在别的盘符时会失效。
+        instance = ShellExecuteW(nullptr, L"open", L"notepad.exe",
+                                 quoted.c_str(), nullptr, SW_SHOWNORMAL);
+        code = reinterpret_cast<intptr_t>(instance);
+        if (code > 32) {
+            return {true, std::wstring()};
+        }
+    }
+    return {false, L"无法打开文件：\n" +
+                       lastErrorMessage(static_cast<HRESULT>(code))};
+}
+
+LaunchResult openFolderInExplorer(const std::wstring& path) {
+    if (path.empty()) {
+        return {false, L"路径为空。"};
+    }
+    const HINSTANCE instance = ShellExecuteW(nullptr, L"open", path.c_str(),
+                                             nullptr, nullptr, SW_SHOWNORMAL);
+    const intptr_t code = reinterpret_cast<intptr_t>(instance);
+    if (code > 32) {
+        return {true, std::wstring()};
+    }
+    return {false, L"无法打开目录：\n" +
+                       lastErrorMessage(static_cast<HRESULT>(code))};
+}
+
 }  // namespace win32
 }  // namespace platform
 }  // namespace ktile

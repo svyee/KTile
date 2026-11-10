@@ -108,18 +108,12 @@ struct RadialAction {
     std::string key;                           // 仅 Shortcut 类型有效（如 "C", "F4"）
 };
 
-// 一个轮盘方案
+// 一份轮盘（用户配置里只有一份通用轮盘；插件里每份对应一个目录）
 struct RadialMenu {
     std::string id;
     std::string name;
     std::uint8_t sectorCount = 8;              // 4 / 6 / 8
     std::vector<RadialAction> actions;         // 固定 sectorCount 个，空槽位留空 action
-};
-
-// Per-App 配置：匹配前台进程名 → 使用哪个轮盘
-struct RadialProfile {
-    std::string processPattern;                // 进程名，如 "chrome.exe"；空串 = 全局默认
-    std::string menuId;
 };
 
 // 触发方式
@@ -143,14 +137,20 @@ struct RadialTriggerConfig {
     RadialTriggerModifier modifier = RadialTriggerModifier::Ctrl;  // 默认 Ctrl+右键
     std::uint16_t activationThresholdPx = 8;   // 拖动超过此距离才呼出轮盘
     std::uint16_t cancelRadiusPx = 160;        // 拖出此半径外松手 = 取消（外甩取消）
+
+    // 抑制键：按住其中任意一个时轮盘不呼出、鼠标事件原样放行
+    std::vector<HotkeyModifier> suppressWhileHeld;
 };
 
 // 轮盘功能的总配置
+//
+// 只有一份「通用轮盘」：按应用差异化交给 slugin 插件目录（见 4.6），
+// 用户配置里不再有方案列表与按应用白名单。
 struct RadialConfig {
-    std::uint32_t schemaVersion = kCurrentSchemaVersion;   // 当前为 2
+    std::uint32_t schemaVersion = kRadialSchemaVersion;   // 当前为 3
     RadialTriggerConfig trigger;
-    std::vector<RadialMenu> menus;
-    std::vector<RadialProfile> profiles;
+    RadialMenu menu;
+    std::vector<std::string> blacklist;   // 命中即不弹轮盘（只比进程名）
 };
 
 }  // namespace ktile::core
@@ -158,7 +158,10 @@ struct RadialConfig {
 
 ### 3.2 持久化
 
-- 独立文件 `data/radial.json`，带 `schemaVersion`（当前为 **2**）。
+- 独立文件 `data/radial.json`，带 `schemaVersion`（当前为 **3**）。
+- 版本线独立：用 `core::kRadialSchemaVersion` 而不是 `data_model.h` 的
+  `kCurrentSchemaVersion`——两者结构毫无关系，共用常量会让给轮盘加字段时
+  连带把磁贴配置的版本号推上去。
 - 复用 `infrastructure/json` 的 `JsonParser` / `JsonWriter`。
 - 损坏时把原文件改名备份为 `.corrupt` 并返回默认值（与 `config.json` 同一套
   容错规则）。
@@ -167,17 +170,25 @@ struct RadialConfig {
   越界值在加载时夹取，老文件本来就能读。读成功后统一把 `schemaVersion` 盖成
   当前值——否则下次保存又会把旧值写回去，以后真要做破坏性变更时就没有判断
   依据了。
-- 加载时的夹取规则（防止手改的离谱值流进 UI 和窗口）：
+- 加载时的清洗与夹取规则（防止手改的离谱值流进 UI 和窗口）：
   - `activationThresholdPx` < 1 → 1（0 等于「按下即呼出」，会把触发键彻底吃掉）
   - `cancelRadiusPx` 夹到 `[kMinCancelRadiusDip, kMaxCancelRadiusDip]`（142~600 DIP）
   - `sectorCount` 夹到 4~8，`actions` 补齐到 `sectorCount` 个
   - `modifier` 键缺失 → 回落到默认的 `Ctrl`（不是 `None`：`None` 是纯按键拖动，
     会把触发键整个吞掉，手写配置忘了这一项的用户多半不想这样）
+  - `suppressWhileHeld` 里认不出的键名跳过、重复项去重、与触发修饰键撞车的
+    剔除（撞车等于永远不触发）；剔除单项而不是整份打回默认——用户的扇区配置
+    比抑制键值钱
+  - `blacklist` 逐项削首尾空白、去掉空项、按大小写不敏感去重
 
-**默认数据**：首次运行时写入一个 8 扇区的全局菜单（方案 id `default`，扇区
-0 / 2 / 4 / 6 预填复制、粘贴、剪切、撤销，其余留空），外加一条 `processPattern`
-为空的全局 profile。空槽位只画一层很淡的填充 + 细轮廓（不画阴影），让环的
-骨架看得见但不抢戏。
+**版本迁移（2 → 3）**：老文件的 `menus` 数组里可能有多份方案，优先取 `id` 为
+`default` 的那份当通用轮盘；`profiles`（按应用白名单）**整段丢弃**——白名单
+的语义是「这些应用用别的轮盘」，转成黑名单会变成「这些应用不弹轮盘」，那是
+反的。按应用差异化改由 `slugin` 插件承担。
+
+**默认数据**：首次运行时写入一个 8 扇区的通用菜单（`id` = `default`，扇区
+0 / 2 / 4 / 6 预填复制、粘贴、剪切、撤销，其余留空），黑名单为空。空槽位只画
+一层很淡的填充 + 细轮廓（不画阴影），让环的骨架看得见但不抢戏。
 
 **单位约定**：`activationThresholdPx` 是**物理像素**（钩子里直接量鼠标位移），
 `cancelRadiusPx` 是 **DIP**（花瓣布局本身就是 DIP；按物理像素算的话，150% 缩放
@@ -195,16 +206,18 @@ struct RadialConfig {
 |---|---|---|
 | core | `radial_menu.h` | 数据模型 + `sectorFromAngle` / `hitTestSector` 声明（纯函数，可单测） |
 | core | `radial_menu.cpp` | 角度 → 扇区索引、命中测试、配置校验等纯逻辑 |
+| core | `radial_plugin.h` / `.cpp` | 轮盘插件模型：进程匹配（priority + id 字典序）、插件校验 |
+| infrastructure | `radial_plugin_store.h` / `.cpp` | 扫描 `slugin/<id>/radial.json`、解析、图标路径解析成绝对路径 |
 | platform/win32 | `foreground_process.h` / `.cpp` | 获取前台窗口的进程名 |
 | platform/win32 | `radial_mouse_hook.h` / `.cpp` | `WH_MOUSE_LL` 钩子 + 手势状态机 |
 | platform/win32 | `key_injector.h` / `.cpp` | `SendInput` 注入任意修饰键+主键组合 |
 | infrastructure/json | `radial_store.h` / `.cpp` | `radial.json` 的读写、越界夹取、损坏备份 |
 | ui | `radial_menu_window.h` / `.cpp` | 轮盘窗口（D2D 花瓣绘制 + 命中测试 + 出现动画） |
-| ui | `radial_editor_dialog.h` / `.cpp` | 轮盘编辑器（方案管理 / 扇区动作 / 按应用映射） |
-| ui | `settings_window.h` / `.cpp` | 设置第 4 页「轮盘」：启用、触发方式、阈值、取消半径 |
-| app | `application.h` / `.cpp` | 组装：钩子 → 匹配 profile → 显示窗口 → 分发动作 |
-| tests | `test_radial_menu.cpp` | core 层几何与校验单测（18 个用例） |
-| tests | `test_persistence.cpp` | 轮盘配置往返、空槽位不错位、越界夹取、版本号盖章 |
+| ui | `radial_editor_dialog.h` / `.cpp` | 轮盘编辑器（扇区动作 + 进程黑名单两页） |
+| ui | `settings_window.h` / `.cpp` | 设置第 4 页「轮盘」：启用、触发方式、阈值、取消半径、抑制键；第 5 页「轮盘插件」：只读清单 + 打开 JSON / 目录 + 重新扫描 |
+| app | `application.h` / `.cpp` | 组装：钩子 → 匹配插件 → 通用轮盘 → 显示窗口 → 分发动作 |
+| tests | `test_radial_menu.cpp` | core 层几何、校验、黑名单、抑制键、插件匹配单测 |
+| tests | `test_persistence.cpp` | 轮盘配置往返、空槽位不错位、越界夹取、版本号盖章、插件扫描与图标路径 |
 
 ### 4.2 各模块设计要点
 
@@ -251,7 +264,10 @@ std::wstring foregroundProcessName();
 - `Application` 持有 `RadialConfig`、`RadialMouseHook`、`RadialMenuWindow`。
 - 钩子回调 `PostMessage` 到消息窗口 → `Application::onRadialTrigger(...)`：
   1. 调 `foregroundProcessName()` 取前台进程名。
-  2. 在 `RadialConfig::profiles` 中匹配（精确匹配进程名，无匹配用全局默认）。
+  2. 先在 `slugin` 插件里按前台进程名匹配（大小写不敏感，多命中看 priority，
+     并列按 id 字典序），没命中才用通用轮盘 `RadialConfig::menu`。
+     插件优先是有意的：插件是「这个应用该有哪些动作」的专门答案，通用轮盘是
+     「所有应用都能凑合用」的兜底；反过来插件永远轮不到。
   3. 找到对应 `RadialMenu`，调用 `RadialMenuWindow::show(menu, cursorPos)`。
 - 扇区触发 → `Application::onRadialAction(action)`：按 `RadialActionType` 分发到
   `item_launcher` / `system_actions` / `key_injector`。
@@ -272,13 +288,13 @@ std::wstring foregroundProcessName();
 | 外观 | 4~8 个扇形（`ID2D1PathGeometry` + `AddArc` 拼圆盘） | **花瓣环**：8 个 50×40 DIP 圆角卡片挂在半径 97 的圆上，中心留空圆 | 扇形切片的文字要跟着旋转才放得下，长中文名会歪；卡片式标签可正向排布，且空槽位的"骨架"更清楚 |
 | 扇区数 | 4~8（连续可选） | **4 / 6 / 8** 三档 | 5 / 7 扇区的边界角是无限小数，命中测试的边界判定容易在两个扇区之间抖 |
 | 扇区命中 | 极坐标角度 + 半径 | 同（`core::hitTestSector`），但外半径来自 `cancelRadiusPx`（DIP），下限夹到 142 | 滑杆原来不生效；单位必须是 DIP，见 3.2 |
-| 设置入口 | 设置页内联「方案列表 + 扇区编辑器 + Per-App」 | 设置页只放触发配置；方案 / 扇区 / 按应用放进**独立对话框**（`radial_editor_dialog`） | 700px 单列设置表单塞不下列表 + 表单 + 映射三重编辑，纵向会溢出 |
-| 结果交接 | `SettingsResult` 增加若干轮盘字段 | 交**整份 `RadialConfig`** | 方案 / 扇区 / 规则都是嵌套结构，字段级交接表达不了"删除" |
+| 设置入口 | 设置页内联「方案列表 + 扇区编辑器 + Per-App」 | 设置页只放触发配置；扇区动作与黑名单放进**独立对话框**（`radial_editor_dialog`）；按应用改由第 5 页「轮盘插件」只读展示 `slugin/` 目录 | 700px 单列设置表单塞不下列表 + 表单 + 映射三重编辑，纵向会溢出 |
+| 结果交接 | `SettingsResult` 增加若干轮盘字段 | 交**整份 `RadialConfig`** | 扇区动作是数组，字段级交接表达不了"清空某个扇区" |
 | 抬起兜底 | 依赖钩子可靠 | 轮盘可见期间挂 **250ms 看门狗**，按三种判据收起：钩子已失效 / 钩子回到 Idle 但窗口还亮着 / 可见超过 10 秒 | 低级钩子回调会被系统静默跳过，而轮盘窗口 `WS_EX_NOACTIVATE` 没有焦点、收不到 Esc，一旦漏掉抬起就永久挂屏。**不能用 `GetAsyncKeyState` 问「键还按着吗」**：我们吞掉了按下事件，鼠标键的异步状态不会更新，整个拖动期间它都回答「已松开」（见下方 4.5） |
 | 侧键区分 | "捕获侧键的按下事件" | 按 `HIWORD(MSLLHOOKSTRUCT.mouseData)` 判定 XBUTTON1 / XBUTTON2，抬起同样校验 | `WM_XBUTTON*` 把两个侧键并成同一消息，只比消息类型会让侧键 1 也触发侧键 2 的轮盘 |
 | 矢量图标 | 未提及 | 快捷键（复制 / 粘贴 / 剪切 / 撤销 / 保存）与内置命令走内嵌 Lucide 形状，按**弧长加权质心**居中 | 从 exe 提不到这类动作的图标；按 24×24 外框几何中心摆放时，剪刀、撤销箭头这类不对称图形看起来偏 |
 | 缩放 | 未提及 | 整体比初稿小约 10%（窗口半径 158 → 142 DIP） | 142 半径下 8 个花瓣之间留约 10 DIP 缝隙，看出是"一圈"而不是一团 |
-| schemaVersion | 初始为 1 | 当前为 **2**，且读成功即盖成当前值，没有迁移函数 | 容错策略（默认值 + 回落 + 夹取）已经能读老文件，再写迁移函数是重复劳动；但版本号必须跟着升，否则以后真做破坏性变更时没有判断依据 |
+| schemaVersion | 初始为 1 | 当前为 **3**（独立版本线 `kRadialSchemaVersion`），读成功即盖成当前值，没有迁移函数 | 容错策略（默认值 + 回落 + 夹取）已经能读老文件，再写迁移函数是重复劳动；但版本号必须跟着升，否则以后真做破坏性变更时没有判断依据 |
 
 ### 4.5 一条硬约束：吞掉事件的钩子问不出物理按键状态
 
@@ -295,6 +311,105 @@ std::wstring foregroundProcessName();
 `GetAsyncKeyState`，答案永远是「松开了」，于是轮盘刚出现就被强制收起，用户
 根本来不及选。这个教训值得记住：**凡是吞事件的钩子，都不要用系统状态查询
 去交叉验证它**。
+
+### 4.6 轮盘插件（`slugin/`）
+
+#### 为什么把「按应用」改成插件
+
+按应用换轮盘本质上是一份「进程名 → 扇区配置」的映射。把它做进设置界面，就等于
+要求主程序认识每个应用该有哪些动作；改成目录 + JSON 之后，加一个应用就是加一个
+目录，不用改代码、不用重新编译、不用发版。
+
+**顺带纠正一个预期**：这不会让 exe 变小多少。内嵌的 Lucide 图标（`lucide_icons.h`）
+只有约 8 KB，1.25 MB 的产物绝大部分是 `/MT` 静态 CRT 与 D2D/DWrite/WIC 胶水代码。
+真正的收益是「扩展不用重新编译」和「改图标不用改代码」。
+
+#### 目录与清单
+
+```
+<exe 同级>/slugin/<id>/radial.json     # 清单，目录名即插件 id
+<exe 同级>/slugin/<id>/icons/*.svg     # 按钮图标，也可 png / ico
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "文件资源管理器",
+  "processes": ["explorer.exe"],
+  "priority": 0,
+  "menu": { "name": "资源管理器", "sectorCount": 8, "actions": [ ... ] }
+}
+```
+
+- `schemaVersion` 比本程序新 → **整份不加载**并给出原因（字段语义可能已经变了，
+  猜着读比不读更糟）。老插件缺字段则走默认值，照常加载。
+- `menu` 与用户配置里的 `menu` 共用同一个解析函数（`parseRadialMenuJson`），
+  字段格式完全一致——少一份定义就少一处走样。
+- `processes` 只写进程名（`explorer.exe`），**不支持通配符**：`*app*.exe` 这种
+  写法误伤面太大，用户很难预估哪个应用会被抢走。
+
+#### 匹配规则
+
+`core::findPluginForProcess(plugins, processName)`：
+
+1. 只考虑 `valid` 的插件，进程名逐项比较（ASCII 大小写不敏感）；
+2. 多个命中时 `priority` 大的赢；
+3. 仍并列则按 id **字典序**取第一个——目录遍历顺序在不同文件系统上不一致，
+   没有这条兜底，同一份配置在两台机器上可能显示不同轮盘。
+
+没有命中返回 `nullptr`，调用方回落到通用轮盘。
+
+#### 图标解析
+
+清单里的 `icon` 相对**插件目录**解析，且在**加载期**就转成绝对路径。
+放在加载期而不是渲染期，是因为渲染层只知道「icon 是个路径」：用户配置的图标
+相对 `data/`、插件的相对插件目录，留相对路径就变成「图标全丢，但没人报错」。
+
+渲染顺序（`RadialMenuWindow::paintCell`）：动作自带的 SVG → 可提取的位图 / 文件
+图标 → 内置 Lucide 符号。自带图标排第一，因为插件作者放图标就是要它生效。
+
+- SVG 沿用磁贴插件的约定：**24×24 用户单位**，可直接用 `path` / `rect` /
+  `circle` / `line` / `polyline` / `polygon`；带 `stroke="#RRGGBB"` 的图层保留
+  自身颜色，只继承当前透明度（高亮反色时不跟着跳色）。
+- 位图（png / ico / jpg…）走 `loadIconFromFile` 的 WIC 解码。快捷键类动作此前
+  一律 `return nullptr`（"没有文件图标"），现在只要给了自定义位图就用它——插件
+  里几乎全是快捷键动作，否则「图标外置」这条诉求等于白提。
+- 缓存键带文件修改时间：换掉插件目录里的 SVG 后下一帧就生效，不必重启。
+
+#### 坏插件只跳过自己
+
+`discover()` 的容错边界：
+
+| 情况 | 处理 |
+|---|---|
+| 目录没有 `radial.json` | 直接忽略（不是插件，例如别人的图标目录） |
+| JSON 语法错 | 该插件 `valid=false`，`error` 写明原因，其余插件照常 |
+| `processes` 为空 / 含空串 | 同上（空串会让「按进程匹配」命中所有人） |
+| `sectorCount` 不在 4~8，或动作数与扇区数不一致 | 同上 |
+| `schemaVersion` 比本程序新 | 同上 |
+
+轮盘是最常用的入口，一个手滑的逗号不该让它整体消失。
+
+#### 设置页为什么是只读
+
+插件形态是「目录 + JSON + 图标」。做成表格编辑器就等于宣布「插件只能在界面里
+配」，那样「加个目录就是加个应用」的意义就没了，还要为它维护一套自定义字段的
+UI。所以第 5 页只做三件事：看清加载了哪些、看清某个为什么被跳过、
+一键用系统默认编辑器打开那份 JSON（无文件关联时记事本兜底）。
+
+#### 怎么验证
+
+`--debug-radial-plugin=<id>` 让 `--debug-radial` 渲染**插件**的菜单而不是通用
+轮盘，导出 `radial-shot.png`。没有这个开关，插件自带图标与扇区布局就只能在前台
+应用里肉眼看，自动化无从验证。
+
+#### 不做的事
+
+- 不做表格编辑器（理由见上）。
+- 不做目录热监听：`ReadDirectoryChangesW` 常驻线程换来的只是「省一次点重新扫描」，
+  与「无输入时全静默」的取舍不符。
+- 不让插件覆盖通用轮盘的触发方式 / 抑制键 / 黑名单：那三项属于「什么时候弹」，
+  与「弹出来是什么」不是一回事，交给插件会让排查问题变成三方对账。
 
 ---
 
@@ -373,20 +488,38 @@ std::wstring foregroundProcessName();
       —— 交整份配置而不是零散字段，因为方案 / 扇区 / 规则都是嵌套结构，
       字段级交接表达不了"删除"
 - [x] 新建 `radial_editor_dialog`（模态子对话框，双页）：
-      - 「扇区动作」页：左侧方案列表（新建 / 删除，方案 id 自动生成）、方案名称、
-        扇区数 4 / 6 / 8、扇区列表（扇区 / 类型 / 名称 / 目标）、右侧动作表单
-        （6 种类型 + 名称 + 修饰键 + 主键 + 目标 + 选择…按钮）
-      - 「按应用」页：规则列表、进程名输入、目标方案下拉、添加 / 更新 / 删除
-- [x] 两条不变量在对话框内部强制执行：`actions.size()` 恒等于 `sectorCount`；
-      每条 `profile.menuId` 必须指向存在的方案（删方案时连带清掉引用它的规则）
+      - 「扇区动作」页：扇区数 4 / 6 / 8、扇区列表（扇区 / 类型 / 名称 / 目标）、
+        右侧动作表单（6 种类型 + 名称 + 修饰键 + 主键 + 目标 + 选择…按钮）
+      - 「黑名单」页（原「按应用」页改造）：进程名输入 + 列表，命中即不弹轮盘。
+        按应用换轮盘的诉求改由 `slugin` 插件承担（见 4.6），界面不再维护方案列表
+- [x] 一条不变量在对话框内部强制执行：`actions.size()` 恒等于 `sectorCount`
+
+> 二次调整：1.2.0 落地时这里是「多方案 + 按应用白名单」，1.2.1 起收敛为
+> 「一份通用轮盘 + 进程黑名单 + slugin 插件」，方案列表与白名单界面随之删除。
+> 效果等价（按应用仍能显示不同轮盘），但配置从「主程序里的映射表」变成
+> 「exe 同级的目录」，加应用不用重新编译。
 - [x] `application.cpp`：设置返回后重装钩子（触发方式可能变了）、落盘、刷新托盘提示
 - [x] `build.ps1`：`Get-AppSources` 加入 `radial_editor_dialog.cpp`
 
+### 阶段 6.5：抑制键 + 黑名单 + slugin 插件（后续需求，1 天）
+
+- [x] `RadialTriggerConfig::suppressWhileHeld`：按住 Ctrl / Shift / Alt / Win
+      时整段放行（抑制键是**键盘**键，没被钩子吞过，`GetAsyncKeyState` 可信——
+      与 4.5 那条硬约束不冲突）
+- [x] 黑名单在**钩子按下时**判：等到窗口显示时再判，按下事件已经被吞掉，
+      原生右键菜单弹不出来，用户会以为「这个应用里右键坏了」
+- [x] 新增 `core/radial_plugin` + `infrastructure/radial_plugin_store`，
+      `Application::onRadialShow` 改成「插件优先 → 通用轮盘兜底」
+- [x] 设置第 5 页「轮盘插件」：只读清单 + 打开 JSON / 目录 + 重新扫描
+- [x] 轮盘扇区支持自带 SVG / 位图图标（含快捷键类动作）
+- [x] `--debug-radial-plugin=<id>`：导出插件轮盘截图，供自动化验证图标与布局
+- [x] 示例插件 `slugin/explorer`
+
 ### 阶段 7：验证（1 天）
 
-- [x] `.\build.ps1`：54 个源文件，0 告警，产物 1252 KB
-- [x] `.\build.ps1 -Tests`：12 个测试全部通过（`test_radial_menu` 18 个几何/校验
-      用例，`test_persistence` 轮盘往返与夹取）
+- [x] `.\build.ps1`：56 个源文件，0 告警
+- [x] `.\build.ps1 -Tests`：12 个测试全部通过（`test_radial_menu` 几何 / 校验 /
+      插件匹配用例，`test_persistence` 224 项检查，含插件扫描与图标路径解析）
 - [x] 绘制验证：`--debug-radial` 导出 PNG + `PrintWindow` 截取，确认花瓣框、图标
       居中、空槽位轮廓、高亮配色
 - [x] 设置链路验证：脚本驱动下拉选择 + 点确定，确认 `radial.json` 里触发键
@@ -437,7 +570,8 @@ std::wstring foregroundProcessName();
 | 低级别钩子被系统静默卸载（超时） | 复用 `GestureHotkey` 的看门狗机制：定期重装 + `TaskbarCreated` 时重装 |
 | 修饰键检查时序问题（`GetAsyncKeyState` 与事件队列视图不一致） | 在钩子回调（事件流）里记录修饰键的按下/抬起状态，而不是每次都查物理状态——与 `GestureHotkey` 的 `ctrlPressed_` 同理 |
 | 轮盘窗口抢焦点 | `WS_EX_NOACTIVATE` + 显示时不调用 `SetForegroundWindow`，与主窗口一致 |
-| 全屏应用中误触 | 新增前台进程黑名单 + 全屏检测（`GetForegroundWindow` + 比较窗口尺寸与屏幕尺寸） |
+| 全屏应用中误触 | 进程黑名单（按进程名，命中即整段放行）；**不做全屏检测**——用户的取舍是「只按键抑制，不要猜」 |
+| 插件写坏把轮盘整个搞挂 | 每个插件独立校验，坏的只跳过自己并在设置页写明原因；`schemaVersion` 更新的插件整份拒收 |
 | 体积超标 | 实测新增 9 个源文件、约 55KB（1197 KB → 1252 KB），远低于 150KB 预算 |
 
 ---
@@ -449,6 +583,7 @@ std::wstring foregroundProcessName();
 3. **不做 OCR / 窗口管理等高级动作**：复用现有动作类型。
 4. **不做主题工作室**：轮盘外观跟随主窗口主题，不单独做轮盘主题编辑。
 5. **不做手势软件自动检测**：方案 C（自动检测 MouseInc）不实现，靠用户手动选择触发方式。
+6. **不做插件目录热监听 / 表格编辑器**：插件是外部文件，只做「扫描 + 只读展示 + 一键打开」，见 4.6。
 
 ---
 
@@ -458,8 +593,9 @@ std::wstring foregroundProcessName();
 |---|---|---|
 | 1 | 默认 `Ctrl+右键拖动` 呼出 8 扇区轮盘，松手触发对应动作 | 待人工真机确认 |
 | 2 | 纯右键拖动不呼出轮盘，原生右键菜单正常弹出 | 待人工真机确认 |
-| 3 | 前台为 `notepad.exe` 时显示记事本专属轮盘，其他程序显示全局轮盘 | ✅ `menuForProcess` 有单测覆盖；真机路径待确认 |
+| 3 | 前台进程命中插件时显示该插件的轮盘，否则显示通用轮盘 | ✅ 匹配有单测；`--debug-radial-plugin=explorer` 已导出带插件图标的截图；真机前台切换待确认 |
 | 4 | 拖出取消半径外松手不触发任何动作 | ✅ 半径已接进命中测试；手感待人工调 |
-| 5 | 设置界面可切换触发方式、编辑扇区动作、配置 Per-App 映射 | ✅ 已用脚本驱动点击验证落盘 |
-| 6 | `.\build.ps1` 与 `.\build.ps1 -Tests` 全部通过 | ✅ 1252 KB / 0 告警 / 12 个测试全通过 |
-| 7 | 与 MouseInc 同时运行时两者功能互不干扰 | 待人工真机确认 |
+| 5 | 设置界面可切换触发方式、编辑扇区动作与黑名单 | ✅ 已用脚本驱动点击验证落盘 |
+| 6 | 「轮盘插件」页能列出插件、显示跳过原因、打开 JSON、重新扫描 | ✅ 截图验证（含一个故意写坏的插件） |
+| 7 | `.\build.ps1` 与 `.\build.ps1 -Tests` 全部通过 | ✅ 12 个测试全通过（持久化 224 项检查）/ 0 告警 |
+| 8 | 与 MouseInc 同时运行时两者功能互不干扰 | 待人工真机确认 |

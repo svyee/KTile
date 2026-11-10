@@ -1,4 +1,4 @@
-#include "ui/settings_window.h"
+﻿#include "ui/settings_window.h"
 
 #include "base/text_convert.h"
 #include "core/data_model.h"
@@ -63,6 +63,11 @@ constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布
 constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
 constexpr int kCardHeightRadial = 456;      // 触发方式 + 抑制键 + 黑名单入口
+// 轮盘插件页：说明 + 列表 + 按钮 + 脚注（结构与磁贴插件页一致）。
+// 比磁贴插件页矮一些：它的脚注只有三行，按四行给高会在白卡下沿留一条
+// 明显的空带（实测截图能看出来）。
+constexpr int kCardHeightRadialPlugins = 350;
+constexpr int kRadialPluginHintHeight = 66;
 constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
 constexpr int kSpinnerWidth = 76;    // 数字输入框宽度
@@ -217,6 +222,16 @@ constexpr int kRadialCoexistHintId = 1190;
 // 抑制键的四个复选框用 1191~1194（见 kRadialSuppressOptions），这里只补提示行
 constexpr int kRadialSuppressHintId = 1195;
 
+// ---- 轮盘插件页 ----
+//
+// ID 只能落在 1196~1200 这五个空位里：1201 起是分组标题的连续区间
+// （kSectionHeaderIdBase），插进去会把「灰色标题」判定连根拔起。
+constexpr int kRadialPluginsTabId = 1196;
+constexpr int kRadialPluginListId = 1197;
+constexpr int kRadialPluginOpenJsonId = 1198;
+constexpr int kRadialPluginOpenFolderId = 1199;
+constexpr int kRadialPluginRescanId = 1200;
+
 // 滑块范围：阈值太小会被手抖误触，太大则拖半天不出轮盘；
 // 取消半径给 150~400 足够覆盖「刚好越过花瓣」到「大臂横甩」。
 // 下限 150 是因为花瓣外缘在 142 DIP，比它更小的值会被窗口夹回 142，
@@ -261,6 +276,7 @@ constexpr const wchar_t* kPropFont = L"KTileSetFont";
 constexpr const wchar_t* kPropTabFont = L"KTileSetTabFont";
 constexpr const wchar_t* kPropSectionFont = L"KTileSetSectionFont";
 constexpr const wchar_t* kPropPluginList = L"KTileSetPluginList";
+constexpr const wchar_t* kPropRadialPluginList = L"KTileSetRadialPluginList";
 
 // ---------------------------------------------------------------- 状态
 
@@ -310,12 +326,15 @@ struct SettingsDialogState {
     // 插件管理页回调（不拥有；为空时该页只显示说明文字）
     const SettingsPluginHooks* plugins = nullptr;
 
+    // 轮盘插件页回调（不拥有；为空时该页只显示说明文字）
+    const SettingsRadialPluginHooks* radialPlugins = nullptr;
+
     // 轮盘菜单配置的草稿。
     // 子对话框（radial_editor）直接改这份副本，点设置窗口的「确定」才
     // 随 SettingsResult 交回应用层 —— 「取消」就整份丢弃，无需回滚。
     core::RadialConfig radial;
 
-    // 分页：0 = 外观，1 = 行为，2 = 插件管理，3 = 轮盘。
+    // 分页：0 = 外观，1 = 行为，2 = 插件管理，3 = 轮盘，4 = 轮盘插件。
     // 各页控件在 WM_CREATE 里已经按绝对坐标摆好，切页只做 ShowWindow，
     // 不重新布局 —— 这样切回来时滚动条/焦点都还是原来的样子。
     int activePage = 0;
@@ -323,8 +342,10 @@ struct SettingsDialogState {
     std::vector<HWND> behaviorControls;
     std::vector<HWND> pluginControls;
     std::vector<HWND> radialControls;
+    std::vector<HWND> radialPluginControls;
     // 列表行与 ListView 下标一一对应，选中项据此反查 id
     std::vector<SettingsPluginInfo> pluginRows;
+    std::vector<SettingsRadialPluginInfo> radialPluginRows;
 
     bool accepted = false;
 };
@@ -576,10 +597,106 @@ void refreshRadialSummary(HWND dialog, const SettingsDialogState* state) {
     SetWindowTextW(summary, text.c_str());
 }
 
+// ---------------------------------------------------------------- 轮盘插件列表
+
+// 取列表当前选中的轮盘插件 id。没有选中项返回空串。
+std::wstring selectedRadialPluginId(HWND dialog,
+                                    const SettingsDialogState* state) {
+    if (state == nullptr) {
+        return std::wstring();
+    }
+    HWND list = static_cast<HWND>(GetPropW(dialog, kPropRadialPluginList));
+    if (list == nullptr) {
+        return std::wstring();
+    }
+    const int index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (index < 0 ||
+        static_cast<std::size_t>(index) >= state->radialPluginRows.size()) {
+        return std::wstring();
+    }
+    return base::utf8ToWide(
+        state->radialPluginRows[static_cast<std::size_t>(index)].id);
+}
+
+// 重新填充轮盘插件列表。
+//
+// 与磁贴插件页同一策略：真相在磁盘上，每次切页 / 重新扫描后都重新问应用层要，
+// 不在对话框里缓存「刚才扫描的结果」。
+void refreshRadialPluginList(HWND dialog, SettingsDialogState* state) {
+    HWND list = static_cast<HWND>(GetPropW(dialog, kPropRadialPluginList));
+    if (list == nullptr || state == nullptr) {
+        return;
+    }
+
+    std::wstring previous;
+    const int previousIndex = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (previousIndex >= 0 &&
+        static_cast<std::size_t>(previousIndex) < state->radialPluginRows.size()) {
+        previous = selectedRadialPluginId(dialog, state);
+    }
+
+    state->radialPluginRows.clear();
+    ListView_DeleteAllItems(list);
+    if (state->radialPlugins != nullptr && state->radialPlugins->list) {
+        state->radialPluginRows = state->radialPlugins->list();
+    }
+
+    for (std::size_t i = 0; i < state->radialPluginRows.size(); ++i) {
+        const SettingsRadialPluginInfo& row = state->radialPluginRows[i];
+        const std::wstring status = row.valid ? L"已加载" : L"跳过";
+        const std::wstring name = base::utf8ToWide(row.name.empty() ? row.id
+                                                                   : row.name);
+        const std::wstring processes = base::utf8ToWide(row.processes);
+        // 只写「动作数 / 扇区数」：列头已经是「扇区」，再写一次「扇区」是
+        // 「8 / 8 扇区」这种读起来别扭的重复。两个数不相等基本就是配错了。
+        const std::wstring sectors = std::to_wstring(row.actionCount) + L" / " +
+                                     std::to_wstring(row.sectorCount);
+        const std::wstring note = row.valid ? std::wstring(L"")
+                                            : base::utf8ToWide(row.error);
+
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = static_cast<int>(i);
+        item.pszText = const_cast<LPWSTR>(status.c_str());
+        const int index = ListView_InsertItem(list, &item);
+        if (index < 0) {
+            continue;
+        }
+        ListView_SetItemText(list, index, 1, const_cast<LPWSTR>(name.c_str()));
+        ListView_SetItemText(list, index, 2,
+                             const_cast<LPWSTR>(processes.c_str()));
+        ListView_SetItemText(list, index, 3,
+                             const_cast<LPWSTR>(sectors.c_str()));
+        ListView_SetItemText(list, index, 4, const_cast<LPWSTR>(note.c_str()));
+    }
+
+    if (!previous.empty()) {
+        for (std::size_t i = 0; i < state->radialPluginRows.size(); ++i) {
+            if (base::utf8ToWide(state->radialPluginRows[i].id) == previous) {
+                ListView_SetItemState(list, static_cast<int>(i),
+                                      LVIS_SELECTED | LVIS_FOCUSED,
+                                      LVIS_SELECTED | LVIS_FOCUSED);
+                break;
+            }
+        }
+    }
+
+    // 没有选中项时「打开 JSON / 打开目录」都无从下手（不知道打开哪个），
+    // 灰掉比点了弹提示更直接。「重新扫描」永远可用。
+    const bool hasSelection = !selectedRadialPluginId(dialog, state).empty();
+    const int selectionIds[] = {kRadialPluginOpenJsonId,
+                                kRadialPluginOpenFolderId};
+    for (const int id : selectionIds) {
+        HWND button = GetDlgItem(dialog, id);
+        if (button != nullptr) {
+            EnableWindow(button, hasSelection ? TRUE : FALSE);
+        }
+    }
+}
+
 // 切换分页：每页的控件各管各的，互不重叠。
 void switchSettingsPage(HWND dialog, SettingsDialogState* state,
-                        const int page) {
-    if (state == nullptr) {
+                        const int page) {    if (state == nullptr) {
         return;
     }
     state->activePage = page;
@@ -596,6 +713,9 @@ void switchSettingsPage(HWND dialog, SettingsDialogState* state,
     for (const HWND control : state->radialControls) {
         ShowWindow(control, page == 3 ? SW_SHOW : SW_HIDE);
     }
+    for (const HWND control : state->radialPluginControls) {
+        ShowWindow(control, page == 4 ? SW_SHOW : SW_HIDE);
+    }
 
     // 自绘标签不靠勾选态，切页后直接让四枚按钮重画；
     // 卡片高度也按页变化，所以整窗也要重画一次。
@@ -603,12 +723,15 @@ void switchSettingsPage(HWND dialog, SettingsDialogState* state,
     InvalidateRect(GetDlgItem(dialog, kBehaviorTabId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kPluginsTabId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kRadialTabId), nullptr, TRUE);
+    InvalidateRect(GetDlgItem(dialog, kRadialPluginsTabId), nullptr, TRUE);
     InvalidateRect(dialog, nullptr, TRUE);
 
     if (page == 2) {
         refreshPluginList(dialog, state);
     } else if (page == 3) {
         refreshRadialSummary(dialog, state);
+    } else if (page == 4) {
+        refreshRadialPluginList(dialog, state);
     }
 }
 
@@ -688,6 +811,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     cardHeight = kCardHeightPlugins;
                 } else if (state->activePage == 3) {
                     cardHeight = kCardHeightRadial;
+                } else if (state->activePage == 4) {
+                    cardHeight = kCardHeightRadialPlugins;
                 }
                 RECT card{};
                 card.left = scaleFor(hwnd, kContentLeft - kCardInset);
@@ -808,6 +933,12 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         kSidebarLeft,
                         kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 3,
                         kSidebarWidth, kSidebarTabHeight, kRadialTabId);
+            makeControl(L"BUTTON", L"轮盘插件",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                        kSidebarLeft,
+                        kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 4,
+                        kSidebarWidth, kSidebarTabHeight,
+                        kRadialPluginsTabId);
 
             sink = &state->appearanceControls;
             // 单列表单：外观页的四个分组自上而下排成一列。
@@ -1524,6 +1655,78 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft + 8, yRadial,
                 kColumnWidth - 8, 54, -1);
 
+            // ==================== 轮盘插件页 ====================
+            //
+            // 这一页是**只读清单**。轮盘插件天生是「一个目录 + 一份 JSON +
+            // 一堆图标」，做成表格编辑器就等于把它退化成「只能在界面里配」，
+            // 「加个目录就是加个应用」的好处全没了。所以这里只做三件事：
+            // 看清加载了哪些、看清某个为什么被跳过、一键打开那份 JSON。
+            sink = &state->radialPluginControls;
+
+            makeLabel(L"每个应用一个子文件夹，内含 radial.json 与自己的图标。",
+                      kContentLeft, kPluginIntroTop, kContentWidth,
+                      kPluginIntroHeight);
+
+            HWND radialPluginList = makeControl(
+                WC_LISTVIEWW, L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT |
+                    LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                WS_EX_CLIENTEDGE,
+                kContentLeft, kPluginListTop, kContentWidth,
+                kPluginListHeight, kRadialPluginListId);
+            if (radialPluginList != nullptr) {
+                // INFOTIP：跳过原因往往比「说明」列宽，悬停能看到全文 ——
+                // 这一列存在的意义就是解释「为什么没加载」，被截断就等于没说。
+                ListView_SetExtendedListViewStyle(
+                    radialPluginList, LVS_EX_FULLROWSELECT |
+                                          LVS_EX_DOUBLEBUFFER | LVS_EX_INFOTIP);
+
+                struct RadialColumnSpec {
+                    const wchar_t* text;
+                    int width;
+                };
+                const RadialColumnSpec columns[] = {
+                    {L"状态", 58}, {L"名称", 108}, {L"进程", 140},
+                    {L"扇区", 82}, {L"说明", 150},
+                };
+                const int columnCount =
+                    static_cast<int>(sizeof(columns) / sizeof(columns[0]));
+                for (int i = 0; i < columnCount; ++i) {
+                    LVCOLUMNW column{};
+                    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                    column.pszText = const_cast<LPWSTR>(columns[i].text);
+                    column.cx = scaleFor(hwnd, columns[i].width);
+                    column.fmt = LVCFMT_LEFT;
+                    ListView_InsertColumn(radialPluginList, i, &column);
+                }
+                SetPropW(hwnd, kPropRadialPluginList, radialPluginList);
+            }
+
+            makeControl(
+                L"BUTTON", L"打开 JSON…",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft, kPluginButtonTop, kPluginButtonWidth,
+                kButtonHeight, kRadialPluginOpenJsonId);
+            makeControl(
+                L"BUTTON", L"打开目录",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft + kPluginButtonWidth + 8, kPluginButtonTop,
+                kPluginButtonWidth, kButtonHeight, kRadialPluginOpenFolderId);
+            makeControl(
+                L"BUTTON", L"重新扫描",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kContentLeft + (kPluginButtonWidth + 8) * 2, kPluginButtonTop,
+                kPluginButtonWidth, kButtonHeight, kRadialPluginRescanId);
+
+            makeControl(
+                L"STATIC",
+                L"「打开 JSON」用系统默认编辑器改清单，改完点「重新扫描」生效。\r\n"
+                L"匹配只比进程名（大小写不敏感）；多个插件命中同一进程时\r\n"
+                L"priority 大的优先。图标放插件自己的 icons 目录，SVG 按 24×24 画布。",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                kContentLeft, kPluginHintTop, kContentWidth,
+                kRadialPluginHintHeight, -1);
+
             // 行为页与插件页的控件先全部隐藏，启动时停在外观页
             for (const HWND control : state->behaviorControls) {
                 ShowWindow(control, SW_HIDE);
@@ -1532,6 +1735,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 ShowWindow(control, SW_HIDE);
             }
             for (const HWND control : state->radialControls) {
+                ShowWindow(control, SW_HIDE);
+            }
+            for (const HWND control : state->radialPluginControls) {
                 ShowWindow(control, SW_HIDE);
             }
 
@@ -1566,8 +1772,33 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 插件列表的两类通知：选中变化（决定按钮可用性）与双击行
             // （快捷添加到当前标签页）。
             const NMHDR* header = reinterpret_cast<const NMHDR*>(lParam);
-            if (header == nullptr || state == nullptr ||
-                header->idFrom != static_cast<UINT>(kPluginListId)) {
+            if (header == nullptr || state == nullptr) {
+                break;
+            }
+            // 轮盘插件列表：只有选中变化一件事，且双击 = 直接打开那份 JSON
+            // （这一页的动作几乎都是「我要去改它」，双击打开最省一步）。
+            if (header->idFrom == static_cast<UINT>(kRadialPluginListId)) {
+                if (header->code == LVN_ITEMCHANGED) {
+                    const std::wstring id = selectedRadialPluginId(hwnd, state);
+                    const BOOL enable = id.empty() ? FALSE : TRUE;
+                    EnableWindow(GetDlgItem(hwnd, kRadialPluginOpenJsonId),
+                                 enable);
+                    EnableWindow(GetDlgItem(hwnd, kRadialPluginOpenFolderId),
+                                 enable);
+                    return 0;
+                }
+                if (header->code == NM_DBLCLK) {
+                    const std::wstring id = selectedRadialPluginId(hwnd, state);
+                    if (!id.empty() && state->radialPlugins != nullptr &&
+                        state->radialPlugins->openManifest) {
+                        state->radialPlugins->openManifest(
+                            base::wideToUtf8Lossy(id));
+                    }
+                    return 0;
+                }
+                break;
+            }
+            if (header->idFrom != static_cast<UINT>(kPluginListId)) {
                 break;
             }
             HWND list = static_cast<HWND>(GetPropW(hwnd, kPropPluginList));
@@ -1606,7 +1837,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 (draw->CtlID == static_cast<UINT>(kAppearanceTabId) ||
                  draw->CtlID == static_cast<UINT>(kBehaviorTabId) ||
                  draw->CtlID == static_cast<UINT>(kPluginsTabId) ||
-                 draw->CtlID == static_cast<UINT>(kRadialTabId))) {
+                 draw->CtlID == static_cast<UINT>(kRadialTabId) ||
+                 draw->CtlID == static_cast<UINT>(kRadialPluginsTabId))) {
                 wchar_t text[64] = {};
                 GetWindowTextW(draw->hwndItem, text, 64);
                 int tabPage = 2;
@@ -1616,6 +1848,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     tabPage = 1;
                 } else if (draw->CtlID == static_cast<UINT>(kRadialTabId)) {
                     tabPage = 3;
+                } else if (draw->CtlID ==
+                           static_cast<UINT>(kRadialPluginsTabId)) {
+                    tabPage = 4;
                 }
                 const bool active =
                     state != nullptr && state->activePage == tabPage;
@@ -1684,7 +1919,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             if ((controlId == kAppearanceTabId ||
                  controlId == kBehaviorTabId ||
                  controlId == kPluginsTabId ||
-                 controlId == kRadialTabId) &&
+                 controlId == kRadialTabId ||
+                 controlId == kRadialPluginsTabId) &&
                 notification == BN_CLICKED) {
                 int page = 2;
                 if (controlId == kAppearanceTabId) {
@@ -1693,8 +1929,41 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     page = 1;
                 } else if (controlId == kRadialTabId) {
                     page = 3;
+                } else if (controlId == kRadialPluginsTabId) {
+                    page = 4;
                 }
                 switchSettingsPage(hwnd, state, page);
+                return 0;
+            }
+
+            // ---- 轮盘插件页：只读，动作全部转交应用层 ----
+            if ((controlId == kRadialPluginOpenJsonId ||
+                 controlId == kRadialPluginOpenFolderId ||
+                 controlId == kRadialPluginRescanId) &&
+                notification == BN_CLICKED) {
+                if (state == nullptr || state->radialPlugins == nullptr) {
+                    return 0;
+                }
+                const SettingsRadialPluginHooks& hooks = *state->radialPlugins;
+                if (controlId == kRadialPluginRescanId) {
+                    if (hooks.rescan) {
+                        hooks.rescan();
+                    }
+                    refreshRadialPluginList(hwnd, state);
+                    return 0;
+                }
+                const std::string id =
+                    base::wideToUtf8Lossy(selectedRadialPluginId(hwnd, state));
+                if (id.empty()) {
+                    return 0;  // 按钮本该是灰的，走到这里说明状态刚变，忽略
+                }
+                if (controlId == kRadialPluginOpenJsonId) {
+                    if (hooks.openManifest) {
+                        hooks.openManifest(id);
+                    }
+                } else if (hooks.openFolder) {
+                    hooks.openFolder(id);
+                }
                 return 0;
             }
 
@@ -2523,7 +2792,8 @@ bool showSettingsWindow(HWND owner,
                         const std::uint16_t rowsInUse,
                         SettingsResult* out,
                         const SettingsPreviewHooks* preview,
-                        const SettingsPluginHooks* plugins) {
+                        const SettingsPluginHooks* plugins,
+                        const SettingsRadialPluginHooks* radialPlugins) {
     if (out == nullptr) {
         return false;
     }
@@ -2560,6 +2830,7 @@ bool showSettingsWindow(HWND owner,
     state.rowsInUse = rowsInUse;
     state.preview = preview;
     state.plugins = plugins;
+    state.radialPlugins = radialPlugins;
 
     // ---- 尺寸：客户区按设计稿，换算成含标题栏边框的窗口尺寸 ----
     RECT desired{0, 0, scaleFor(owner, kDialogWidth),

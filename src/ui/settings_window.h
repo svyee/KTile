@@ -69,12 +69,11 @@ struct SettingsResult {
     // 图标相对磁贴内框的统一缩放（50~100）
     std::optional<int> iconScalePercent;
 
-    // 轮盘菜单整份配置（触发方式 + 方案 + 按应用规则）。
+    // 轮盘菜单整份配置（触发方式 + 抑制键 + 通用扇区 + 进程黑名单）。
     //
-    // 为什么整份交回而不是拆成几个 optional 字段：轮盘方案与按应用规则是
-    // 嵌套结构（方案里还有扇区数组），拆字段既表达不了「删掉了一个方案」
-    // 这种变化，也会让 SettingsResult 膨胀成一堆半成品。调用方拿到后整份
-    // 替换并落盘即可。
+    // 为什么整份交回而不是拆成几个 optional 字段：扇区动作是一个数组，
+    // 拆字段既表达不了「清空某个扇区」，也会让 SettingsResult 膨胀成
+    // 一堆半成品。调用方拿到后整份替换并落盘即可。
     std::optional<core::RadialConfig> radial;
 };
 
@@ -108,6 +107,41 @@ struct SettingsPluginHooks {
     std::function<void(const std::string& id)> openFolder;
     // 把插件添加成当前标签页的一块磁贴。
     std::function<void(const std::string& id)> addTile;
+};
+
+// 轮盘插件（slugin）页的一行（只读展示）。
+//
+// 与上面的 SettingsPluginInfo 分开：轮盘插件的清单格式、匹配方式、失败原因
+// 全都不同，混用一个结构会让两个页面互相迁就字段。
+struct SettingsRadialPluginInfo {
+    std::string id;
+    std::string name;
+    // 已拼好的进程列表显示串（"explorer.exe, Code.exe"）
+    std::string processes;
+    int sectorCount = 0;
+    int actionCount = 0;
+    // 加载成功与否；失败时 error 里是原因
+    bool valid = true;
+    std::string error;
+};
+
+// 轮盘插件页的宿主回调（可选）。
+//
+// 这一页**只读**：轮盘插件的形态是「一个目录 + 一份 JSON + 一堆图标」，
+// 用表格去编辑扇区与快捷键会把插件退化成「只能在界面里配」的东西，
+// 也就丢掉了「加个目录就是加个应用」的全部好处。所以界面只负责
+// 「让你知道加载了哪些、为什么某个没加载、一键打开那份 JSON」。
+struct SettingsRadialPluginHooks {
+    // 拉取当前已发现的轮盘插件（每次切到该页 / 重新扫描后调用）
+    std::function<std::vector<SettingsRadialPluginInfo>()> list;
+    // 用系统默认编辑器打开某个插件的 radial.json（记事本兜底）
+    std::function<void(const std::string& id)> openManifest;
+    // 在资源管理器里打开插件目录（id 为空表示 slugin 根目录）
+    std::function<void(const std::string& id)> openFolder;
+    // 重新扫描磁盘（回调返回后界面会重新调用 list）
+    std::function<void()> rescan;
+    // 插件根目录（用于页面上的说明文字）
+    std::function<std::wstring()> rootDirectory;
 };
 
 // 实时预览回调（可选）。
@@ -164,6 +198,7 @@ struct SettingsPreviewHooks {
 //   out                  结果输出
 //   preview              实时预览回调（可为 nullptr）
 //   plugins              插件管理页回调（可为 nullptr；为空时安装/删除按钮隐藏）
+//   radialPlugins        轮盘插件页回调（可为 nullptr；为空时该页只有说明文字）
 bool showSettingsWindow(HWND owner,
                         std::uint16_t currentColumns,
                         std::uint16_t currentRows,
@@ -183,7 +218,8 @@ bool showSettingsWindow(HWND owner,
                         std::uint16_t rowsInUse,
                         SettingsResult* out,
                         const SettingsPreviewHooks* preview = nullptr,
-                        const SettingsPluginHooks* plugins = nullptr);
+                        const SettingsPluginHooks* plugins = nullptr,
+                        const SettingsRadialPluginHooks* radialPlugins = nullptr);
 
 }  // namespace ui
 }  // namespace ktile

@@ -19,6 +19,14 @@
 namespace ktile {
 namespace infrastructure {
 
+// 解析一个 menu 对象（`{ "name":…, "sectorCount":…, "actions":[…] }`）。
+//
+// 提成自由函数是因为轮盘插件（slugin/<id>/radial.json）用的是**同一套**
+// 扇区/动作格式：用户配置和插件只有外层容器不同，里面的东西一模一样。
+// 写两份解析的话，加一个动作字段就得记住改两处 —— 迟早漏一处。
+// 解析完保证 actions.size() == sectorCount（不足补空槽位）。
+void parseRadialMenuJson(const json::JsonValue& value, core::RadialMenu* out);
+
 class RadialStore {
 public:
     LoadResult<core::RadialConfig> load(const std::wstring& path) const;

@@ -454,6 +454,13 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     // 日志初始化紧跟配置（需要 data 目录路径）；此后所有关键环节都留痕。
     initializeLogging(automationMode);
 
+    // 扫描 slugin/ 下的按应用轮盘插件。
+    //
+    // 刻意放在日志就绪之后而不是 initializeConfig 里：插件写坏时的告警和
+    // 「加载 X / Y 个」是用户排查插件问题的唯一线索，而 initializeConfig
+    // 阶段日志还没有落盘的地方，写进去等于扔掉。
+    loadRadialPlugins();
+
     if (!initializeWindow()) {
         if (!debug.shot) {
             MessageBoxW(nullptr,
@@ -516,7 +523,9 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         if (!radialWindow->create(instance_)) {
             return 3;
         }
-        const core::RadialMenu& menu = radialConfig_.menu;
+        const core::RadialMenu& menu = debug.radialPluginId.empty()
+                                          ? radialConfig_.menu
+                                          : debugRadialPluginMenu(debug.radialPluginId);
         // 以屏幕中心为基准，保证完整可见
         POINT center{};
         center.x = GetSystemMetrics(SM_CXSCREEN) / 2;
@@ -1054,6 +1063,51 @@ void Application::loadRadialConfig() {
     }
 }
 
+void Application::loadRadialPlugins() {
+    // 与磁贴插件同样的落点策略：便携模式下跟随 exe，否则跟随 data 目录，
+    // 保证「整个目录可搬移」的约定不被破坏。
+    const std::wstring root =
+        paths_.isPortable() ? paths_.executableDirectory() + L"\\slugin"
+                            : paths_.dataDirectory() + L"\\slugin";
+    radialPluginStore_.discover(root);
+    const auto& plugins = radialPluginStore_.plugins();
+    if (plugins.empty()) {
+        return;
+    }
+    int loaded = 0;
+    for (const auto& plugin : plugins) {
+        if (plugin.valid) {
+            ++loaded;
+        } else {
+            // 插件写坏了不能让用户以为是「功能失灵」，至少在日志里留下原因
+            infrastructure::applog::warn(
+                "轮盘插件「" + plugin.id + "」未加载：" + plugin.error);
+        }
+    }
+    infrastructure::applog::info("轮盘插件：加载 " + std::to_string(loaded) +
+                                " / " + std::to_string(plugins.size()) + " 个");
+}
+
+std::wstring Application::radialPluginDirectoryOf(const std::string& id) const {    for (const core::RadialPlugin& plugin : radialPluginStore_.plugins()) {
+        if (plugin.id == id && !plugin.directory.empty()) {
+            return base::utf8ToWideLossy(plugin.directory);
+        }
+    }
+    // id 找不到（或调用方想看根目录）：退回 slugin 根，至少能打开个地方
+    return radialPluginStore_.rootDirectory();
+}
+
+const core::RadialMenu& Application::debugRadialPluginMenu(const std::string& id) {
+    for (const core::RadialPlugin& plugin : radialPluginStore_.plugins()) {
+        if (plugin.id == id) {
+            return plugin.menu;
+        }
+    }
+    infrastructure::applog::warn("--debug-radial-plugin：找不到插件「" + id +
+                                "」，改用通用轮盘");
+    return radialConfig_.menu;
+}
+
 void Application::persistRadialConfig() {
     if (!pathsReady_) return;
     const std::wstring path = paths_.dataDirectory() + L"\\radial.json";
@@ -1065,7 +1119,22 @@ void Application::persistRadialConfig() {
 void Application::onRadialShow(POINT startPoint) {
     // 黑名单在钩子按下时就已经拦掉了，这里不再判 —— 能走到这一步说明
     // 前台进程没被拉黑（或者黑名单里没有它）。
+    //
+    // 匹配顺序：slugin 插件 → 用户配置的通用轮盘。
+    // 插件优先是有意的：插件是「这个应用该有哪些动作」的专门答案，通用轮盘
+    // 是「所有应用都能凑合用」的兜底。反过来的话插件永远轮不到。
     const core::RadialMenu* menu = &radialConfig_.menu;
+    {
+        const std::wstring process = platform::win32::foregroundProcessName();
+        if (!process.empty()) {
+            const core::RadialPlugin* plugin = core::findPluginForProcess(
+                radialPluginStore_.plugins(),
+                base::wideToUtf8Lossy(process));
+            if (plugin != nullptr && plugin->valid) {
+                menu = &plugin->menu;
+            }
+        }
+    }
 
     activeRadialMenu_ = menu;
 
@@ -2122,6 +2191,61 @@ void Application::openSettings() {
         addPluginItem(id);
     };
 
+    // ---- 轮盘插件页回调 ----
+    //
+    // 这一页只读：轮盘插件的形态是「目录 + JSON + 图标」，界面能做的最有用的
+    // 事就是「让你看清加载了哪些、为什么某个被跳过，然后一键打开那份 JSON」。
+    ui::SettingsRadialPluginHooks radialPluginHooks;
+    radialPluginHooks.list = [this]() {
+        std::vector<ui::SettingsRadialPluginInfo> rows;
+        for (const core::RadialPlugin& plugin : radialPluginStore_.plugins()) {
+            ui::SettingsRadialPluginInfo info;
+            info.id = plugin.id;
+            info.name = plugin.name;
+            for (std::size_t i = 0; i < plugin.processes.size(); ++i) {
+                if (i > 0) {
+                    info.processes += ", ";
+                }
+                info.processes += plugin.processes[i];
+            }
+            info.sectorCount = static_cast<int>(plugin.menu.sectorCount);
+            info.actionCount = static_cast<int>(plugin.menu.actions.size());
+            info.valid = plugin.valid;
+            info.error = plugin.error;
+            rows.push_back(std::move(info));
+        }
+        return rows;
+    };
+    radialPluginHooks.rescan = [this]() {
+        // 磁盘是真相：扫描一次，下一次 list() 就会反映增删改的结果。
+        loadRadialPlugins();
+    };
+    radialPluginHooks.openManifest = [this](const std::string& id) {
+        const std::wstring manifest =
+            radialPluginDirectoryOf(id) + L"\\radial.json";
+        const platform::win32::LaunchResult result =
+            platform::win32::openPathWithDefaultProgram(manifest);
+        if (!result.ok) {
+            MessageBoxW(launcherWindow_->hwnd(), result.error.c_str(),
+                        L"轮盘插件", MB_OK | MB_ICONERROR);
+        }
+    };
+    radialPluginHooks.openFolder = [this](const std::string& id) {
+        const std::wstring directory = radialPluginDirectoryOf(id);
+        if (directory.empty()) {
+            return;
+        }
+        const platform::win32::LaunchResult result =
+            platform::win32::openFolderInExplorer(directory);
+        if (!result.ok) {
+            MessageBoxW(launcherWindow_->hwnd(), result.error.c_str(),
+                        L"轮盘插件", MB_OK | MB_ICONERROR);
+        }
+    };
+    radialPluginHooks.rootDirectory = [this]() {
+        return radialPluginStore_.rootDirectory();
+    };
+
     ui::SettingsResult result;
     const bool accepted = ui::showSettingsWindow(
         launcherWindow_->hwnd(),
@@ -2145,7 +2269,8 @@ void Application::openSettings() {
         rowsInUse,
         &result,
         &preview,
-        &pluginHooks);
+        &pluginHooks,
+        &radialPluginHooks);
 
     // 设置窗口已关闭：解除模态保护（无论确定还是取消都要解）。
     launcherWindow_->setModalGuard(false);

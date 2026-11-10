@@ -172,6 +172,10 @@ int WINAPI wWinMain(HINSTANCE instance,
         }
     }
 
+    // --debug-radial-plugin=<id>：配合 --debug-radial，改渲染插件提供的菜单
+    debugOptions.radialPluginId = ktile::base::wideToUtf8Lossy(
+        flagValue(L"--debug-radial-plugin="));
+
     if (debugOptions.shot) {
         // 可选参数（都在 = 之后给出）：
         //   --debug-shot=x,y                 模拟悬停到 (x,y)

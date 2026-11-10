@@ -31,6 +31,9 @@ $ThirdParty = Join-Path $Root "third_party"
 # 插件（清单 + 图标）是独立的发布资源：源码在仓库根 plugin/，
 # 构建后原样拷到 exe 同级，主程序不再内嵌任何插件内容。
 $PluginSrc  = Join-Path $Root "plugin"
+# 轮盘插件同理，但目录名必须是 slugin —— plugin/ 已经被磁贴插件占用，
+# 两者格式与加载器都不同，混在一起会互相误读。
+$SluginSrc  = Join-Path $Root "slugin"
 
 # ---------------------------------------------------------------- 工具链
 # VS2022 BuildTools + MSVC 14.44 + Windows SDK 10.0.26100.0
@@ -158,6 +161,7 @@ function Get-CoreSources {
         (Join-Path $SrcDir "core\plugin_binding.cpp")
         (Join-Path $SrcDir "core\plugin_layout.cpp")
         (Join-Path $SrcDir "core\radial_menu.cpp")
+        (Join-Path $SrcDir "core\radial_plugin.cpp")
         (Join-Path $SrcDir "base\text_convert.cpp")
     )
     return @($candidates | Where-Object { Test-Path $_ })
@@ -168,14 +172,17 @@ function Get-PersistenceSources {
     $candidates = @(
         (Join-Path $SrcDir "base\text_convert.cpp")
         (Join-Path $SrcDir "core\plugin_model.cpp")
-        # radial_store 依赖 core::RadialConfig 的成员函数（findMenu / menuForProcess）
+        # radial_store 依赖 core::RadialConfig 的成员函数（isProcessBlocked 等），
+        # radial_plugin_store 依赖 core::validateRadialPlugin。
         (Join-Path $SrcDir "core\radial_menu.cpp")
+        (Join-Path $SrcDir "core\radial_plugin.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
         (Join-Path $SrcDir "infrastructure\json\radial_store.cpp")
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
         (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
+        (Join-Path $SrcDir "infrastructure\radial_plugin_store.cpp")
     )
     return @($candidates | Where-Object { Test-Path $_ })
 }
@@ -194,6 +201,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "core\plugin_binding.cpp")
         (Join-Path $SrcDir "core\plugin_layout.cpp")
         (Join-Path $SrcDir "core\radial_menu.cpp")
+        (Join-Path $SrcDir "core\radial_plugin.cpp")
         # infrastructure
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
@@ -202,6 +210,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "infrastructure\json\radial_store.cpp")
         (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
         (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
+        (Join-Path $SrcDir "infrastructure\radial_plugin_store.cpp")
         # platform/win32
         (Join-Path $SrcDir "platform\win32\single_instance.cpp")
         (Join-Path $SrcDir "platform\win32\global_hotkey.cpp")
@@ -268,12 +277,12 @@ if ($Tests) {
         # 依据测试文件包含的头，决定需要附带哪些源文件
         $needsCore = $true
         $content = Get-Content $tf.FullName -Raw
-        if ($content -notmatch "tile_layout\.h|item_operations\.h|tab_operations\.h|search\.h|plugin_model\.h|plugin_binding\.h|plugin_layout\.h|radial_menu\.h") {
+        if ($content -notmatch "tile_layout\.h|item_operations\.h|tab_operations\.h|search\.h|plugin_model\.h|plugin_binding\.h|plugin_layout\.h|radial_menu\.h|radial_plugin\.h") {
             $needsCore = $false
         }
         $extra = if ($needsCore) { $coreSources } else { @() }
 
-        if ($content -match "config_store\.h|json_writer\.h|json_parser\.h|radial_store\.h|portable_paths\.h") {
+        if ($content -match "config_store\.h|json_writer\.h|json_parser\.h|radial_store\.h|radial_plugin_store\.h|portable_paths\.h") {
             $extra = @($extra) + (Get-PersistenceSources)
             # 避免 text_convert.cpp 重复出现导致重复符号
             $extra = $extra | Select-Object -Unique
@@ -367,5 +376,12 @@ if (Invoke-Compile -Source $mainApp -OutputExe $exeOut -ExtraSources $appSources
         $pluginOut = Join-Path $BuildDir "plugin"
         Copy-Item -Path (Join-Path $PluginSrc "*") -Destination $pluginOut -Recurse -Force
         Write-Host "插件: $pluginOut" -ForegroundColor Green
+    }
+
+    # 轮盘插件：拷到 exe 同级 slugin/，规则同上（用户改完 JSON 重新构建即可生效）。
+    if (Test-Path $SluginSrc) {
+        $sluginOut = Join-Path $BuildDir "slugin"
+        Copy-Item -Path (Join-Path $SluginSrc "*") -Destination $sluginOut -Recurse -Force
+        Write-Host "轮盘插件: $sluginOut" -ForegroundColor Green
     }
 }

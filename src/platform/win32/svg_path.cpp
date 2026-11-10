@@ -1,5 +1,7 @@
 #include "platform/win32/svg_path.h"
 
+#include "base/text_convert.h"
+
 #include <d2d1helper.h>
 
 #include <algorithm>
@@ -7,6 +9,8 @@
 #include <cstdlib>
 #include <cwchar>
 #include <cwctype>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -954,6 +958,37 @@ ComPtr<ID2D1StrokeStyle> createRoundStrokeStyle(ID2D1Factory* factory) {
         D2D1_LINE_JOIN_ROUND, 10.0F, D2D1_DASH_STYLE_SOLID, 0.0F);
     factory->CreateStrokeStyle(properties, nullptr, 0, style.put());
     return style;
+}
+
+bool readSvgMarkupFile(const std::wstring& path, std::wstring* markup) {
+    if (markup == nullptr || path.empty()) {
+        return false;
+    }
+    markup->clear();
+
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        return false;
+    }
+    std::string bytes((std::istreambuf_iterator<char>(stream)),
+                      std::istreambuf_iterator<char>());
+    // UTF-8 BOM 必须削掉：D2D 那边的解析器不认 BOM，会把第一个字符当成
+    // 标签名的一部分，结果是整份标记解析失败、图标静默消失。
+    if (bytes.size() >= 3 &&
+        static_cast<unsigned char>(bytes[0]) == 0xEFU &&
+        static_cast<unsigned char>(bytes[1]) == 0xBBU &&
+        static_cast<unsigned char>(bytes[2]) == 0xBFU) {
+        bytes.erase(0, 3);
+    }
+    if (bytes.empty()) {
+        return false;
+    }
+    const std::wstring wide = base::utf8ToWide(bytes);
+    if (wide.empty()) {
+        return false;
+    }
+    *markup = wide;
+    return true;
 }
 
 }  // namespace win32

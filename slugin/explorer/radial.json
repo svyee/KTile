@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "name": "文件资源管理器",
+  "processes": ["explorer.exe"],
+  "priority": 0,
+  "menu": {
+    "name": "资源管理器",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "新建文件夹",
+        "modifiers": ["control", "shift"],
+        "key": "N",
+        "icon": "icons/folder-plus.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "复制路径",
+        "modifiers": ["control", "shift"],
+        "key": "C",
+        "icon": "icons/copy.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "粘贴",
+        "modifiers": ["control"],
+        "key": "V",
+        "icon": "icons/paste.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "删除",
+        "key": "Delete",
+        "icon": "icons/trash.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "刷新",
+        "key": "F5",
+        "icon": "icons/refresh.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "上一级",
+        "modifiers": ["alt"],
+        "key": "Up",
+        "icon": "icons/arrow-up.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "后退",
+        "modifiers": ["alt"],
+        "key": "Left",
+        "icon": "icons/arrow-left.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "属性",
+        "modifiers": ["alt"],
+        "key": "Enter",
+        "icon": "icons/info.svg"
+      }
+    ]
+  }
+}

@@ -3808,27 +3808,6 @@ float LauncherWindow::measurePluginText(const std::string& text,
 
 namespace {
 
-// 读取 UTF-8 文本文件并去掉可能的 BOM。失败（不存在 / 空文件）返回 false。
-bool readSvgMarkupFile(const std::wstring& path, std::wstring* markup) {
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream) {
-        return false;
-    }
-    std::string bytes((std::istreambuf_iterator<char>(stream)),
-                      std::istreambuf_iterator<char>());
-    if (bytes.size() >= 3 &&
-        static_cast<unsigned char>(bytes[0]) == 0xEFU &&
-        static_cast<unsigned char>(bytes[1]) == 0xBBU &&
-        static_cast<unsigned char>(bytes[2]) == 0xBFU) {
-        bytes.erase(0, 3);
-    }
-    if (bytes.empty()) {
-        return false;
-    }
-    *markup = base::utf8ToWide(bytes);
-    return !markup->empty();
-}
-
 // 相对路径里出现 ".." 一律拒绝：插件清单可能来自第三方，
 // 不允许它把图标路径指到插件目录之外。
 bool hasParentTraversal(const std::filesystem::path& path) {
@@ -3950,7 +3929,7 @@ bool LauncherWindow::drawPluginSvgFileIcon(const std::string& storedPath,
     auto cached = pluginIconCache_.find(key);
     if (cached == pluginIconCache_.end()) {
         std::wstring markup;
-        if (!readSvgMarkupFile(full.wstring(), &markup)) {
+        if (!platform::win32::readSvgMarkupFile(full.wstring(), &markup)) {
             return false;
         }
         platform::win32::SvgGlyph glyph;

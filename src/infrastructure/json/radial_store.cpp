@@ -152,6 +152,62 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
     return writer.take();
 }
 
+// ================================================================ 菜单对象解析
+
+void parseRadialMenuJson(const json::JsonValue& m, core::RadialMenu* out) {
+    if (out == nullptr) return;
+    out->name = m.find("name").asString();
+    out->sectorCount = static_cast<std::uint8_t>(
+        m.find("sectorCount").asUint32(8));
+    if (out->sectorCount < core::kMinSectors) {
+        out->sectorCount = core::kMinSectors;
+    }
+    if (out->sectorCount > core::kMaxSectors) {
+        out->sectorCount = core::kMaxSectors;
+    }
+
+    out->actions.clear();
+    const JsonValue& actions = m.find("actions");
+    if (actions.isArray()) {
+        for (std::size_t j = 0; j < actions.items().size(); ++j) {
+            const JsonValue& a = actions.at(j);
+            if (!a.isObject()) continue;
+
+            core::RadialAction action;
+            bool recognized = false;
+            action.type = core::radialActionTypeFromKey(
+                a.find("type").asString(), &recognized);
+            action.name = a.find("name").asString();
+            action.target = a.find("target").asString();
+
+            const JsonValue& args = a.find("arguments");
+            if (args.isArray()) {
+                for (std::size_t k = 0; k < args.items().size(); ++k) {
+                    action.arguments.push_back(args.at(k).asString());
+                }
+            }
+            if (a.hasKey("icon") && !a.find("icon").isNull()) {
+                action.icon = a.find("icon").asString();
+            }
+            const JsonValue& mods = a.find("modifiers");
+            if (mods.isArray()) {
+                for (std::size_t k = 0; k < mods.items().size(); ++k) {
+                    action.modifiers.push_back(
+                        hotkeyModifierFromKey(mods.at(k).asString()));
+                }
+            }
+            if (a.hasKey("key")) {
+                action.key = a.find("key").asString();
+            }
+            out->actions.push_back(action);
+        }
+    }
+    // 补齐到 sectorCount 个
+    while (out->actions.size() < out->sectorCount) {
+        out->actions.push_back(core::RadialAction());
+    }
+}
+
 // ================================================================ 反序列化
 
 LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text) {
@@ -228,64 +284,10 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         }
     }
 
-    // ---- 解析一个 menu 对象（新旧两种格式共用这段逻辑） ----
-    auto parseMenuObject = [](const JsonValue& m, core::RadialMenu* out) {
-        out->name = m.find("name").asString();
-        out->sectorCount = static_cast<std::uint8_t>(
-            m.find("sectorCount").asUint32(8));
-        if (out->sectorCount < core::kMinSectors) {
-            out->sectorCount = core::kMinSectors;
-        }
-        if (out->sectorCount > core::kMaxSectors) {
-            out->sectorCount = core::kMaxSectors;
-        }
-
-        out->actions.clear();
-        const JsonValue& actions = m.find("actions");
-        if (actions.isArray()) {
-            for (std::size_t j = 0; j < actions.items().size(); ++j) {
-                const JsonValue& a = actions.at(j);
-                if (!a.isObject()) continue;
-
-                core::RadialAction action;
-                bool recognized = false;
-                action.type = core::radialActionTypeFromKey(
-                    a.find("type").asString(), &recognized);
-                action.name = a.find("name").asString();
-                action.target = a.find("target").asString();
-
-                const JsonValue& args = a.find("arguments");
-                if (args.isArray()) {
-                    for (std::size_t k = 0; k < args.items().size(); ++k) {
-                        action.arguments.push_back(args.at(k).asString());
-                    }
-                }
-                if (a.hasKey("icon") && !a.find("icon").isNull()) {
-                    action.icon = a.find("icon").asString();
-                }
-                const JsonValue& mods = a.find("modifiers");
-                if (mods.isArray()) {
-                    for (std::size_t k = 0; k < mods.items().size(); ++k) {
-                        action.modifiers.push_back(
-                            hotkeyModifierFromKey(mods.at(k).asString()));
-                    }
-                }
-                if (a.hasKey("key")) {
-                    action.key = a.find("key").asString();
-                }
-                out->actions.push_back(action);
-            }
-        }
-        // 补齐到 sectorCount 个
-        while (out->actions.size() < out->sectorCount) {
-            out->actions.push_back(core::RadialAction());
-        }
-    };
-
     // ---- menu：新格式是单个对象，老格式是 menus 数组 ----
     const JsonValue& menuValue = root.find("menu");
     if (menuValue.isObject()) {
-        parseMenuObject(menuValue, &result.value.menu);
+        parseRadialMenuJson(menuValue, &result.value.menu);
     } else {
         // schemaVersion <= 2 的文件：menus 里可能有多份方案，优先取 id 为
         // "default" 的那份（老版本的全局默认），没有就取第一份。
@@ -304,7 +306,7 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
                 }
             }
             if (chosen != nullptr) {
-                parseMenuObject(*chosen, &result.value.menu);
+                parseRadialMenuJson(*chosen, &result.value.menu);
             }
         }
     }

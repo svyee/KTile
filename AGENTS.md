@@ -224,7 +224,8 @@ app/            组装与生命周期
 6. **热键手势钩子顺序**：低级键盘钩子是 LIFO，Explorer 重启会插到前面。
    已通过监听 `TaskbarCreated` 重装钩子解决，不要简化掉。
 7. **图标路径**：自定义图标 / 内置图标必须存 `data` 相对路径；存绝对路径会
-   破坏“拷走即迁移”。
+   破坏“拷走即迁移”。唯一的例外是轮盘插件图标：它们在**加载期**从
+   `slugin/<id>/` 解析成绝对路径，只存在于内存，从不写进任何 JSON。
 8. **测试依赖自动探测**：测试文件 `#include` 的模块名必须能匹配
    `build.ps1` 里的正则，否则依赖源文件不会被编译进去。
 9. **调试截图路径**：`--debug-shot` 输出到**当前工作目录**的
@@ -243,7 +244,9 @@ app/            组装与生命周期
 | `src/core/search.{h,cpp}` | 子串搜索与高亮区间 |
 | `src/core/radial_menu.{h,cpp}` | 轮盘动作模型、角度→扇区命中（纯函数，有单测） |
 | `src/ui/radial_menu_window.{h,cpp}` | 轮盘花瓣环绘制、命中测试、出现动画 |
-| `src/ui/radial_editor_dialog.{h,cpp}` | 轮盘编辑器（方案 / 扇区动作 / 按应用匹配） |
+| `src/ui/radial_editor_dialog.{h,cpp}` | 轮盘编辑器（扇区动作 / 进程黑名单） |
+| `src/core/radial_plugin.{h,cpp}` | 轮盘插件模型：进程匹配（priority + id 字典序）、插件校验 |
+| `src/infrastructure/radial_plugin_store.{h,cpp}` | 扫描 `slugin/<id>/radial.json`，图标相对路径在加载期转绝对 |
 | `src/platform/win32/radial_mouse_hook.{h,cpp}` | 鼠标手势状态机（吞键 / 阈值 / 外甩取消） |
 | `src/infrastructure/json/radial_store.{h,cpp}` | `radial.json` 读写与 schema 迁移 |
 | `src/infrastructure/json/config_store.{h,cpp}` | JSON ↔ 模型、原子读写、损坏备份 |

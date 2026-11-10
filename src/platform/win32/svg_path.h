@@ -20,6 +20,7 @@
 #include <d2d1.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace ktile {
@@ -67,6 +68,14 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
 // Lucide 的线条风格：圆头（round cap）+ 圆角（round join）。
 // D2D 默认是平头 + 尖角，直接画会显得生硬，和 Lucide 原版差别明显。
 ComPtr<ID2D1StrokeStyle> createRoundStrokeStyle(ID2D1Factory* factory);
+
+// 读一个 .svg 文件的标记文本（UTF-8，自动去掉 BOM）。失败（不存在 / 读不了 /
+// 空文件）返回 false。
+//
+// 放在平台层而不是各自 ui 文件里：磁贴插件图标和轮盘插件图标都要读 SVG 文件，
+// 各写一份「打开文件 + 去 BOM」迟早会出现一份忘了处理 BOM，表现为图标莫名
+// 不显示。这是纯文件读取，不涉及 D2D，解析交给 buildSvgGlyph。
+bool readSvgMarkupFile(const std::wstring& path, std::wstring* markup);
 
 }  // namespace win32
 }  // namespace platform

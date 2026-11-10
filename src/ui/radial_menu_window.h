@@ -92,6 +92,13 @@ private:
     // 取扇区动作的图标（带缓存），没有图标返回 nullptr
     ID2D1Bitmap* iconForAction(const core::RadialAction& action);
 
+    // 取 action.icon 指定的 SVG 图标（带缓存，按文件修改时间失效）。
+    //
+    // 优先级高于位图和内置矢量符号：插件作者把图标放在自己目录里，
+    // 就是希望「这个按钮长这样」，能解析就必须用它，不能悄悄换成通用符号。
+    const platform::win32::SvgGlyph* customGlyphForAction(
+        const core::RadialAction& action);
+
     // 取扇区动作的矢量图标（快捷键 / 内置命令），没有返回 nullptr
     const platform::win32::SvgGlyph* glyphForAction(const core::RadialAction& action);
 
@@ -125,10 +132,15 @@ private:
     platform::win32::ComPtr<ID2D1SolidColorBrush> accentTextBrush_;
     platform::win32::ComPtr<ID2D1SolidColorBrush> hubBrush_;
     platform::win32::ComPtr<ID2D1SolidColorBrush> hubBorderBrush_;
+    // 专供 SVG 彩色图层用的画笔：不能借用 textBrush_/accentTextBrush_，
+    // 那两个是文字和图标共用的，改颜色会把下方的文字一起染掉。
+    platform::win32::ComPtr<ID2D1SolidColorBrush> glyphAccentBrush_;
     platform::win32::ComPtr<ID2D1StrokeStyle> glyphStrokeStyle_;
 
     std::unordered_map<std::string, platform::win32::ComPtr<ID2D1Bitmap>> iconCache_;
     std::unordered_map<std::wstring, platform::win32::SvgGlyph> glyphCache_;
+    // 自定义 SVG 图标缓存（键含文件修改时间，插件改了图标下一帧生效）
+    std::unordered_map<std::wstring, platform::win32::SvgGlyph> customGlyphCache_;
 
     // 离屏 DIB
     HDC memDc_ = nullptr;

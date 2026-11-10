@@ -1,5 +1,6 @@
 // KTile - 轮盘菜单数据模型测试
 #include "core/radial_menu.h"
+#include "core/radial_plugin.h"
 
 #include <cmath>
 #include <cstdio>
@@ -266,6 +267,88 @@ static void testValidateRejectsSuppressionConflict() {
     CHECK(validateRadialConfig(config));
 }
 
+// ---------------------------------------------------------------- 轮盘插件
+
+// 造一个最小可用插件
+static RadialPlugin makePlugin(const char* id, std::vector<std::string> processes,
+                               int priority, std::uint8_t sectors = 4) {
+    RadialPlugin plugin;
+    plugin.id = id;
+    plugin.name = id;
+    plugin.processes = std::move(processes);
+    plugin.priority = priority;
+    plugin.menu = RadialMenu(id, id, sectors);
+    // 扇区动作留空（isEmpty 的动作是合法的，校验只看数量）
+    plugin.valid = validateRadialPlugin(plugin);
+    return plugin;
+}
+
+static void testFindPluginForProcess() {
+    std::vector<RadialPlugin> plugins;
+    plugins.push_back(makePlugin("explorer", {"explorer.exe"}, 0));
+    plugins.push_back(makePlugin("code", {"Code.exe", "code - insiders.exe"}, 0));
+
+    // 命中（大小写不敏感）
+    const RadialPlugin* hit = findPluginForProcess(plugins, "EXPLORER.EXE");
+    CHECK(hit != nullptr && hit->id == "explorer");
+    hit = findPluginForProcess(plugins, "code.exe");
+    CHECK(hit != nullptr && hit->id == "code");
+    hit = findPluginForProcess(plugins, "Code - Insiders.exe");
+    CHECK(hit != nullptr && hit->id == "code");
+
+    // 未命中 / 空进程名
+    CHECK(findPluginForProcess(plugins, "notepad.exe") == nullptr);
+    CHECK(findPluginForProcess(plugins, "") == nullptr);
+    CHECK(findPluginForProcess({}, "explorer.exe") == nullptr);
+
+    // priority 大的赢
+    plugins.push_back(makePlugin("explorer-pro", {"explorer.exe"}, 5));
+    hit = findPluginForProcess(plugins, "explorer.exe");
+    CHECK(hit != nullptr && hit->id == "explorer-pro");
+
+    // 同优先级按 id 字典序，与插入顺序无关（结果必须确定）
+    plugins.push_back(makePlugin("aaa", {"explorer.exe"}, 5));
+    hit = findPluginForProcess(plugins, "explorer.exe");
+    CHECK(hit != nullptr && hit->id == "aaa");
+
+    // 无效插件即使 priority 更高也不参与匹配
+    RadialPlugin broken = makePlugin("zzz", {"explorer.exe"}, 99);
+    broken.valid = false;
+    plugins.push_back(broken);
+    hit = findPluginForProcess(plugins, "explorer.exe");
+    CHECK(hit != nullptr && hit->id == "aaa");
+}
+
+static void testValidateRadialPlugin() {
+    RadialPlugin plugin = makePlugin("ok", {"a.exe"}, 0);
+    CHECK(validateRadialPlugin(plugin));
+
+    // id / processes 为空
+    RadialPlugin noId = makePlugin("", {"a.exe"}, 0);
+    CHECK(!validateRadialPlugin(noId));
+    RadialPlugin noProcess = makePlugin("x", {}, 0);
+    CHECK(!validateRadialPlugin(noProcess));
+
+    // 进程名里有空串：会让「按进程匹配」把所有人都当成命中
+    RadialPlugin emptyName = makePlugin("x", {"a.exe", ""}, 0);
+    CHECK(!validateRadialPlugin(emptyName));
+
+    // 扇区数越界 / 动作数与扇区数不一致
+    RadialPlugin twoSectors = makePlugin("x", {"a.exe"}, 0);
+    twoSectors.menu.sectorCount = 2;
+    twoSectors.menu.actions.resize(2);
+    CHECK(!validateRadialPlugin(twoSectors));
+
+    RadialPlugin mismatch = makePlugin("x", {"a.exe"}, 0, 4);
+    mismatch.menu.actions.resize(6);
+    CHECK(!validateRadialPlugin(mismatch));
+
+    RadialPlugin nine = makePlugin("x", {"a.exe"}, 0, 8);
+    nine.menu.sectorCount = 9;
+    nine.menu.actions.resize(9);
+    CHECK(!validateRadialPlugin(nine));
+}
+
 // ---------------------------------------------------------------- 入口
 
 int wmain() {
@@ -289,6 +372,8 @@ int wmain() {
     testTriggerModifierKey();
     testSuppressionConflict();
     testValidateRejectsSuppressionConflict();
+    testFindPluginForProcess();
+    testValidateRadialPlugin();
 
     wprintf(L"\n%d failures\n", g_failures);
     return g_failures;
