@@ -1070,6 +1070,14 @@ void Application::loadRadialPlugins() {
         paths_.isPortable() ? paths_.executableDirectory() + L"\\slugin"
                             : paths_.dataDirectory() + L"\\slugin";
     radialPluginStore_.discover(root);
+
+    // 重扫会清空并重建插件列表，而 activeRadialMenu_ 正指着其中某个
+    // plugin->menu —— 此时若轮盘还亮着，那个指针就成了野指针（选择动作时
+    // 会读到已释放的内存）。正常路径上「打开设置」本身就意味着拖动早已结束，
+    // 这里只是把「理论上不可能」变成「一定安全」。
+    if (radialWindow_ && radialWindow_->isVisible()) {
+        hideRadialMenu();
+    }
     const auto& plugins = radialPluginStore_.plugins();
     if (plugins.empty()) {
         return;
