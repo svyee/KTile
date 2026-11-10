@@ -10,6 +10,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -61,7 +62,7 @@ constexpr int kCardTop = 8;
 constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
 constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
-constexpr int kCardHeightRadial = 384;      // 触发方式 + 扇区动作
+constexpr int kCardHeightRadial = 434;      // 触发方式 + 抑制键 + 扇区动作
 constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
 constexpr int kSpinnerWidth = 76;    // 数字输入框宽度
@@ -113,6 +114,25 @@ constexpr RadialButtonOption kRadialButtonOptions[] = {
 
 constexpr int kRadialButtonOptionCount = static_cast<int>(
     sizeof(kRadialButtonOptions) / sizeof(kRadialButtonOptions[0]));
+
+// 抑制键：按着这些键的时候，轮盘一律不弹（鼠标事件原样放行）。
+// 用 HotkeyModifier 而不是 RadialTriggerModifier，因为滑块要覆盖 Win，
+// 而触发修饰键里没有 Win（Win+右键 是系统手势的地盘，不做触发键）。
+struct RadialSuppressOption {
+    const wchar_t* label;
+    core::HotkeyModifier value;
+    int controlId;
+};
+
+constexpr RadialSuppressOption kRadialSuppressOptions[] = {
+    {L"Ctrl", core::HotkeyModifier::Control, 1191},
+    {L"Shift", core::HotkeyModifier::Shift,  1192},
+    {L"Alt", core::HotkeyModifier::Alt,      1193},
+    {L"Win", core::HotkeyModifier::Win,      1194},
+};
+
+constexpr int kRadialSuppressOptionCount = static_cast<int>(
+    sizeof(kRadialSuppressOptions) / sizeof(kRadialSuppressOptions[0]));
 
 struct RadialModifierOption {
     const wchar_t* label;
@@ -194,6 +214,8 @@ constexpr int kRadialCancelValueId = 1187;
 constexpr int kRadialEditButtonId = 1188;
 constexpr int kRadialSummaryId = 1189;
 constexpr int kRadialCoexistHintId = 1190;
+// 抑制键的四个复选框用 1191~1194（见 kRadialSuppressOptions），这里只补提示行
+constexpr int kRadialSuppressHintId = 1195;
 
 // 滑块范围：阈值太小会被手抖误触，太大则拖半天不出轮盘；
 // 取消半径给 150~400 足够覆盖「刚好越过花瓣」到「大臂横甩」。
@@ -1451,6 +1473,36 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRadial += 28;
 
+            // 抑制键：按住这些键时轮盘一律不弹，鼠标事件原样放行。
+            // 四个横排复选框比下拉多选更直观（一眼看到开了哪几个），
+            // 也少一次展开动作 —— 这一页要调的东西本来就不多。
+            makeLabel(L"抑制键", kContentLeft + 8, yRadial + 3,
+                      kLabelWidth - 8, 18);
+            for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
+                const RadialSuppressOption& option = kRadialSuppressOptions[i];
+                HWND box = makeControl(
+                    L"BUTTON", option.label,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,
+                    kContentLeft + kLabelWidth + i * 74, yRadial, 72, 20,
+                    option.controlId);
+                if (box != nullptr) {
+                    const auto& held = state->radial.trigger.suppressWhileHeld;
+                    const bool checked =
+                        std::find(held.begin(), held.end(), option.value) !=
+                        held.end();
+                    SendMessageW(box, BM_SETCHECK,
+                                 checked ? BST_CHECKED : BST_UNCHECKED, 0);
+                }
+            }
+            yRadial += 24;
+            makeControl(
+                L"STATIC",
+                L"与上面的修饰键重复的项会被忽略（否则永远触发不了）。",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                kContentLeft + kLabelWidth, yRadial, kColumnWidth - kLabelWidth,
+                18, kRadialSuppressHintId);
+            yRadial += 26;
+
             // 这段说明在 150% 缩放下会折成四行，高度必须按四行给 ——
             // 按两行算的话最后一行会被下面的分隔线压住（实测踩过）。
             makeControl(
@@ -2100,6 +2152,27 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                             state->radial.trigger.cancelRadiusPx =
                                 static_cast<std::uint16_t>(
                                     SendMessageW(cancel, TBM_GETPOS, 0, 0));
+                        }
+                        // 抑制键：四个复选框重建列表。与触发修饰键撞车的
+                        // 直接丢掉，保证交给 core 的配置必然合法（提示行
+                        // 里已经写明这条规则，用户不会莫名其妙）。
+                        state->radial.trigger.suppressWhileHeld.clear();
+                        for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
+                            const RadialSuppressOption& option =
+                                kRadialSuppressOptions[i];
+                            HWND box = GetDlgItem(hwnd, option.controlId);
+                            if (box == nullptr) continue;
+                            if (SendMessageW(box, BM_GETCHECK, 0, 0) !=
+                                BST_CHECKED) {
+                                continue;
+                            }
+                            if (core::modifierIsTriggerModifier(
+                                    option.value,
+                                    state->radial.trigger.modifier)) {
+                                continue;
+                            }
+                            state->radial.trigger.suppressWhileHeld.push_back(
+                                option.value);
                         }
                         state->result.radial = state->radial;
                     }

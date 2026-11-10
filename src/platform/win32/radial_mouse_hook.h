@@ -104,6 +104,14 @@ private:
 
     // 检查修饰键是否满足配置
     bool modifierSatisfied() const noexcept;
+
+    // 抑制键当前是否按着（按着就不弹轮盘，事件原样放行）。
+    //
+    // 这里**可以**放心用 GetAsyncKeyState —— 文件开头那条「吞掉事件后
+    // 问不出物理状态」的警告只针对鼠标键：抑制键是键盘键，我们既没装
+    // 键盘钩子、也没吞任何键盘事件，它的异步状态是准确的。
+    bool suppressionActive() const noexcept;
+
     // 把虚拟键码对应的鼠标按键重新注入（用于阈值内抬起时恢复原生点击）
     void reinjectClick() const;
     // 当前配置的按键对应的按下/抬起消息

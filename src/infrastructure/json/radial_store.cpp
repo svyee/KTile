@@ -5,6 +5,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace ktile {
@@ -25,10 +26,16 @@ const char* hotkeyModifierToKey(core::HotkeyModifier modifier) {
     return "alt";
 }
 
-core::HotkeyModifier hotkeyModifierFromKey(const std::string& key) {
-    if (key == "control") return core::HotkeyModifier::Control;
-    if (key == "shift")   return core::HotkeyModifier::Shift;
-    if (key == "win")     return core::HotkeyModifier::Win;
+core::HotkeyModifier hotkeyModifierFromKey(const std::string& key,
+                                          bool* recognized = nullptr) {
+    if (recognized) *recognized = true;
+    if (key == "control" || key == "ctrl") return core::HotkeyModifier::Control;
+    if (key == "shift") return core::HotkeyModifier::Shift;
+    if (key == "win")   return core::HotkeyModifier::Win;
+    if (key == "alt")   return core::HotkeyModifier::Alt;
+    // 认不出的键名告诉调用方，别默默当成 Alt —— 手写 "ctrl" 曾经会被
+    // 理解成 Alt，用户看到的是「抑制键根本没生效」。
+    if (recognized) *recognized = false;
     return core::HotkeyModifier::Alt;
 }
 
@@ -82,6 +89,14 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
                   static_cast<std::uint32_t>(config.trigger.activationThresholdPx));
     writer.member("cancelRadiusPx",
                   static_cast<std::uint32_t>(config.trigger.cancelRadiusPx));
+    // 抑制键：空列表不写，保持文件干净（缺字段时读回来就是「不抑制」）
+    if (!config.trigger.suppressWhileHeld.empty()) {
+        writer.key("suppressWhileHeld").beginArray();
+        for (core::HotkeyModifier modifier : config.trigger.suppressWhileHeld) {
+            writer.value(hotkeyModifierToKey(modifier));
+        }
+        writer.endArray();
+    }
     writer.endObject();
 
     // menus
@@ -187,6 +202,32 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         }
         if (result.value.trigger.cancelRadiusPx > core::kMaxCancelRadiusDip) {
             result.value.trigger.cancelRadiusPx = core::kMaxCancelRadiusDip;
+        }
+
+        // 抑制键：认不出的名字跳过、重复的去重、与触发修饰键撞车的剔除。
+        //
+        // 撞车那一项选择「静默丢掉抑制项」而不是「整份配置打回默认」：
+        // 用户手写 "alt" 抑制 + Alt 触发，本意多半是「换个触发键」，丢掉
+        // 抑制至少还能用；整份回默认会把辛苦配的扇区全清掉。
+        const JsonValue& suppressed = trigger.find("suppressWhileHeld");
+        if (suppressed.isArray()) {
+            for (std::size_t i = 0; i < suppressed.items().size(); ++i) {
+                const std::string key = suppressed.at(i).asString();
+                if (key.empty()) continue;
+                bool recognized = false;
+                const core::HotkeyModifier modifier =
+                    hotkeyModifierFromKey(key, &recognized);
+                if (!recognized) continue;
+                if (core::modifierIsTriggerModifier(
+                        modifier, result.value.trigger.modifier)) {
+                    continue;
+                }
+                auto& held = result.value.trigger.suppressWhileHeld;
+                if (std::find(held.begin(), held.end(), modifier) ==
+                    held.end()) {
+                    held.push_back(modifier);
+                }
+            }
         }
     }
 

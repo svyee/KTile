@@ -632,6 +632,57 @@ void testRadialTriggerValuesClamped() {
 
 // 老文件（schemaVersion 1）读进来后要盖成当前版本号。
 //
+// 抑制键往返：JSON 里写成 alt/control/shift/win，读回来必须一一对应。
+void testRadialSuppressionRoundTrip() {
+    core::RadialConfig config;
+    config.menus.clear();
+    config.profiles.clear();
+    config.menus.emplace_back("default", "全局默认", 4);
+    config.trigger.modifier = core::RadialTriggerModifier::Ctrl;
+    config.trigger.suppressWhileHeld = {core::HotkeyModifier::Alt,
+                                        core::HotkeyModifier::Win};
+
+    const std::string text = RadialStore::serialize(config);
+    const auto loaded = RadialStore::deserialize(text);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
+    }
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.suppressWhileHeld.size()),
+             2);
+    CHECK(loaded.value.trigger.suppressWhileHeld[0] == core::HotkeyModifier::Alt);
+    CHECK(loaded.value.trigger.suppressWhileHeld[1] == core::HotkeyModifier::Win);
+}
+
+// 手写配置的容错：撞车项、重复项、认不出的名字都要在加载期剔除，
+// 而不是把整份配置打回默认（那会把用户辛苦配的扇区全清掉）。
+void testRadialSuppressionFilteredOnLoad() {
+    const std::string json =
+        "{"
+        "\"schemaVersion\": 2,"
+        "\"trigger\": {\"enabled\": true, \"button\": \"right\","
+        "  \"modifier\": \"ctrl\","
+        "  \"suppressWhileHeld\": [\"alt\", \"alt\", \"control\", \"bogus\", \"shift\"]},"
+        "\"menus\": [{\"id\": \"default\", \"name\": \"全局\", \"sectorCount\": 4,"
+        "  \"actions\": [{}, {}, {}, {}]}],"
+        "\"profiles\": []"
+        "}";
+
+    const auto loaded = RadialStore::deserialize(json);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
+    }
+    // alt 保留、重复的 alt 去掉、control 与触发修饰键撞车剔除、
+    // bogus 认不出剔除、shift 保留 —— 只剩两项且顺序按文件顺序。
+    const auto& held = loaded.value.trigger.suppressWhileHeld;
+    CHECK_EQ(static_cast<long long>(held.size()), 2);
+    if (held.size() == 2) {
+        CHECK(held[0] == core::HotkeyModifier::Alt);
+        CHECK(held[1] == core::HotkeyModifier::Shift);
+    }
+}
+
 // 没有迁移函数是有意的：字段缺失走默认值、认不出的枚举回落、越界值夹取，
 // 老文件本来就能读。但版本号得跟着升，否则下次保存又原样写回旧值，
 // 以后真要做破坏性变更时就没有判断依据了。
@@ -685,6 +736,8 @@ int wmain() {
     testPluginItemRoundTrip();
     testRadialConfigRoundTrip();
     testRadialTriggerValuesClamped();
+    testRadialSuppressionRoundTrip();
+    testRadialSuppressionFilteredOnLoad();
     testRadialSchemaVersionStamped();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);

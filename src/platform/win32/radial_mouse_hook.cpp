@@ -108,6 +108,23 @@ bool RadialMouseHook::modifierSatisfied() const noexcept {
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
+bool RadialMouseHook::suppressionActive() const noexcept {
+    // 见头文件说明：抑制键是键盘键，没被我们吞过，GetAsyncKeyState 可信。
+    for (core::HotkeyModifier modifier : trigger_.suppressWhileHeld) {
+        int vk = 0;
+        switch (modifier) {
+            case core::HotkeyModifier::Alt:     vk = VK_MENU;    break;
+            case core::HotkeyModifier::Control: vk = VK_CONTROL; break;
+            case core::HotkeyModifier::Shift:   vk = VK_SHIFT;   break;
+            case core::HotkeyModifier::Win:     vk = VK_LWIN;    break;
+        }
+        if (vk != 0 && (GetAsyncKeyState(vk) & 0x8000) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RadialMouseHook::reinjectClick() const {
     // 重新注入一次按下+抬起，让原生菜单正常弹出。
     // 用 dwExtraInfo 标记，钩子回调看到签名就放行。
@@ -157,6 +174,12 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         // 侧键1/侧键2 共用 WM_XBUTTONDOWN，还得看 mouseData 才知是哪一个
         if (!matchesTriggerButton(event)) {
             return false;  // 另一个侧键：放行给目标窗口
+        }
+        // 抑制键按着：整段放行，连状态机都不进。
+        // 用户此刻大概率在做 Alt+Tab / Alt+方向 这类操作，顺手拖了下右键，
+        // 我们既不该吞事件，也不该冒出一个轮盘挡在半路上。
+        if (suppressionActive()) {
+            return false;
         }
         // 按键按下
         if (!modifierSatisfied()) {

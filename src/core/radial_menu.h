@@ -168,7 +168,25 @@ struct RadialTriggerConfig {
     RadialTriggerModifier modifier = RadialTriggerModifier::Ctrl;  // 默认 Ctrl+右键
     std::uint16_t activationThresholdPx = 8;   // 拖动超过此距离才呼出轮盘
     std::uint16_t cancelRadiusPx = 160;        // 拖出此半径外松手 = 取消
+
+    // 抑制键：按住其中任意一个键时，轮盘不弹出，鼠标事件原样放行给目标窗口。
+    // 用途是给 Alt+Tab、Alt+方向这类组合键让路 —— 用户正按着 Alt 操作，
+    // 顺手拖了下右键不该被我们吞掉。空列表 = 不抑制。
+    std::vector<HotkeyModifier> suppressWhileHeld;
 };
+
+// 抑制键是否与触发修饰键撞车。
+//
+// 同一个键既要求按住（触发）又要求不按住（抑制）等于永远不触发，
+// 这种配置在界面上要拦住，从文件里读到时剔除冲突项而不是整份打回默认。
+bool suppressionConflictsTrigger(const RadialTriggerConfig& trigger) noexcept;
+
+// 单个修饰键是否就是触发修饰键（判断的是同一个物理键）。
+//
+// 分开暴露是因为加载期要「逐项剔除」冲突的抑制键，而界面保存前只要一个
+// 「整体有没有冲突」的是非答案 —— 两处共用这一条判断，避免各写一遍。
+bool modifierIsTriggerModifier(HotkeyModifier held,
+                               RadialTriggerModifier trigger) noexcept;
 
 // 外甩取消半径的可用区间（DIP，逻辑像素）。
 //

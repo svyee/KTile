@@ -226,6 +226,54 @@ static void testTriggerModifierKey() {
     CHECK(radialTriggerModifierFromKey("none") == RadialTriggerModifier::None);
 }
 
+// ---------------------------------------------------------------- 抑制键
+
+static void testSuppressionConflict() {
+    RadialTriggerConfig trigger;
+    trigger.modifier = RadialTriggerModifier::Ctrl;
+
+    // 没有抑制键 → 不冲突
+    CHECK(!suppressionConflictsTrigger(trigger));
+
+    // Ctrl 触发 + Ctrl 抑制 = 永远弹不出来，必须判冲突
+    trigger.suppressWhileHeld = {HotkeyModifier::Control};
+    CHECK(suppressionConflictsTrigger(trigger));
+
+    // Alt 抑制与 Ctrl 触发无关
+    trigger.suppressWhileHeld = {HotkeyModifier::Alt};
+    CHECK(!suppressionConflictsTrigger(trigger));
+
+    // Alt 触发 + Alt 抑制 → 冲突；Ctrl 抑制不冲突
+    trigger.modifier = RadialTriggerModifier::Alt;
+    CHECK(suppressionConflictsTrigger(trigger));
+    trigger.suppressWhileHeld = {HotkeyModifier::Control, HotkeyModifier::Win};
+    CHECK(!suppressionConflictsTrigger(trigger));
+
+    // 触发修饰键为「无」时任何抑制键都不冲突（没有可撞的键）
+    trigger.modifier = RadialTriggerModifier::None;
+    trigger.suppressWhileHeld = {HotkeyModifier::Alt, HotkeyModifier::Control};
+    CHECK(!suppressionConflictsTrigger(trigger));
+
+    // 单项判断：Control 只跟 Ctrl 触发对应，Win 永远不冲突
+    CHECK(modifierIsTriggerModifier(HotkeyModifier::Control,
+                                    RadialTriggerModifier::Ctrl));
+    CHECK(!modifierIsTriggerModifier(HotkeyModifier::Control,
+                                     RadialTriggerModifier::Alt));
+    CHECK(!modifierIsTriggerModifier(HotkeyModifier::Win,
+                                     RadialTriggerModifier::Ctrl));
+}
+
+static void testValidateRejectsSuppressionConflict() {
+    RadialConfig config;
+    config.menus.emplace_back("default", "全局", 4);
+    config.trigger.modifier = RadialTriggerModifier::Alt;
+    config.trigger.suppressWhileHeld = {HotkeyModifier::Alt};
+    CHECK(!validateRadialConfig(config));
+
+    config.trigger.suppressWhileHeld = {HotkeyModifier::Shift};
+    CHECK(validateRadialConfig(config));
+}
+
 // ---------------------------------------------------------------- 入口
 
 int wmain() {
@@ -247,6 +295,8 @@ int wmain() {
     testActionTypeKey();
     testTriggerButtonKey();
     testTriggerModifierKey();
+    testSuppressionConflict();
+    testValidateRejectsSuppressionConflict();
 
     wprintf(L"\n%d failures\n", g_failures);
     return g_failures;

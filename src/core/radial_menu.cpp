@@ -8,6 +8,32 @@
 namespace ktile {
 namespace core {
 
+// ================================================================ 抑制键
+
+bool modifierIsTriggerModifier(HotkeyModifier held,
+                              RadialTriggerModifier trigger) noexcept {
+    switch (trigger) {
+        case RadialTriggerModifier::Ctrl:
+            return held == HotkeyModifier::Control;
+        case RadialTriggerModifier::Shift:
+            return held == HotkeyModifier::Shift;
+        case RadialTriggerModifier::Alt:
+            return held == HotkeyModifier::Alt;
+        case RadialTriggerModifier::None:
+            return false;  // 没有触发修饰键，任何抑制键都不冲突
+    }
+    return false;
+}
+
+bool suppressionConflictsTrigger(const RadialTriggerConfig& trigger) noexcept {
+    for (HotkeyModifier held : trigger.suppressWhileHeld) {
+        if (modifierIsTriggerModifier(held, trigger.modifier)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ================================================================ 配置查找
 
 const RadialMenu* RadialConfig::findMenu(const std::string& menuId) const noexcept {
@@ -89,6 +115,8 @@ bool validateRadialConfig(const RadialConfig& config) noexcept {
     if (config.trigger.activationThresholdPx < 1) return false;
     if (config.trigger.cancelRadiusPx <= config.trigger.activationThresholdPx)
         return false;
+    // 抑制键与触发修饰键撞车 = 永远弹不出来，属于非法配置
+    if (suppressionConflictsTrigger(config.trigger)) return false;
     return true;
 }
 
