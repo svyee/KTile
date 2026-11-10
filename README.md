@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/Windows-7%20SP1%20~%2011-0078D4?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
 [![Size](https://img.shields.io/badge/single%20binary-~1.2%20MB-16A34A?style=flat-square)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue?style=flat-square)](CHANGELOG.md)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus)](#)
 
 </div>

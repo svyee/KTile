@@ -159,11 +159,18 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
     // trigger
     const JsonValue& trigger = root.find("trigger");
     if (trigger.isObject()) {
+        const core::RadialTriggerConfig defaults;
         result.value.trigger.enabled = trigger.find("enabled").asBool(true);
         result.value.trigger.button =
             core::radialTriggerButtonFromKey(trigger.find("button").asString());
+
+        // modifier 缺失（而不是写了个认不出的值）时回落到默认的 Ctrl。
+        // 手写 trigger 忘了这一项的用户想要的多半是「别动我的右键」，
+        // 而 fromKey 对空串给的是 None = 纯右键拖动，会把右键整个吞掉。
+        const std::string modifierKey = trigger.find("modifier").asString();
         result.value.trigger.modifier =
-            core::radialTriggerModifierFromKey(trigger.find("modifier").asString());
+            modifierKey.empty() ? defaults.modifier
+                                : core::radialTriggerModifierFromKey(modifierKey);
         result.value.trigger.activationThresholdPx = static_cast<std::uint16_t>(
             trigger.find("activationThresholdPx").asUint32(8));
         result.value.trigger.cancelRadiusPx = static_cast<std::uint16_t>(
@@ -259,7 +266,16 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
     if (!result.ok) {
         result.error = "轮盘配置校验失败";
         result.value = makeDefaultConfig();
+        return result;
     }
+
+    // 读成功就统一盖成当前版本号。
+    //
+    // 这里没有「迁移函数」这一类东西：字段缺失走默认值、认不出的枚举值回落到
+    // 安全项、越界值上面已经夹过，所以老文件本来就能读。既然如此，让 schemaVersion
+    // 一直停在文件里的旧值没有意义（下次保存又会原样写回去，版本号永远不动），
+    // 反而会让以后真正的破坏性变更失去判断依据。
+    result.value.schemaVersion = core::kCurrentSchemaVersion;
     return result;
 }
 

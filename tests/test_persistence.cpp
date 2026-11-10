@@ -630,6 +630,31 @@ void testRadialTriggerValuesClamped() {
     CHECK_EQ(static_cast<long long>(loaded.value.menus[0].actions.size()), 8);
 }
 
+// 老文件（schemaVersion 1）读进来后要盖成当前版本号。
+//
+// 没有迁移函数是有意的：字段缺失走默认值、认不出的枚举回落、越界值夹取，
+// 老文件本来就能读。但版本号得跟着升，否则下次保存又原样写回旧值，
+// 以后真要做破坏性变更时就没有判断依据了。
+void testRadialSchemaVersionStamped() {
+    const std::string text =
+        "{\"schemaVersion\": 1,"
+        "\"trigger\": {\"button\": \"right\"},"
+        "\"menus\": [{\"id\": \"m\", \"name\": \"M\", \"sectorCount\": 4,"
+        "\"actions\": [{}, {}, {}, {}]}],"
+        "\"profiles\": []}";
+    const auto loaded = RadialStore::deserialize(text);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
+    }
+    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion),
+             static_cast<long long>(core::kCurrentSchemaVersion));
+    // 缺省的 trigger 字段走默认值：Ctrl + 右键，阈值 8，取消半径 160
+    CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Ctrl);
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.activationThresholdPx), 8);
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 160);
+}
+
 }  // namespace
 
 int wmain() {
@@ -660,6 +685,7 @@ int wmain() {
     testPluginItemRoundTrip();
     testRadialConfigRoundTrip();
     testRadialTriggerValuesClamped();
+    testRadialSchemaVersionStamped();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);
     if (g_failures == 0) {
