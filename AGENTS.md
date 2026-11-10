@@ -8,9 +8,10 @@
 KTile 是一个 Windows 原生磁贴式快速启动器：按热键唤出面板，点击磁贴启动
 应用 / 文件 / 文件夹 / 网址。
 
-- 语言与工具链：C++17，Visual Studio 2017（MSVC 14.16），直接调用 `cl.exe`
+- 语言与工具链：C++17，Visual Studio 2022 Build Tools（MSVC 14.44），
+  直接调用 `cl.exe`（`/std:c++17`）
 - 目标平台：Windows 7 SP1 ~ Windows 11（x64）
-- 产物：单个 `KTile.exe`，静态链接 `/MT`，约 800 KB，无外部运行库
+- 产物：单个 `KTile.exe`，静态链接 `/MT`，约 1.2 MB，无外部运行库
 - 运行时数据：exe 同级的 `data/`（`items.json`、`config.json`、`themes/`、`res/`）
 - 第三方依赖：**没有**。JSON 自研，UI 只用系统自带的 Direct2D / DirectWrite / WIC
 
@@ -27,7 +28,8 @@ KTile 是一个 Windows 原生磁贴式快速启动器：按热键唤出面板�
 ```
 
 - 不需要先跑 `vcvars64.bat`，`build.ps1` 自己注入 `PATH` / `INCLUDE` / `LIB`。
-- 工具链路径硬编码在 `build.ps1` 顶部（VS2017 Community + SDK 10.0.19041.0）。
+- 工具链路径硬编码在 `build.ps1` 顶部（VS2022 BuildTools MSVC 14.44 +
+  Windows SDK 10.0.26100.0）。换机器只改那几行。
 - `scripts/env-vs2017.ps1` 只用于手工跑 `cl.exe`（如 `tools/` 下的生成器），不参与主构建。
 - UI 视觉验证不要依赖屏幕截屏。程序自带调试开关（从仓库根目录运行，
   `data/` 和输出文件都以当前工作目录为基准）：
@@ -46,7 +48,10 @@ KTile 是一个 Windows 原生磁贴式快速启动器：按热键唤出面板�
 
 ### 3.1 只能使用 C++17
 
-VS2017 的 MSVC 19.16 是上限，`_MSVC_LANG = 201703`。禁止任何 C++20/23 特性：
+编译器是 VS2022 的 MSVC 14.44，但构建固定加 `/std:c++17`，等价于
+`_MSVC_LANG = 201703`。**不要顺手改成 c++20**：Win7 底线 + 这份代码的
+兼容层（`base/expected.h`、`base/span.h`）都建立在 C++17 上，
+换标准等于把两个兼容层和自己的替代物一起推翻。禁止任何 C++20/23 特性：
 
 | 禁止 | 替代方案 |
 |---|---|
@@ -70,7 +75,8 @@ VS2017 的 MSVC 19.16 是上限，`_MSVC_LANG = 201703`。禁止任何 C++20/23 
   “Minimum supported client”，或用 `dumpbin /imports build\KTile.exe` 验证导入表。
 - DPI 感知使用 `SetProcessDPIAware()`（Vista+），不要替换成 Per-Monitor 系列。
 - COM 类**手写**（参考 `src/platform/win32/drop_target.cpp`）。
-  `winrt::implements` 在当前 SDK + VS2017 下无法编译。
+  `winrt::implements` 在当前 SDK + MSVC 14.44 下仍无法正常编译（历史结论，
+  换工具链后没有重新验证过，保持手写最省事）。
 - `winrt::com_ptr` 可以继续用（实测不引入 Win8+ 导入）。
 
 ### 3.3 单文件、零依赖
@@ -108,10 +114,10 @@ VS2017 的 MSVC 19.16 是上限，`_MSVC_LANG = 201703`。禁止任何 C++20/23 
 
 ```
 base/           C++17 兼容层 + 编码转换（expected / span / algo / text_convert）
-core/           领域层：数据模型、跨度布局、搜索、项目/标签操作
+core/           领域层：数据模型、跨度布局、搜索、项目/标签操作、轮盘几何
 infrastructure/ 持久化：JSON 解析与写入、便携路径
 platform/win32/ 平台层：Win32 / D2D / WIC / 拖放 / 热键 / 图标
-ui/             界面层：主窗口、编辑对话框、设置、皮肤
+ui/             界面层：主窗口、编辑对话框、设置、皮肤、轮盘窗口/编辑器
 app/            组装与生命周期
 ```
 
@@ -211,8 +217,8 @@ app/            组装与生命周期
 
 1. **忘加 `build.ps1` 源文件列表**：编译“成功”但 exe 里没有新代码，或链接报
    `unresolved external symbol`。新增 `.cpp` 后第一件事就是更新列表。
-2. **C++20 指定初始化器**：VS2017 直接报语法错误。用构造函数。
-3. **`winrt::implements`**：VS2017 无法解析当前 SDK 的 `base.h`，必须手写 COM。
+2. **C++20 指定初始化器**：`/std:c++17` 下直接报语法错误。用构造函数。
+3. **`winrt::implements`**：无法解析当前 SDK 的 `base.h`，必须手写 COM。
 4. **PowerShell 中文乱码**：`build.ps1` 存成无 BOM 后，PS 5.1 会把中文读坏。
 5. **`.rc` 中文**：`rc.exe` 编码不可靠，版本资源保持纯 ASCII。
 6. **热键手势钩子顺序**：低级键盘钩子是 LIFO，Explorer 重启会插到前面。
@@ -235,6 +241,11 @@ app/            组装与生命周期
 | `src/core/item_operations.{h,cpp}` | 磁贴增删改、尺寸 / 坐标一致性 |
 | `src/core/tab_operations.{h,cpp}` | 标签页增删改与排序 |
 | `src/core/search.{h,cpp}` | 子串搜索与高亮区间 |
+| `src/core/radial_menu.{h,cpp}` | 轮盘动作模型、角度→扇区命中（纯函数，有单测） |
+| `src/ui/radial_menu_window.{h,cpp}` | 轮盘花瓣环绘制、命中测试、出现动画 |
+| `src/ui/radial_editor_dialog.{h,cpp}` | 轮盘编辑器（方案 / 扇区动作 / 按应用匹配） |
+| `src/platform/win32/radial_mouse_hook.{h,cpp}` | 鼠标手势状态机（吞键 / 阈值 / 外甩取消） |
+| `src/infrastructure/json/radial_store.{h,cpp}` | `radial.json` 读写与 schema 迁移 |
 | `src/infrastructure/json/config_store.{h,cpp}` | JSON ↔ 模型、原子读写、损坏备份 |
 | `src/ui/launcher_window*.cpp` | 主窗口、命中测试、绘制、交互（体积最大） |
 | `src/platform/win32/global_hotkey.{h,cpp}` | 注册热键 + 低级键盘钩子手势 |

@@ -235,6 +235,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "ui\about_dialog.cpp")
         (Join-Path $SrcDir "ui\settings_window.cpp")
         (Join-Path $SrcDir "ui\radial_menu_window.cpp")
+        (Join-Path $SrcDir "ui\radial_editor_dialog.cpp")
         # app
         (Join-Path $SrcDir "app\application.cpp")
         (Join-Path $SrcDir "app\plugin_controller.cpp")

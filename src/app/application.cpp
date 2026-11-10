@@ -2052,7 +2052,6 @@ void Application::openSettings() {
         config_.appearance.tabBarAtBottom,
         config_.appearance.windowPlacement,
         config_.appearance.themeName,
-        config_.appearance.backgroundImage,
         config_.activation.startWithWindows,
         core::hotkeyPresetOf(config_.activation.hotkey),
         // 不透明度传「当前实际生效值」：磁贴背景若是「跟随皮肤」（-1），
@@ -2061,6 +2060,7 @@ void Application::openSettings() {
         launcherWindow_->effectiveTileOpacityPercent(),
         static_cast<int>(config_.appearance.iconScalePercent),
         config_.appearance.defaultTileColor,
+        radialConfig_,
         columnsInUse,
         rowsInUse,
         &result,
@@ -2266,6 +2266,28 @@ void Application::openSettings() {
         launcherWindow_->setDefaultTileColor(
             config_.appearance.defaultTileColor);
         configChanged = true;
+    }
+
+    // ---- 轮盘菜单 ----
+    //
+    // 整份替换而不是逐字段合并：轮盘方案与按应用规则是嵌套结构，用户在
+    // 编辑对话框里可能删掉了方案、改了扇区数，逐字段合并表达不了这些变化。
+    // 换完必须重装钩子 —— 触发键/修饰键可能一起变了，旧钩子仍按旧配置吞键。
+    // 不需要重启：轮盘配置在显示时才被读取。
+    if (result.radial.has_value()) {
+        radialConfig_ = *result.radial;
+        radialHook_.uninstall();
+        if (radialConfig_.trigger.enabled && messageWindow_ != nullptr) {
+            if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
+                infrastructure::applog::info("设置变更：轮盘触发方式已重装钩子");
+            } else {
+                infrastructure::applog::error("设置变更：轮盘钩子重装失败");
+            }
+        }
+        persistRadialConfig();
+        // 触发方式可能从「Ctrl+右键」改成「中键」等，托盘提示不涉及这一项，
+        // 但主面板说明文案里若引用过触发方式也在这里统一刷新。
+        updateTrayTooltip();
     }
 
     // ---- 应用网格改动 ----

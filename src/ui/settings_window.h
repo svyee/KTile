@@ -22,6 +22,7 @@
 #include <Windows.h>
 
 #include "core/data_model.h"
+#include "core/radial_menu.h"
 
 #include <cstdint>
 #include <functional>
@@ -67,6 +68,14 @@ struct SettingsResult {
     std::optional<std::optional<std::uint32_t>> defaultTileColor;
     // 图标相对磁贴内框的统一缩放（50~100）
     std::optional<int> iconScalePercent;
+
+    // 轮盘菜单整份配置（触发方式 + 方案 + 按应用规则）。
+    //
+    // 为什么整份交回而不是拆成几个 optional 字段：轮盘方案与按应用规则是
+    // 嵌套结构（方案里还有扇区数组），拆字段既表达不了「删掉了一个方案」
+    // 这种变化，也会让 SettingsResult 膨胀成一堆半成品。调用方拿到后整份
+    // 替换并落盘即可。
+    std::optional<core::RadialConfig> radial;
 };
 
 // 插件管理页的一行（只读展示）。
@@ -143,13 +152,13 @@ struct SettingsPreviewHooks {
 //   currentTabBarAtBottom 当前标签栏是否在窗口底部
 //   currentWindowPlacement 当前窗口出现位置
 //   currentThemeName     当前皮肤显示名（UTF-8，可为空 = 默认皮肤）
-//   currentBackground    当前背景图存储值（UTF-8，空 = 未设置；仅用于显示）
 //   currentStartup       当前是否开机自启
 //   currentHotkeyPreset  当前唤醒快捷键预设
 //   currentWindowOpacity 当前主窗口整体不透明度（50~100）
 //   currentTileOpacity   当前磁贴背景不透明度（0~100；-1 = 跟随皮肤）
 //   currentIconScale     当前图标统一缩放（50~100）
 //   currentDefaultTileColor 当前全局默认磁贴底色（可空 = 跟随皮肤）
+//   currentRadial        当前轮盘菜单配置（radial.json 的内存副本）
 //   columnsInUse         当前布局已占用的最大列数（用于提示「缩小会挤掉磁贴」）
 //   rowsInUse            当前布局已占用的最大行数
 //   out                  结果输出
@@ -163,13 +172,13 @@ bool showSettingsWindow(HWND owner,
                         bool currentTabBarAtBottom,
                         core::WindowPlacement currentWindowPlacement,
                         const std::string& currentThemeName,
-                        const std::string& currentBackground,
                         bool currentStartup,
                         core::HotkeyPreset currentHotkeyPreset,
                         int currentWindowOpacity,
                         int currentTileOpacity,
                         int currentIconScale,
                         const std::optional<std::uint32_t>& currentDefaultTileColor,
+                        const core::RadialConfig& currentRadial,
                         std::uint16_t columnsInUse,
                         std::uint16_t rowsInUse,
                         SettingsResult* out,

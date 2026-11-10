@@ -9,7 +9,7 @@
 *轻量 · 单文件 · 免安装 · 离线*
 
 [![Platform](https://img.shields.io/badge/Windows-7%20SP1%20~%2011-0078D4?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
-[![Size](https://img.shields.io/badge/single%20binary-~800%20KB-16A34A?style=flat-square)](#)
+[![Size](https://img.shields.io/badge/single%20binary-~1.2%20MB-16A34A?style=flat-square)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.1.0-blue?style=flat-square)](CHANGELOG.md)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus)](#)
@@ -29,7 +29,7 @@
 KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁贴整理常用项目，
 按快捷键唤出面板，输入名称即过滤，点击即启动。
 
-整个程序是一个约 **800 KB** 的 `KTile.exe`——无需安装、无需运行库、完全离线，
+整个程序是一个约 **1.2 MB** 的 `KTile.exe`——无需安装、无需运行库、完全离线，
 配置与数据全部存放在 exe 同级的 `data` 目录，拷走即备份。
 
 ## 为什么做这个
@@ -50,6 +50,9 @@ KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁�
 - **插件磁贴** — 用声明式 `plugin.json` 接入本地指标（CPU/内存/磁盘/电池）、
   HTTP API 或命令行程序；同一插件在不同尺寸下可展示不同布局
   （例如大磁贴并列 3 天天气，小磁贴只显示当天）
+- **轮盘菜单** — 按住 `Ctrl` 再拖右键，从环形菜单里松手即执行（4 / 6 / 8 扇区）；
+  扇区可以放程序、文件、网址、快捷键或系统命令，还能按前台程序切换不同轮盘。
+  默认带修饰键，与 MouseInc 等鼠标手势软件可以同时使用
 - **多标签页** — 分类整理项目；点击、滚轮、`Ctrl+Tab`、`Ctrl+1..9` 切换
 - **即输即搜** — 唤出面板直接打字，磁贴按名称实时过滤
 - **三种添加方式** — 浏览文件、粘贴目标路径、直接从资源管理器拖入
@@ -69,6 +72,7 @@ KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁�
 | 输入文字 | 搜索过滤 |
 | `Esc` | 清空搜索 / 收起面板 |
 | `Ctrl+Tab` / `Ctrl+1..9` | 切换标签页 |
+| `Ctrl` + 右键拖动（默认，可换） | 呼出轮盘菜单，松手执行高亮扇区 |
 | 拖动磁贴 | 排序（其余磁贴自动让位） |
 | 右键磁贴 | 运行、编辑、尺寸、移动/复制到其他页…… |
 
@@ -92,6 +96,7 @@ plugin/
 data/
 ├── items.json     # 磁贴数据（可直接手改）
 ├── config.json    # 应用配置
+├── radial.json    # 轮盘菜单（方案 / 扇区动作 / 按应用匹配，可在设置里编辑）
 ├── themes/        # 皮肤（JSON，可自定义配色）
 ├── plugins/cache/ # 插件数据快照缓存（自动生成）
 └── res/           # 导入的自定义图标

@@ -4,6 +4,7 @@
 #include "core/data_model.h"
 #include "ui/color_picker.h"
 #include "ui/dialog_style.h"
+#include "ui/radial_editor_dialog.h"
 #include "ui/theme.h"
 
 #include <commctrl.h>
@@ -60,6 +61,7 @@ constexpr int kCardTop = 8;
 constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
 constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
+constexpr int kCardHeightRadial = 384;      // 触发方式 + 扇区动作
 constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
 constexpr int kSpinnerWidth = 76;    // 数字输入框宽度
@@ -93,6 +95,39 @@ constexpr PlacementOption kPlacementOptions[] = {
 
 constexpr int kPlacementOptionCount =
     static_cast<int>(sizeof(kPlacementOptions) / sizeof(kPlacementOptions[0]));
+
+// 轮盘触发键 / 修饰键的下拉映射。
+// 与 data_model 的字符串键一一对应，但顺序按「常用程度」排：
+// 右键在最前（保住肌肉记忆），中键次之，侧键放最后。
+struct RadialButtonOption {
+    const wchar_t* label;
+    core::RadialTriggerButton value;
+};
+
+constexpr RadialButtonOption kRadialButtonOptions[] = {
+    {L"右键拖动", core::RadialTriggerButton::Right},
+    {L"中键拖动", core::RadialTriggerButton::Middle},
+    {L"侧键 1 拖动", core::RadialTriggerButton::Side1},
+    {L"侧键 2 拖动", core::RadialTriggerButton::Side2},
+};
+
+constexpr int kRadialButtonOptionCount = static_cast<int>(
+    sizeof(kRadialButtonOptions) / sizeof(kRadialButtonOptions[0]));
+
+struct RadialModifierOption {
+    const wchar_t* label;
+    core::RadialTriggerModifier value;
+};
+
+constexpr RadialModifierOption kRadialModifierOptions[] = {
+    {L"无（独占该键）", core::RadialTriggerModifier::None},
+    {L"Ctrl", core::RadialTriggerModifier::Ctrl},
+    {L"Shift", core::RadialTriggerModifier::Shift},
+    {L"Alt", core::RadialTriggerModifier::Alt},
+};
+
+constexpr int kRadialModifierOptionCount = static_cast<int>(
+    sizeof(kRadialModifierOptions) / sizeof(kRadialModifierOptions[0]));
 
 // ---------------------------------------------------------------- 控件 ID
 
@@ -143,6 +178,30 @@ constexpr int kPluginOpenFolderId = 1172;
 constexpr int kPluginRemoveId = 1173;
 constexpr int kPluginHintId = 1174;
 
+// ---- 轮盘菜单页 ----
+//
+// 这一页只管「什么时候呼出」：启用开关、触发键 + 修饰键、拖动阈值、
+// 外甩取消半径。扇区动作与按应用匹配在独立对话框里编辑（radial_editor），
+// 那一块是列表 + 表单的复合结构，塞不进这里的单列表单。
+constexpr int kRadialTabId = 1180;
+constexpr int kRadialEnabledCheckId = 1181;
+constexpr int kRadialButtonComboId = 1182;
+constexpr int kRadialModifierComboId = 1183;
+constexpr int kRadialThresholdSliderId = 1184;
+constexpr int kRadialThresholdValueId = 1185;
+constexpr int kRadialCancelSliderId = 1186;
+constexpr int kRadialCancelValueId = 1187;
+constexpr int kRadialEditButtonId = 1188;
+constexpr int kRadialSummaryId = 1189;
+constexpr int kRadialCoexistHintId = 1190;
+
+// 滑块范围：阈值太小会被手抖误触，太大则拖半天不出轮盘；
+// 取消半径给 100~400 足够覆盖「轻轻一甩」到「大臂横甩」。
+constexpr int kRadialThresholdMin = 4;
+constexpr int kRadialThresholdMax = 40;
+constexpr int kRadialCancelMin = 100;
+constexpr int kRadialCancelMax = 400;
+
 // 插件页：说明 + 列表 + 操作按钮 + 脚注（均在右侧内容区内自上而下排布）
 constexpr int kPluginIntroTop = kContentTop;
 constexpr int kPluginIntroHeight = 18;
@@ -164,6 +223,8 @@ constexpr int kSectionWindowId = 1203;
 constexpr int kSectionStartupId = 1204;
 constexpr int kSectionTileId = 1205;        // 磁贴
 constexpr int kSectionIconLabelId = 1206;   // 图标与标签
+constexpr int kSectionRadialTriggerId = 1207;  // 轮盘：触发方式
+constexpr int kSectionRadialSectorId = 1208;   // 轮盘：扇区动作
 constexpr int kSectionHeaderIdEnd = 1210;
 
 // 控件 ID 到「窗口属性名」的映射：把控件句柄挂在对话框上，
@@ -225,13 +286,19 @@ struct SettingsDialogState {
     // 插件管理页回调（不拥有；为空时该页只显示说明文字）
     const SettingsPluginHooks* plugins = nullptr;
 
-    // 分页：0 = 外观，1 = 行为，2 = 插件管理。
+    // 轮盘菜单配置的草稿。
+    // 子对话框（radial_editor）直接改这份副本，点设置窗口的「确定」才
+    // 随 SettingsResult 交回应用层 —— 「取消」就整份丢弃，无需回滚。
+    core::RadialConfig radial;
+
+    // 分页：0 = 外观，1 = 行为，2 = 插件管理，3 = 轮盘。
     // 各页控件在 WM_CREATE 里已经按绝对坐标摆好，切页只做 ShowWindow，
     // 不重新布局 —— 这样切回来时滚动条/焦点都还是原来的样子。
     int activePage = 0;
     std::vector<HWND> appearanceControls;
     std::vector<HWND> behaviorControls;
     std::vector<HWND> pluginControls;
+    std::vector<HWND> radialControls;
     // 列表行与 ListView 下标一一对应，选中项据此反查 id
     std::vector<SettingsPluginInfo> pluginRows;
 
@@ -456,6 +523,47 @@ void refreshPluginList(HWND dialog, SettingsDialogState* state) {
     }
 }
 
+// 轮盘页的概况行：当前方案的扇区配置情况 + 方案数 + 按应用规则数。
+//
+// 为什么需要这一行：扇区动作在子对话框里编辑，回到设置页后界面上只看得到
+// 触发方式。给一句「4 / 8 个扇区已配置」，用户才能确认自己的改动还在。
+void refreshRadialSummary(HWND dialog, const SettingsDialogState* state) {
+    if (state == nullptr) {
+        return;
+    }
+    HWND summary = GetDlgItem(dialog, kRadialSummaryId);
+    if (summary == nullptr) {
+        return;
+    }
+
+    std::wstring text;
+    if (state->radial.menus.empty()) {
+        text = L"还没有轮盘方案 —— 打开编辑窗口新建一个。";
+    } else {
+        const core::RadialMenu& menu = state->radial.menus.front();
+        const std::wstring name = menu.name.empty()
+                                      ? base::utf8ToWide(menu.id)
+                                      : base::utf8ToWide(menu.name);
+        int configured = 0;
+        for (const auto& action : menu.actions) {
+            if (!action.isEmpty()) {
+                ++configured;
+            }
+        }
+        text = L"方案「" + name + L"」· " + std::to_wstring(configured) +
+               L" / " + std::to_wstring(menu.sectorCount) + L" 个扇区已配置";
+        if (state->radial.menus.size() > 1) {
+            text += L"· 共 " + std::to_wstring(state->radial.menus.size()) +
+                    L" 个方案";
+        }
+        if (!state->radial.profiles.empty()) {
+            text += L"· " + std::to_wstring(state->radial.profiles.size()) +
+                    L" 条按应用规则";
+        }
+    }
+    SetWindowTextW(summary, text.c_str());
+}
+
 // 切换分页：每页的控件各管各的，互不重叠。
 void switchSettingsPage(HWND dialog, SettingsDialogState* state,
                         const int page) {
@@ -473,16 +581,22 @@ void switchSettingsPage(HWND dialog, SettingsDialogState* state,
     for (const HWND control : state->pluginControls) {
         ShowWindow(control, page == 2 ? SW_SHOW : SW_HIDE);
     }
+    for (const HWND control : state->radialControls) {
+        ShowWindow(control, page == 3 ? SW_SHOW : SW_HIDE);
+    }
 
-    // 自绘标签不靠勾选态，切页后直接让三枚按钮重画；
+    // 自绘标签不靠勾选态，切页后直接让四枚按钮重画；
     // 卡片高度也按页变化，所以整窗也要重画一次。
     InvalidateRect(GetDlgItem(dialog, kAppearanceTabId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kBehaviorTabId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kPluginsTabId), nullptr, TRUE);
+    InvalidateRect(GetDlgItem(dialog, kRadialTabId), nullptr, TRUE);
     InvalidateRect(dialog, nullptr, TRUE);
 
     if (page == 2) {
         refreshPluginList(dialog, state);
+    } else if (page == 3) {
+        refreshRadialSummary(dialog, state);
     }
 }
 
@@ -560,6 +674,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     cardHeight = kCardHeightBehavior;
                 } else if (state->activePage == 2) {
                     cardHeight = kCardHeightPlugins;
+                } else if (state->activePage == 3) {
+                    cardHeight = kCardHeightRadial;
                 }
                 RECT card{};
                 card.left = scaleFor(hwnd, kContentLeft - kCardInset);
@@ -675,6 +791,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         kSidebarLeft,
                         kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 2,
                         kSidebarWidth, kSidebarTabHeight, kPluginsTabId);
+            makeControl(L"BUTTON", L"轮盘",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                        kSidebarLeft,
+                        kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 3,
+                        kSidebarWidth, kSidebarTabHeight, kRadialTabId);
 
             sink = &state->appearanceControls;
             // 单列表单：外观页的四个分组自上而下排成一列。
@@ -1208,11 +1329,166 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 kContentLeft, kPluginHintTop, kContentWidth,
                 kPluginHintHeight, kPluginHintId);
 
+            // ==================== 轮盘菜单页 ====================
+            //
+            // 这一页只放「什么时候呼出」；扇区动作与按应用匹配在
+            // radial_editor_dialog 里编辑（列表 + 表单，塞不进单列表单）。
+            sink = &state->radialControls;
+            int yRadial = kContentTop;
+
+            makeSection(L"触发方式", kSectionRadialTriggerId, kContentLeft,
+                        yRadial, false);
+
+            HWND radialEnabled = makeControl(
+                L"BUTTON", L"启用轮盘菜单（按住触发键拖动呼出）",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTOCHECKBOX,
+                0, kContentLeft + 8, yRadial, kColumnWidth - 8, 20,
+                kRadialEnabledCheckId);
+            if (radialEnabled != nullptr) {
+                SendMessageW(radialEnabled, BM_SETCHECK,
+                             state->radial.trigger.enabled ? BST_CHECKED
+                                                           : BST_UNCHECKED,
+                             0);
+            }
+            yRadial += 28;
+
+            makeLabel(L"触发键", kContentLeft + 8, yRadial + 4, kLabelWidth - 8,
+                      18);
+            HWND radialButtonCombo = makeControl(
+                L"COMBOBOX", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
+                kContentLeft + kLabelWidth, yRadial, 110, 160,
+                kRadialButtonComboId);
+            if (radialButtonCombo != nullptr) {
+                int index = 0;
+                for (int i = 0; i < kRadialButtonOptionCount; ++i) {
+                    SendMessageW(radialButtonCombo, CB_ADDSTRING, 0,
+                                 reinterpret_cast<LPARAM>(
+                                     kRadialButtonOptions[i].label));
+                    if (kRadialButtonOptions[i].value ==
+                        state->radial.trigger.button) {
+                        index = i;
+                    }
+                }
+                SendMessageW(radialButtonCombo, CB_SETCURSEL,
+                             static_cast<WPARAM>(index), 0);
+            }
+
+            makeLabel(L"修饰键", kContentLeft + kLabelWidth + 120, yRadial + 4,
+                      44, 18);
+            HWND radialModifierCombo = makeControl(
+                L"COMBOBOX", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
+                kContentLeft + kLabelWidth + 166, yRadial, 140, 160,
+                kRadialModifierComboId);
+            if (radialModifierCombo != nullptr) {
+                int index = 0;
+                for (int i = 0; i < kRadialModifierOptionCount; ++i) {
+                    SendMessageW(radialModifierCombo, CB_ADDSTRING, 0,
+                                 reinterpret_cast<LPARAM>(
+                                     kRadialModifierOptions[i].label));
+                    if (kRadialModifierOptions[i].value ==
+                        state->radial.trigger.modifier) {
+                        index = i;
+                    }
+                }
+                SendMessageW(radialModifierCombo, CB_SETCURSEL,
+                             static_cast<WPARAM>(index), 0);
+            }
+            yRadial += 30;
+
+            // 拖动阈值：超过这个距离才认为「用户是在做手势」而不是单击。
+            makeLabel(L"拖动启动", kContentLeft + 8, yRadial + 5,
+                      kLabelWidth - 8, 18);
+            HWND thresholdSlider = makeControl(
+                TRACKBAR_CLASSW, L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 0,
+                kContentLeft + kLabelWidth, yRadial - 2, kSliderWidth, 26,
+                kRadialThresholdSliderId);
+            if (thresholdSlider != nullptr) {
+                SendMessageW(thresholdSlider, TBM_SETRANGE, TRUE,
+                             MAKELONG(kRadialThresholdMin, kRadialThresholdMax));
+                SendMessageW(thresholdSlider, TBM_SETPOS, TRUE,
+                             static_cast<LPARAM>(
+                                 state->radial.trigger.activationThresholdPx));
+            }
+            {
+                const std::wstring text =
+                    std::to_wstring(state->radial.trigger.activationThresholdPx) +
+                    L" 像素";
+                makeControl(L"STATIC", text.c_str(),
+                            WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                            kContentLeft + kLabelWidth + kSliderValueOffset,
+                            yRadial + 4, 90, 18, kRadialThresholdValueId);
+            }
+            yRadial += 30;
+
+            // 外甩取消半径：拖出这个半径再松手 = 取消，不触发任何动作。
+            makeLabel(L"取消半径", kContentLeft + 8, yRadial + 5,
+                      kLabelWidth - 8, 18);
+            HWND cancelSlider = makeControl(
+                TRACKBAR_CLASSW, L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 0,
+                kContentLeft + kLabelWidth, yRadial - 2, kSliderWidth, 26,
+                kRadialCancelSliderId);
+            if (cancelSlider != nullptr) {
+                SendMessageW(cancelSlider, TBM_SETRANGE, TRUE,
+                             MAKELONG(kRadialCancelMin, kRadialCancelMax));
+                SendMessageW(cancelSlider, TBM_SETPOS, TRUE,
+                             static_cast<LPARAM>(
+                                 state->radial.trigger.cancelRadiusPx));
+            }
+            {
+                const std::wstring text =
+                    std::to_wstring(state->radial.trigger.cancelRadiusPx) +
+                    L" 像素";
+                makeControl(L"STATIC", text.c_str(),
+                            WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                            kContentLeft + kLabelWidth + kSliderValueOffset,
+                            yRadial + 4, 90, 18, kRadialCancelValueId);
+            }
+            yRadial += 28;
+
+            // 这段说明在 150% 缩放下会折成四行，高度必须按四行给 ——
+            // 按两行算的话最后一行会被下面的分隔线压住（实测踩过）。
+            makeControl(
+                L"STATIC",
+                L"带修饰键：只有「修饰键 + 该键」的组合才呼出轮盘，单按该键拖动"
+                L"放行给 MouseInc 等鼠标手势软件。\r\n"
+                L"设为「无」：该键由 KTile 接管 —— 原地单击仍会补发原生按键，"
+                L"拖动则不再传给手势软件。",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft + 8, yRadial,
+                kColumnWidth - 8, 72, kRadialCoexistHintId);
+            yRadial += 76;
+
+            makeSection(L"扇区动作", kSectionRadialSectorId, kContentLeft,
+                        yRadial, true);
+
+            makeControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                        kContentLeft + 8, yRadial, kColumnWidth - 8, 18,
+                        kRadialSummaryId);
+            yRadial += 24;
+
+            makeControl(L"BUTTON", L"编辑扇区动作…",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                        kContentLeft + 8, yRadial, 118, 26, kRadialEditButtonId);
+            yRadial += 34;
+
+            makeControl(
+                L"STATIC",
+                L"扇区动作、轮盘方案与「按应用匹配」都在编辑窗口里设置。\r\n"
+                L"首次运行已内置「复制 / 粘贴 / 剪切 / 撤销」四个扇区，可直接改。",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft + 8, yRadial,
+                kColumnWidth - 8, 36, -1);
+
             // 行为页与插件页的控件先全部隐藏，启动时停在外观页
             for (const HWND control : state->behaviorControls) {
                 ShowWindow(control, SW_HIDE);
             }
             for (const HWND control : state->pluginControls) {
+                ShowWindow(control, SW_HIDE);
+            }
+            for (const HWND control : state->radialControls) {
                 ShowWindow(control, SW_HIDE);
             }
 
@@ -1234,6 +1510,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 kButtonWidth, kButtonHeight, kCancelId);
 
             refreshHint(hwnd, state);
+            refreshRadialSummary(hwnd, state);
 
             if (columnsEdit != nullptr) {
                 SetFocus(columnsEdit);
@@ -1285,7 +1562,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             if (draw != nullptr && draw->CtlType == ODT_BUTTON &&
                 (draw->CtlID == static_cast<UINT>(kAppearanceTabId) ||
                  draw->CtlID == static_cast<UINT>(kBehaviorTabId) ||
-                 draw->CtlID == static_cast<UINT>(kPluginsTabId))) {
+                 draw->CtlID == static_cast<UINT>(kPluginsTabId) ||
+                 draw->CtlID == static_cast<UINT>(kRadialTabId))) {
                 wchar_t text[64] = {};
                 GetWindowTextW(draw->hwndItem, text, 64);
                 int tabPage = 2;
@@ -1293,6 +1571,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     tabPage = 0;
                 } else if (draw->CtlID == static_cast<UINT>(kBehaviorTabId)) {
                     tabPage = 1;
+                } else if (draw->CtlID == static_cast<UINT>(kRadialTabId)) {
+                    tabPage = 3;
                 }
                 const bool active =
                     state != nullptr && state->activePage == tabPage;
@@ -1360,15 +1640,32 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // ---- 分页切换 ----
             if ((controlId == kAppearanceTabId ||
                  controlId == kBehaviorTabId ||
-                 controlId == kPluginsTabId) &&
+                 controlId == kPluginsTabId ||
+                 controlId == kRadialTabId) &&
                 notification == BN_CLICKED) {
                 int page = 2;
                 if (controlId == kAppearanceTabId) {
                     page = 0;
                 } else if (controlId == kBehaviorTabId) {
                     page = 1;
+                } else if (controlId == kRadialTabId) {
+                    page = 3;
                 }
                 switchSettingsPage(hwnd, state, page);
+                return 0;
+            }
+
+            // ---- 轮盘：打开扇区动作编辑器 ----
+            //
+            // 子对话框直接改 state->radial（设置窗口的草稿副本），返回 true
+            // 说明用户点了确定，此时刷新概况行；点取消则草稿原样未动。
+            if (controlId == kRadialEditButtonId &&
+                notification == BN_CLICKED) {
+                if (state != nullptr) {
+                    if (showRadialEditorWindow(hwnd, &state->radial)) {
+                        refreshRadialSummary(hwnd, state);
+                    }
+                }
                 return 0;
             }
 
@@ -1391,9 +1688,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         if (state->plugins->install(file, &error)) {
                             refreshPluginList(hwnd, state);
                         } else {
-                            const std::wstring message = base::utf8ToWide(
+                            const std::wstring failureText = base::utf8ToWide(
                                 error.empty() ? std::string("安装失败") : error);
-                            MessageBoxW(hwnd, message.c_str(),
+                            MessageBoxW(hwnd, failureText.c_str(),
                                         L"安装插件失败",
                                         MB_OK | MB_ICONWARNING);
                         }
@@ -1446,9 +1743,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     state->plugins->remove(base::wideToUtf8Lossy(id), &error)) {
                     refreshPluginList(hwnd, state);
                 } else {
-                    const std::wstring message = base::utf8ToWide(
+                    const std::wstring failureText = base::utf8ToWide(
                         error.empty() ? std::string("删除失败") : error);
-                    MessageBoxW(hwnd, message.c_str(), L"删除插件失败",
+                    MessageBoxW(hwnd, failureText.c_str(), L"删除插件失败",
                                 MB_OK | MB_ICONWARNING);
                 }
                 return 0;
@@ -1755,6 +2052,56 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                             state->chosenDefaultTileColor;
                     }
 
+                    // ---- 轮盘菜单 ----
+                    //
+                    // 触发方式在这里从控件读取；扇区动作与按应用规则早已在
+                    // state->radial 里（由 radial_editor_dialog 改的就是这份
+                    // 草稿）。整份交回，由应用层决定落盘与重装钩子。
+                    {
+                        HWND enabled = GetDlgItem(hwnd, kRadialEnabledCheckId);
+                        if (enabled != nullptr) {
+                            state->radial.trigger.enabled =
+                                SendMessageW(enabled, BM_GETCHECK, 0, 0) ==
+                                BST_CHECKED;
+                        }
+                        HWND buttonCombo =
+                            GetDlgItem(hwnd, kRadialButtonComboId);
+                        if (buttonCombo != nullptr) {
+                            const int selection = static_cast<int>(
+                                SendMessageW(buttonCombo, CB_GETCURSEL, 0, 0));
+                            if (selection >= 0 &&
+                                selection < kRadialButtonOptionCount) {
+                                state->radial.trigger.button =
+                                    kRadialButtonOptions[selection].value;
+                            }
+                        }
+                        HWND modifierCombo =
+                            GetDlgItem(hwnd, kRadialModifierComboId);
+                        if (modifierCombo != nullptr) {
+                            const int selection = static_cast<int>(
+                                SendMessageW(modifierCombo, CB_GETCURSEL, 0, 0));
+                            if (selection >= 0 &&
+                                selection < kRadialModifierOptionCount) {
+                                state->radial.trigger.modifier =
+                                    kRadialModifierOptions[selection].value;
+                            }
+                        }
+                        HWND threshold =
+                            GetDlgItem(hwnd, kRadialThresholdSliderId);
+                        if (threshold != nullptr) {
+                            state->radial.trigger.activationThresholdPx =
+                                static_cast<std::uint16_t>(
+                                    SendMessageW(threshold, TBM_GETPOS, 0, 0));
+                        }
+                        HWND cancel = GetDlgItem(hwnd, kRadialCancelSliderId);
+                        if (cancel != nullptr) {
+                            state->radial.trigger.cancelRadiusPx =
+                                static_cast<std::uint16_t>(
+                                    SendMessageW(cancel, TBM_GETPOS, 0, 0));
+                        }
+                        state->result.radial = state->radial;
+                    }
+
                     state->accepted = true;
                 }
                 DestroyWindow(hwnd);
@@ -1833,6 +2180,25 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 break;
             }
             const int controlId = GetDlgCtrlID(control);
+
+            // 轮盘页的两个像素滑块：拖动时只刷新数值文字，
+            // 真正的模型更新在「确定」时统一从控件读一次（单一来源，
+            // 不会出现「拖过但没读」的中间态）。
+            if (controlId == kRadialThresholdSliderId ||
+                controlId == kRadialCancelSliderId) {
+                const int value = static_cast<int>(
+                    SendMessageW(control, TBM_GETPOS, 0, 0));
+                const int valueId = controlId == kRadialThresholdSliderId
+                                        ? kRadialThresholdValueId
+                                        : kRadialCancelValueId;
+                HWND label = GetDlgItem(hwnd, valueId);
+                if (label != nullptr) {
+                    const std::wstring text = std::to_wstring(value) + L" 像素";
+                    SetWindowTextW(label, text.c_str());
+                }
+                return 0;
+            }
+
             if (controlId != kWindowOpacitySliderId &&
                 controlId != kTileOpacitySliderId &&
                 controlId != kIconScaleSliderId) {
@@ -2081,7 +2447,6 @@ bool showSettingsWindow(HWND owner,
                         bool currentTabBarAtBottom,
                         core::WindowPlacement currentWindowPlacement,
                         const std::string& currentThemeName,
-                        const std::string& currentBackground,
                         const bool currentStartup,
                         const core::HotkeyPreset currentHotkeyPreset,
                         const int currentWindowOpacity,
@@ -2089,6 +2454,7 @@ bool showSettingsWindow(HWND owner,
                         const int currentIconScale,
                         const std::optional<std::uint32_t>&
                             currentDefaultTileColor,
+                        const core::RadialConfig& currentRadial,
                         const std::uint16_t columnsInUse,
                         const std::uint16_t rowsInUse,
                         SettingsResult* out,
@@ -2125,6 +2491,7 @@ bool showSettingsWindow(HWND owner,
     state.initialIconScale = currentIconScale;
     state.initialDefaultTileColor = currentDefaultTileColor;
     state.chosenDefaultTileColor = currentDefaultTileColor;
+    state.radial = currentRadial;
     state.columnsInUse = columnsInUse;
     state.rowsInUse = rowsInUse;
     state.preview = preview;
