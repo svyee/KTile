@@ -512,14 +512,11 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
 
     // ---- 调试截图：轮盘菜单 ----
     if (debug.radial) {
-        if (radialConfig_.menus.empty()) {
-            return 2;
-        }
         auto radialWindow = std::make_unique<ui::RadialMenuWindow>();
         if (!radialWindow->create(instance_)) {
             return 3;
         }
-        const core::RadialMenu& menu = radialConfig_.menus.front();
+        const core::RadialMenu& menu = radialConfig_.menu;
         // 以屏幕中心为基准，保证完整可见
         POINT center{};
         center.x = GetSystemMetrics(SM_CXSCREEN) / 2;
@@ -672,7 +669,8 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
 
     // 安装轮盘菜单鼠标钩子（Ctrl+右键拖动等）
     if (radialConfig_.trigger.enabled) {
-        if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
+        if (radialHook_.install(messageWindow_, radialConfig_.trigger,
+                                radialConfig_.blacklist)) {
             infrastructure::applog::info("轮盘菜单钩子已安装");
             lastRadialInstallTick_ = GetTickCount64();
         } else {
@@ -903,7 +901,8 @@ void Application::reinstallRadialHook(const char* reason) {
     infrastructure::applog::info(std::string("重装轮盘钩子（") +
                                  (reason != nullptr ? reason : "?") + "）");
     radialHook_.uninstall();
-    if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
+    if (radialHook_.install(messageWindow_, radialConfig_.trigger,
+                                radialConfig_.blacklist)) {
         lastRadialInstallTick_ = GetTickCount64();
     } else {
         infrastructure::applog::error("重装轮盘钩子失败（下次看门狗再试）");
@@ -1064,17 +1063,9 @@ void Application::persistRadialConfig() {
 // ================================================================ 轮盘菜单
 
 void Application::onRadialShow(POINT startPoint) {
-    if (radialConfig_.menus.empty()) {
-        return;
-    }
-
-    // 根据前台进程匹配轮盘方案
-    const std::wstring processName = platform::win32::foregroundProcessName();
-    const core::RadialMenu* menu = radialConfig_.menuForProcess(
-        base::wideToUtf8Lossy(processName));
-    if (menu == nullptr) {
-        return;
-    }
+    // 黑名单在钩子按下时就已经拦掉了，这里不再判 —— 能走到这一步说明
+    // 前台进程没被拉黑（或者黑名单里没有它）。
+    const core::RadialMenu* menu = &radialConfig_.menu;
 
     activeRadialMenu_ = menu;
 
@@ -2368,7 +2359,8 @@ void Application::openSettings() {
         radialHook_.uninstall();
         lastRadialInstallTick_ = 0;
         if (radialConfig_.trigger.enabled && messageWindow_ != nullptr) {
-            if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
+            if (radialHook_.install(messageWindow_, radialConfig_.trigger,
+                                radialConfig_.blacklist)) {
                 infrastructure::applog::info("设置变更：轮盘触发方式已重装钩子");
                 lastRadialInstallTick_ = GetTickCount64();
             } else {

@@ -529,30 +529,22 @@ void testPluginItemRoundTrip() {
 // 空动作，读回来所有扇区就整体错位，用户配的动作会跑到别的方向上去。
 void testRadialConfigRoundTrip() {
     core::RadialConfig config;
-    config.menus.clear();
-    config.profiles.clear();
+    config.menu = core::RadialMenu("default", "通用", 8);
+    config.menu.actions[0].type = core::RadialActionType::Shortcut;
+    config.menu.actions[0].name = "复制";
+    config.menu.actions[0].modifiers = {core::HotkeyModifier::Control};
+    config.menu.actions[0].key = "C";
+    config.menu.actions[2].type = core::RadialActionType::Url;
+    config.menu.actions[2].name = "搜索";
+    config.menu.actions[2].target = "https://example.com";
+    config.menu.actions[7].type = core::RadialActionType::Builtin;
+    config.menu.actions[7].name = "锁屏";
+    config.menu.actions[7].target = "ktile:lock";
 
-    core::RadialMenu global("default", "全局默认", 8);
-    global.actions[0].type = core::RadialActionType::Shortcut;
-    global.actions[0].name = "复制";
-    global.actions[0].modifiers = {core::HotkeyModifier::Control};
-    global.actions[0].key = "C";
-    global.actions[2].type = core::RadialActionType::Url;
-    global.actions[2].name = "搜索";
-    global.actions[2].target = "https://example.com";
-    config.menus.push_back(global);
-
-    core::RadialMenu note("notepad", "记事本", 4);
-    note.actions[1].type = core::RadialActionType::Builtin;
-    note.actions[1].name = "锁屏";
-    note.actions[1].target = "ktile:lock";
-    config.menus.push_back(note);
-
-    config.profiles.push_back(core::RadialProfile("", "default"));
-    config.profiles.push_back(core::RadialProfile("notepad.exe", "notepad"));
     config.trigger.button = core::RadialTriggerButton::Side2;
     config.trigger.modifier = core::RadialTriggerModifier::Shift;
     config.trigger.cancelRadiusPx = 200;
+    config.blacklist = {"game.exe", "mstsc.exe"};
 
     const std::string text = RadialStore::serialize(config);
     const auto loaded = RadialStore::deserialize(text);
@@ -561,18 +553,16 @@ void testRadialConfigRoundTrip() {
         return;
     }
 
-    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion), 2);
-    CHECK_EQ(static_cast<long long>(loaded.value.menus.size()), 2);
-    CHECK_EQ(static_cast<long long>(loaded.value.profiles.size()), 2);
+    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion), 3);
     CHECK(loaded.value.trigger.button == core::RadialTriggerButton::Side2);
     CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Shift);
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 200);
 
-    const auto& restored = loaded.value.menus[0];
+    const auto& restored = loaded.value.menu;
     CHECK_EQ(static_cast<long long>(restored.actions.size()), 8);
     CHECK(restored.actions[0].type == core::RadialActionType::Shortcut);
-    CHECK_STREQ(restored.actions[0].name, "复制");
-    CHECK_STREQ(restored.actions[0].key, "C");
+    CHECK(restored.actions[0].name == "复制");
+    CHECK(restored.actions[0].key == "C");
     CHECK_EQ(static_cast<long long>(restored.actions[0].modifiers.size()), 1);
     if (!restored.actions[0].modifiers.empty()) {
         CHECK(restored.actions[0].modifiers[0] == core::HotkeyModifier::Control);
@@ -580,25 +570,48 @@ void testRadialConfigRoundTrip() {
     // 中间的空槽位必须还是空的，不能被后面的动作顶上
     CHECK(restored.actions[1].isEmpty());
     CHECK(restored.actions[2].type == core::RadialActionType::Url);
-    CHECK_STREQ(restored.actions[2].target, "https://example.com");
+    CHECK(restored.actions[2].target == "https://example.com");
+    CHECK(restored.actions[7].type == core::RadialActionType::Builtin);
+    CHECK(restored.actions[7].target == "ktile:lock");
 
-    const auto& restoredNote = loaded.value.menus[1];
-    CHECK_EQ(static_cast<long long>(restoredNote.sectorCount), 4);
-    CHECK_EQ(static_cast<long long>(restoredNote.actions.size()), 4);
-    CHECK(restoredNote.actions[1].type == core::RadialActionType::Builtin);
-    CHECK_STREQ(restoredNote.actions[1].target, "ktile:lock");
+    // 黑名单往返 + 大小写不敏感命中
+    CHECK_EQ(static_cast<long long>(loaded.value.blacklist.size()), 2);
+    CHECK(loaded.value.isProcessBlocked("GAME.EXE"));
+    CHECK(loaded.value.isProcessBlocked("mstsc.exe"));
+    CHECK(!loaded.value.isProcessBlocked("chrome.exe"));
+}
 
-    // 按进程名挑方案：精确命中 notepad，其他回落到全局默认
-    const core::RadialMenu* byProcess = loaded.value.menuForProcess("notepad.exe");
-    CHECK(byProcess != nullptr);
-    if (byProcess != nullptr) {
-        CHECK_STREQ(byProcess->id, "notepad");
+// 老文件（schemaVersion 2）里是多方案 + 按应用白名单。读进来必须：
+// 优先取 id == "default" 的那份当通用轮盘（不是数组第一个），profiles 丢弃。
+void testRadialLegacyMenusArrayMigrated() {
+    const std::string json =
+        "{\"schemaVersion\": 2,"
+        "\"trigger\": {\"enabled\": true, \"button\": \"right\","
+        "  \"modifier\": \"ctrl\"},"
+        "\"menus\": ["
+        "  {\"id\": \"other\", \"name\": \"别的方案\", \"sectorCount\": 4,"
+        "   \"actions\": [{}, {}, {}, {}]},"
+        "  {\"id\": \"default\", \"name\": \"全局默认\", \"sectorCount\": 8,"
+        "   \"actions\": [{\"type\": \"shortcut\", \"name\": \"复制\","
+        "     \"key\": \"C\", \"modifiers\": [\"control\"]},"
+        "     {}, {}, {}, {}, {}, {}, {}]}],"
+        "\"profiles\": [{\"processPattern\": \"notepad.exe\","
+        "  \"menuId\": \"other\"}]}";
+
+    const auto loaded = RadialStore::deserialize(json);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
     }
-    const core::RadialMenu* fallback = loaded.value.menuForProcess("chrome.exe");
-    CHECK(fallback != nullptr);
-    if (fallback != nullptr) {
-        CHECK_STREQ(fallback->id, "default");
-    }
+    // 优先 default，不是数组第一个（other）
+    CHECK(loaded.value.menu.name == "全局默认");
+    CHECK_EQ(static_cast<long long>(loaded.value.menu.actions.size()), 8);
+    CHECK(loaded.value.menu.actions[0].name == "复制");
+    CHECK(loaded.value.menu.actions[0].key == "C");
+    // profiles 整段丢弃：按应用差异化已交给 slugin 插件，不转成黑名单
+    CHECK(loaded.value.blacklist.empty());
+    // 版本号盖成当前值，下次保存就是新格式
+    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion), 3);
 }
 
 // 手改过的 JSON：离谱值必须夹回可用区间，且不能因为校验失败就把整份配置
@@ -626,18 +639,14 @@ void testRadialTriggerValuesClamped() {
     // 认不出的触发键回落到右键（安全的默认，不会突然吞中键）
     CHECK(loaded.value.trigger.button == core::RadialTriggerButton::Right);
     // 扇区数夹进 4~8，动作补齐到扇区数
-    CHECK_EQ(static_cast<long long>(loaded.value.menus[0].sectorCount), 8);
-    CHECK_EQ(static_cast<long long>(loaded.value.menus[0].actions.size()), 8);
+    CHECK_EQ(static_cast<long long>(loaded.value.menu.sectorCount), 8);
+    CHECK_EQ(static_cast<long long>(loaded.value.menu.actions.size()), 8);
 }
 
-// 老文件（schemaVersion 1）读进来后要盖成当前版本号。
-//
 // 抑制键往返：JSON 里写成 alt/control/shift/win，读回来必须一一对应。
 void testRadialSuppressionRoundTrip() {
     core::RadialConfig config;
-    config.menus.clear();
-    config.profiles.clear();
-    config.menus.emplace_back("default", "全局默认", 4);
+    config.menu = core::RadialMenu("default", "全局默认", 4);
     config.trigger.modifier = core::RadialTriggerModifier::Ctrl;
     config.trigger.suppressWhileHeld = {core::HotkeyModifier::Alt,
                                         core::HotkeyModifier::Win};
@@ -699,7 +708,7 @@ void testRadialSchemaVersionStamped() {
         return;
     }
     CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion),
-             static_cast<long long>(core::kCurrentSchemaVersion));
+             static_cast<long long>(core::kRadialSchemaVersion));
     // 缺省的 trigger 字段走默认值：Ctrl + 右键，阈值 8，取消半径 160
     CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Ctrl);
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.activationThresholdPx), 8);
@@ -738,6 +747,7 @@ int wmain() {
     testRadialTriggerValuesClamped();
     testRadialSuppressionRoundTrip();
     testRadialSuppressionFilteredOnLoad();
+    testRadialLegacyMenusArrayMigrated();
     testRadialSchemaVersionStamped();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);

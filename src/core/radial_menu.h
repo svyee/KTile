@@ -100,18 +100,6 @@ struct RadialMenu {
           sectorCount(sectors), actions(sectors) {}
 };
 
-// ================================================================ Per-App 配置
-
-// 进程名 → 轮盘方案的映射。processPattern 为空表示全局默认。
-struct RadialProfile {
-    std::string processPattern;                // 进程名，如 "chrome.exe"；空 = 全局
-    std::string menuId;
-
-    RadialProfile() = default;
-    RadialProfile(std::string process_, std::string menuId_)
-        : processPattern(std::move(process_)), menuId(std::move(menuId_)) {}
-};
-
 // ================================================================ 触发配置
 
 enum class RadialTriggerButton : std::uint8_t {
@@ -198,18 +186,44 @@ inline constexpr std::uint16_t kMaxCancelRadiusDip = 600;
 
 // ================================================================ 轮盘总配置
 
+// radial.json 的 schema 版本。
+//
+// 刻意**不复用** data_model.h 的 kCurrentSchemaVersion：那个是 items.json /
+// config.json 的版本，两者结构毫无关系。共用同一个常量意味着给轮盘加字段
+// 会把磁贴配置的版本号一起推上去，下次真要按版本做迁移时就分不清是谁变了。
+// 轮盘自己一条版本线：1 = 初版，2 = 多方案 + 按应用白名单，
+// 3 = 通用项 + 进程黑名单（按应用差异化交给 slugin 插件）。
+inline constexpr std::uint32_t kRadialSchemaVersion = 3;
+
+// 进程名是否命中黑名单（大小写不敏感）。
+//
+// 抽成自由函数是为了让钩子层也能用：鼠标钩子在「按下」那一瞬间就要决定
+// 吞不吞事件，那时手里只有一份黑名单，没有完整的 RadialConfig。
+bool isProcessBlockedBy(const std::vector<std::string>& blacklist,
+                        const std::string& processName) noexcept;
+
+// 两个进程名是否相等（大小写不敏感）。
+//
+// 单独暴露是给界面判重用的：黑名单里加第二遍 "Chrome.exe" 应当被拦住，
+// 但用户看不出 "chrome.exe" 和 "Chrome.exe" 是一回事，得由代码替他判断。
+bool processNameEquals(const std::string& left,
+                       const std::string& right) noexcept;
+
 struct RadialConfig {
-    std::uint32_t schemaVersion = kCurrentSchemaVersion;
+    std::uint32_t schemaVersion = kRadialSchemaVersion;
     RadialTriggerConfig trigger;
-    std::vector<RadialMenu> menus;
-    std::vector<RadialProfile> profiles;
 
-    // 查找指定 id 的菜单，未找到返回 nullptr
-    const RadialMenu* findMenu(const std::string& menuId) const noexcept;
+    // 通用轮盘：所有应用共用这一份。按应用差异化交给 slugin 插件目录，
+    // 用户侧不再有多方案概念 —— 设置界面只呈现「一份通用配置」。
+    RadialMenu menu;
 
-    // 根据前台进程名匹配 profile，返回对应的 menu。
-    // 优先精确匹配进程名，无匹配时返回空 processPattern 的全局默认菜单。
-    const RadialMenu* menuForProcess(const std::string& processName) const noexcept;
+    // 进程黑名单：命中即不弹轮盘（事件全部放行）。只比进程名、大小写不敏感，
+    // 刻意不支持通配符 —— `*app*.exe` 这种写法误伤面太大，用户很难预估。
+    std::vector<std::string> blacklist;
+
+    // 该进程是否被拉黑。空串（拿不到进程名）不算命中：宁可弹一次，
+    // 也别让「查不到进程名」这种异常情况把功能变成静默失效。
+    bool isProcessBlocked(const std::string& processName) const noexcept;
 };
 
 // ================================================================ 几何计算（纯函数）
@@ -236,8 +250,7 @@ std::optional<std::uint8_t> hitTestSector(float dx, float dy,
                                            float innerRadius, float outerRadius,
                                            std::uint8_t sectorCount) noexcept;
 
-// 校验配置：扇区数合法、每个 menu 的 actions.size() == sectorCount、
-// profiles 引用的 menuId 存在。
+// 校验配置：扇区数合法、actions.size() == sectorCount、黑名单无空项。
 bool validateRadialConfig(const RadialConfig& config) noexcept;
 
 }  // namespace core

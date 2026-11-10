@@ -117,41 +117,36 @@ static void testHitTestAtRadiusBoundary() {
 
 static RadialConfig makeTestConfig() {
     RadialConfig config;
-    RadialMenu global("global", "全局", 8);
-    global.actions[0].name = "复制";
-    global.actions[0].type = RadialActionType::Shortcut;
-    global.actions[0].modifiers = {HotkeyModifier::Control};
-    global.actions[0].key = "C";
-    config.menus.push_back(global);
-
-    RadialMenu chrome("chrome", "Chrome", 8);
-    chrome.actions[0].name = "新标签页";
-    chrome.actions[0].type = RadialActionType::Shortcut;
-    chrome.actions[0].modifiers = {HotkeyModifier::Control};
-    chrome.actions[0].key = "T";
-    config.menus.push_back(chrome);
-
-    config.profiles.push_back(RadialProfile("chrome.exe", "chrome"));
-    config.profiles.push_back(RadialProfile("", "global"));  // 全局默认
+    config.menu = RadialMenu("default", "通用", 8);
+    config.menu.actions[0].name = "复制";
+    config.menu.actions[0].type = RadialActionType::Shortcut;
+    config.menu.actions[0].modifiers = {HotkeyModifier::Control};
+    config.menu.actions[0].key = "C";
+    // 故意一条大写一条小写，用来盯大小写不敏感
+    config.blacklist = {"game.exe", "MSTSC.EXE"};
     return config;
 }
 
-static void testFindMenu() {
+static void testBlacklist() {
     const auto config = makeTestConfig();
-    CHECK(config.findMenu("global") != nullptr);
-    CHECK(config.findMenu("chrome") != nullptr);
-    CHECK(config.findMenu("nonexistent") == nullptr);
+    CHECK(config.isProcessBlocked("game.exe"));
+    CHECK(config.isProcessBlocked("GAME.EXE"));
+    // 前台报的永远是小写，配置里怎么写都得能命中
+    CHECK(config.isProcessBlocked("mstsc.exe"));
+    CHECK(!config.isProcessBlocked("chrome.exe"));
+    // 空进程名（查不到前台进程）不算命中：宁可弹一次，也别让功能静默失效
+    CHECK(!config.isProcessBlocked(""));
+    // 只做整名比较，不做前缀/子串匹配
+    CHECK(!config.isProcessBlocked("game"));
+    CHECK(!config.isProcessBlocked("game.exe.bak"));
 }
 
-static void testMenuForProcess() {
-    const auto config = makeTestConfig();
-    const RadialMenu* chrome = config.menuForProcess("chrome.exe");
-    CHECK(chrome != nullptr);
-    CHECK(chrome->id == "chrome");
-
-    const RadialMenu* def = config.menuForProcess("notepad.exe");
-    CHECK(def != nullptr);
-    CHECK(def->id == "global");  // 无匹配 → 全局默认
+static void testProcessNameEquals() {
+    CHECK(processNameEquals("chrome.exe", "chrome.exe"));
+    CHECK(processNameEquals("Chrome.EXE", "chrome.exe"));
+    CHECK(!processNameEquals("chrome.exe", "chrome2.exe"));
+    CHECK(!processNameEquals("", "chrome.exe"));
+    CHECK(!processNameEquals("chrome", "chrome.exe"));
 }
 
 // ---------------------------------------------------------------- 配置校验
@@ -160,26 +155,23 @@ static void testValidateConfig() {
     RadialConfig config = makeTestConfig();
     CHECK(validateRadialConfig(config));
 
-    // 扇区数非法
-    RadialMenu bad("bad", "bad", 3);
-    bad.actions.resize(3);
-    config.menus.push_back(bad);
+    // 扇区数非法（3 不在 4/6/8 里）
+    config.menu.sectorCount = 3;
+    config.menu.actions.resize(3);
     CHECK(!validateRadialConfig(config));
 }
 
 static void testValidateActionsSizeMismatch() {
     RadialConfig config;
-    RadialMenu menu("m", "m", 8);
-    menu.actions.resize(4);  // 不匹配
-    config.menus.push_back(menu);
+    config.menu = RadialMenu("m", "m", 8);
+    config.menu.actions.resize(4);  // 与 sectorCount 不匹配
     CHECK(!validateRadialConfig(config));
 }
 
-static void testValidateProfileBadMenuId() {
-    RadialConfig config;
-    RadialMenu menu("m", "m", 8);
-    config.menus.push_back(menu);
-    config.profiles.push_back(RadialProfile("app.exe", "nonexistent"));
+static void testValidateEmptyBlacklistEntry() {
+    RadialConfig config = makeTestConfig();
+    config.blacklist.push_back("");
+    // 空进程名永远匹配不上，属于无意义配置
     CHECK(!validateRadialConfig(config));
 }
 
@@ -265,7 +257,7 @@ static void testSuppressionConflict() {
 
 static void testValidateRejectsSuppressionConflict() {
     RadialConfig config;
-    config.menus.emplace_back("default", "全局", 4);
+    config.menu = RadialMenu("default", "全局", 4);
     config.trigger.modifier = RadialTriggerModifier::Alt;
     config.trigger.suppressWhileHeld = {HotkeyModifier::Alt};
     CHECK(!validateRadialConfig(config));
@@ -285,11 +277,11 @@ int wmain() {
     testHitTestOuter();
     testHitTestSectors();
     testHitTestAtRadiusBoundary();
-    testFindMenu();
-    testMenuForProcess();
+    testBlacklist();
+    testProcessNameEquals();
     testValidateConfig();
     testValidateActionsSizeMismatch();
-    testValidateProfileBadMenuId();
+    testValidateEmptyBlacklistEntry();
     testValidateThreshold();
     testEmptyAction();
     testActionTypeKey();

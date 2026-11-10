@@ -65,8 +65,7 @@ core::RadialConfig makeDefaultConfig() {
     global.actions[6].modifiers = {core::HotkeyModifier::Control};
     global.actions[6].key = "Z";
 
-    config.menus.push_back(global);
-    config.profiles.push_back(core::RadialProfile("", "default"));
+    config.menu = global;
     return config;
 }
 
@@ -99,11 +98,11 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
     }
     writer.endObject();
 
-    // menus
-    writer.key("menus").beginArray();
-    for (const auto& menu : config.menus) {
-        writer.beginObject();
-        writer.member("id", menu.id);
+    // menu —— 只有一份通用轮盘，所以直接写对象而不是数组。
+    // 老版本（schemaVersion 2）这里是 menus 数组，读的时候兼容。
+    {
+        const auto& menu = config.menu;
+        writer.key("menu").beginObject();
         writer.member("name", menu.name);
         writer.member("sectorCount", static_cast<std::uint32_t>(menu.sectorCount));
 
@@ -139,17 +138,15 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
         writer.endArray();  // actions
         writer.endObject();  // menu
     }
-    writer.endArray();  // menus
 
-    // profiles
-    writer.key("profiles").beginArray();
-    for (const auto& profile : config.profiles) {
-        writer.beginObject();
-        writer.member("processPattern", profile.processPattern);
-        writer.member("menuId", profile.menuId);
-        writer.endObject();
+    // blacklist：命中即不弹轮盘
+    if (!config.blacklist.empty()) {
+        writer.key("blacklist").beginArray();
+        for (const auto& blocked : config.blacklist) {
+            writer.value(blocked);
+        }
+        writer.endArray();
     }
-    writer.endArray();  // profiles
 
     writer.endObject();
     return writer.take();
@@ -231,75 +228,102 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         }
     }
 
-    // menus
-    result.value.menus.clear();
-    const JsonValue& menus = root.find("menus");
-    if (menus.isArray()) {
-        for (std::size_t i = 0; i < menus.items().size(); ++i) {
-            const JsonValue& m = menus.at(i);
-            if (!m.isObject()) continue;
+    // ---- 解析一个 menu 对象（新旧两种格式共用这段逻辑） ----
+    auto parseMenuObject = [](const JsonValue& m, core::RadialMenu* out) {
+        out->name = m.find("name").asString();
+        out->sectorCount = static_cast<std::uint8_t>(
+            m.find("sectorCount").asUint32(8));
+        if (out->sectorCount < core::kMinSectors) {
+            out->sectorCount = core::kMinSectors;
+        }
+        if (out->sectorCount > core::kMaxSectors) {
+            out->sectorCount = core::kMaxSectors;
+        }
 
-            core::RadialMenu menu;
-            menu.id = m.find("id").asString();
-            menu.name = m.find("name").asString();
-            menu.sectorCount = static_cast<std::uint8_t>(
-                m.find("sectorCount").asUint32(8));
-            if (menu.sectorCount < core::kMinSectors) menu.sectorCount = core::kMinSectors;
-            if (menu.sectorCount > core::kMaxSectors) menu.sectorCount = core::kMaxSectors;
+        out->actions.clear();
+        const JsonValue& actions = m.find("actions");
+        if (actions.isArray()) {
+            for (std::size_t j = 0; j < actions.items().size(); ++j) {
+                const JsonValue& a = actions.at(j);
+                if (!a.isObject()) continue;
 
-            const JsonValue& actions = m.find("actions");
-            if (actions.isArray()) {
-                for (std::size_t j = 0; j < actions.items().size(); ++j) {
-                    const JsonValue& a = actions.at(j);
-                    if (!a.isObject()) continue;
+                core::RadialAction action;
+                bool recognized = false;
+                action.type = core::radialActionTypeFromKey(
+                    a.find("type").asString(), &recognized);
+                action.name = a.find("name").asString();
+                action.target = a.find("target").asString();
 
-                    core::RadialAction action;
-                    bool recognized = false;
-                    action.type = core::radialActionTypeFromKey(
-                        a.find("type").asString(), &recognized);
-                    action.name = a.find("name").asString();
-                    action.target = a.find("target").asString();
+                const JsonValue& args = a.find("arguments");
+                if (args.isArray()) {
+                    for (std::size_t k = 0; k < args.items().size(); ++k) {
+                        action.arguments.push_back(args.at(k).asString());
+                    }
+                }
+                if (a.hasKey("icon") && !a.find("icon").isNull()) {
+                    action.icon = a.find("icon").asString();
+                }
+                const JsonValue& mods = a.find("modifiers");
+                if (mods.isArray()) {
+                    for (std::size_t k = 0; k < mods.items().size(); ++k) {
+                        action.modifiers.push_back(
+                            hotkeyModifierFromKey(mods.at(k).asString()));
+                    }
+                }
+                if (a.hasKey("key")) {
+                    action.key = a.find("key").asString();
+                }
+                out->actions.push_back(action);
+            }
+        }
+        // 补齐到 sectorCount 个
+        while (out->actions.size() < out->sectorCount) {
+            out->actions.push_back(core::RadialAction());
+        }
+    };
 
-                    const JsonValue& args = a.find("arguments");
-                    if (args.isArray()) {
-                        for (std::size_t k = 0; k < args.items().size(); ++k) {
-                            action.arguments.push_back(args.at(k).asString());
-                        }
-                    }
-                    if (a.hasKey("icon") && !a.find("icon").isNull()) {
-                        action.icon = a.find("icon").asString();
-                    }
-                    const JsonValue& mods = a.find("modifiers");
-                    if (mods.isArray()) {
-                        for (std::size_t k = 0; k < mods.items().size(); ++k) {
-                            action.modifiers.push_back(
-                                hotkeyModifierFromKey(mods.at(k).asString()));
-                        }
-                    }
-                    if (a.hasKey("key")) {
-                        action.key = a.find("key").asString();
-                    }
-                    menu.actions.push_back(action);
+    // ---- menu：新格式是单个对象，老格式是 menus 数组 ----
+    const JsonValue& menuValue = root.find("menu");
+    if (menuValue.isObject()) {
+        parseMenuObject(menuValue, &result.value.menu);
+    } else {
+        // schemaVersion <= 2 的文件：menus 里可能有多份方案，优先取 id 为
+        // "default" 的那份（老版本的全局默认），没有就取第一份。
+        // profiles（按应用白名单）整段丢弃 —— 按应用差异化已经交给 slugin
+        // 插件目录，用户侧只留一份通用轮盘。
+        const JsonValue& menus = root.find("menus");
+        if (menus.isArray()) {
+            const JsonValue* chosen = nullptr;
+            for (std::size_t i = 0; i < menus.items().size(); ++i) {
+                const JsonValue& m = menus.at(i);
+                if (!m.isObject()) continue;
+                if (chosen == nullptr) chosen = &m;
+                if (m.find("id").asString() == "default") {
+                    chosen = &m;
+                    break;
                 }
             }
-            // 补齐到 sectorCount 个
-            while (menu.actions.size() < menu.sectorCount) {
-                menu.actions.push_back(core::RadialAction());
+            if (chosen != nullptr) {
+                parseMenuObject(*chosen, &result.value.menu);
             }
-            result.value.menus.push_back(menu);
         }
     }
 
-    // profiles
-    result.value.profiles.clear();
-    const JsonValue& profiles = root.find("profiles");
-    if (profiles.isArray()) {
-        for (std::size_t i = 0; i < profiles.items().size(); ++i) {
-            const JsonValue& p = profiles.at(i);
-            if (!p.isObject()) continue;
-            result.value.profiles.push_back(core::RadialProfile(
-                p.find("processPattern").asString(),
-                p.find("menuId").asString()));
+    // ---- blacklist ----
+    result.value.blacklist.clear();
+    const JsonValue& blacklist = root.find("blacklist");
+    if (blacklist.isArray()) {
+        for (std::size_t i = 0; i < blacklist.items().size(); ++i) {
+            std::string name = blacklist.at(i).asString();
+            // 从文档/聊天里复制来的进程名常带首尾空白，先削掉
+            const std::size_t first = name.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos) continue;
+            const std::size_t last = name.find_last_not_of(" \t\r\n");
+            name = name.substr(first, last - first + 1);
+            if (name.empty()) continue;
+            // 复用 isProcessBlocked 做大小写不敏感去重（它已经是这个语义）
+            if (result.value.isProcessBlocked(name)) continue;
+            result.value.blacklist.push_back(name);
         }
     }
 
@@ -316,7 +340,7 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
     // 安全项、越界值上面已经夹过，所以老文件本来就能读。既然如此，让 schemaVersion
     // 一直停在文件里的旧值没有意义（下次保存又会原样写回去，版本号永远不动），
     // 反而会让以后真正的破坏性变更失去判断依据。
-    result.value.schemaVersion = core::kCurrentSchemaVersion;
+    result.value.schemaVersion = core::kRadialSchemaVersion;
     return result;
 }
 

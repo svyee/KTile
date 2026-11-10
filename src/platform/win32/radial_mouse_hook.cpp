@@ -1,5 +1,8 @@
 #include "platform/win32/radial_mouse_hook.h"
 
+#include "base/text_convert.h"
+#include "platform/win32/foreground_process.h"
+
 #include <cmath>
 
 namespace ktile {
@@ -25,7 +28,8 @@ RadialMouseHook::~RadialMouseHook() {
 }
 
 bool RadialMouseHook::install(HWND notifyWindow,
-                              const core::RadialTriggerConfig& trigger) {
+                              const core::RadialTriggerConfig& trigger,
+                              const std::vector<std::string>& blacklist) {
     if (!trigger.enabled) {
         uninstall();
         return true;
@@ -36,6 +40,7 @@ bool RadialMouseHook::install(HWND notifyWindow,
 
     notifyWindow_ = notifyWindow;
     trigger_ = trigger;
+    blacklist_ = blacklist;
     state_ = State::Idle;
 
     hook_ = SetWindowsHookExW(WH_MOUSE_LL, &mouseHookProc, nullptr, 0);
@@ -56,6 +61,7 @@ void RadialMouseHook::uninstall() noexcept {
         active_ = nullptr;
     }
     notifyWindow_ = nullptr;
+    blacklist_.clear();
     state_ = State::Idle;
 }
 
@@ -125,6 +131,17 @@ bool RadialMouseHook::suppressionActive() const noexcept {
     return false;
 }
 
+bool RadialMouseHook::foregroundBlocked() const noexcept {
+    if (blacklist_.empty()) {
+        return false;  // 常见情况，连进程都不查
+    }
+    const std::wstring process = foregroundProcessName();
+    if (process.empty()) {
+        return false;  // 查不到就按「不拉黑」处理，别让功能静默失效
+    }
+    return core::isProcessBlockedBy(blacklist_, base::wideToUtf8Lossy(process));
+}
+
 void RadialMouseHook::reinjectClick() const {
     // 重新注入一次按下+抬起，让原生菜单正常弹出。
     // 用 dwExtraInfo 标记，钩子回调看到签名就放行。
@@ -174,6 +191,12 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         // 侧键1/侧键2 共用 WM_XBUTTONDOWN，还得看 mouseData 才知是哪一个
         if (!matchesTriggerButton(event)) {
             return false;  // 另一个侧键：放行给目标窗口
+        }
+        // 黑名单进程：整条放行。必须在这里判，不能等窗口显示时再判 ——
+        // 那时按下事件已经被吞掉，原生右键菜单弹不出来，用户会觉得
+        // 「这个应用里右键坏了」。
+        if (foregroundBlocked()) {
+            return false;
         }
         // 抑制键按着：整段放行，连状态机都不进。
         // 用户此刻大概率在做 Alt+Tab / Alt+方向 这类操作，顺手拖了下右键，

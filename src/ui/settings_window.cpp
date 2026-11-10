@@ -62,7 +62,7 @@ constexpr int kCardTop = 8;
 constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
 constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
-constexpr int kCardHeightRadial = 434;      // 触发方式 + 抑制键 + 扇区动作
+constexpr int kCardHeightRadial = 456;      // 触发方式 + 抑制键 + 黑名单入口
 constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
 constexpr int kSpinnerWidth = 76;    // 数字输入框宽度
@@ -547,7 +547,7 @@ void refreshPluginList(HWND dialog, SettingsDialogState* state) {
     }
 }
 
-// 轮盘页的概况行：当前方案的扇区配置情况 + 方案数 + 按应用规则数。
+// 轮盘页的概况行：通用轮盘配了几个扇区 + 黑名单有几条。
 //
 // 为什么需要这一行：扇区动作在子对话框里编辑，回到设置页后界面上只看得到
 // 触发方式。给一句「4 / 8 个扇区已配置」，用户才能确认自己的改动还在。
@@ -560,30 +560,18 @@ void refreshRadialSummary(HWND dialog, const SettingsDialogState* state) {
         return;
     }
 
-    std::wstring text;
-    if (state->radial.menus.empty()) {
-        text = L"还没有轮盘方案 —— 打开编辑窗口新建一个。";
-    } else {
-        const core::RadialMenu& menu = state->radial.menus.front();
-        const std::wstring name = menu.name.empty()
-                                      ? base::utf8ToWide(menu.id)
-                                      : base::utf8ToWide(menu.name);
-        int configured = 0;
-        for (const auto& action : menu.actions) {
-            if (!action.isEmpty()) {
-                ++configured;
-            }
+    const core::RadialMenu& menu = state->radial.menu;
+    int configured = 0;
+    for (const auto& action : menu.actions) {
+        if (!action.isEmpty()) {
+            ++configured;
         }
-        text = L"方案「" + name + L"」· " + std::to_wstring(configured) +
-               L" / " + std::to_wstring(menu.sectorCount) + L" 个扇区已配置";
-        if (state->radial.menus.size() > 1) {
-            text += L"· 共 " + std::to_wstring(state->radial.menus.size()) +
-                    L" 个方案";
-        }
-        if (!state->radial.profiles.empty()) {
-            text += L"· " + std::to_wstring(state->radial.profiles.size()) +
-                    L" 条按应用规则";
-        }
+    }
+    std::wstring text = L"通用轮盘 · " + std::to_wstring(configured) + L" / " +
+                        std::to_wstring(menu.sectorCount) + L" 个扇区已配置";
+    if (!state->radial.blacklist.empty()) {
+        text += L"· " + std::to_wstring(state->radial.blacklist.size()) +
+                L" 个进程已拉黑";
     }
     SetWindowTextW(summary, text.c_str());
 }
@@ -1530,10 +1518,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             makeControl(
                 L"STATIC",
-                L"扇区动作、轮盘方案与「按应用匹配」都在编辑窗口里设置。\r\n"
-                L"首次运行已内置「复制 / 粘贴 / 剪切 / 撤销」四个扇区，可直接改。",
+                L"扇区动作与「黑名单」都在编辑窗口里设置。按应用显示不同轮盘由\r\n"
+                L"slugin 插件目录提供，不放这里。首次运行已内置「复制 / 粘贴 /\r\n"
+                L"剪切 / 撤销」四个扇区，可直接改。",
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft + 8, yRadial,
-                kColumnWidth - 8, 36, -1);
+                kColumnWidth - 8, 54, -1);
 
             // 行为页与插件页的控件先全部隐藏，启动时停在外观页
             for (const HWND control : state->behaviorControls) {

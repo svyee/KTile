@@ -34,37 +34,34 @@ bool suppressionConflictsTrigger(const RadialTriggerConfig& trigger) noexcept {
     return false;
 }
 
-// ================================================================ 配置查找
+// ================================================================ 黑名单匹配
 
-const RadialMenu* RadialConfig::findMenu(const std::string& menuId) const noexcept {
-    for (const auto& menu : menus) {
-        if (menu.id == menuId) {
-            return &menu;
-        }
+bool processNameEquals(const std::string& left,
+                       const std::string& right) noexcept {
+    // 进程名在 Windows 上大小写无关，逐字节折 ASCII 大写即可，不碰 locale。
+    // 非 ASCII 字节原样比较 —— 进程名实际都是 ASCII。
+    if (left.size() != right.size()) return false;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        const unsigned char a = static_cast<unsigned char>(left[i]);
+        const unsigned char b = static_cast<unsigned char>(right[i]);
+        const unsigned char la = (a >= 'A' && a <= 'Z') ? a + 32 : a;
+        const unsigned char lb = (b >= 'A' && b <= 'Z') ? b + 32 : b;
+        if (la != lb) return false;
     }
-    return nullptr;
+    return true;
 }
 
-const RadialMenu* RadialConfig::menuForProcess(
-        const std::string& processName) const noexcept {
-    // 优先精确匹配进程名
-    for (const auto& profile : profiles) {
-        if (!profile.processPattern.empty() &&
-            profile.processPattern == processName) {
-            const RadialMenu* menu = findMenu(profile.menuId);
-            if (menu) return menu;
-        }
+bool isProcessBlockedBy(const std::vector<std::string>& blacklist,
+                        const std::string& processName) noexcept {
+    if (processName.empty()) return false;
+    for (const auto& blocked : blacklist) {
+        if (processNameEquals(blocked, processName)) return true;
     }
-    // 回退到全局默认（processPattern 为空的 profile）
-    for (const auto& profile : profiles) {
-        if (profile.processPattern.empty()) {
-            const RadialMenu* menu = findMenu(profile.menuId);
-            if (menu) return menu;
-        }
-    }
-    // 都没有则返回第一个菜单作为兜底
-    if (!menus.empty()) return &menus.front();
-    return nullptr;
+    return false;
+}
+
+bool RadialConfig::isProcessBlocked(const std::string& processName) const noexcept {
+    return isProcessBlockedBy(blacklist, processName);
 }
 
 // ================================================================ 几何计算
@@ -102,15 +99,13 @@ std::optional<std::uint8_t> hitTestSector(float dx, float dy,
 // ================================================================ 配置校验
 
 bool validateRadialConfig(const RadialConfig& config) noexcept {
-    for (const auto& menu : config.menus) {
-        if (menu.id.empty()) return false;
-        if (menu.sectorCount < kMinSectors || menu.sectorCount > kMaxSectors)
-            return false;
-        if (menu.actions.size() != menu.sectorCount) return false;
-    }
-    for (const auto& profile : config.profiles) {
-        if (profile.menuId.empty()) return false;
-        if (!config.findMenu(profile.menuId)) return false;
+    const RadialMenu& menu = config.menu;
+    if (menu.sectorCount < kMinSectors || menu.sectorCount > kMaxSectors)
+        return false;
+    if (menu.actions.size() != menu.sectorCount) return false;
+    // 黑名单里出现空串没有意义（空进程名永远匹配不上），视为非法配置
+    for (const auto& blocked : config.blacklist) {
+        if (blocked.empty()) return false;
     }
     if (config.trigger.activationThresholdPx < 1) return false;
     if (config.trigger.cancelRadiusPx <= config.trigger.activationThresholdPx)

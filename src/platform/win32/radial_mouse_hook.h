@@ -13,11 +13,20 @@
 //   - 只做纯内存操作 + PostMessage，严禁文件 I/O 或任何耗时操作。
 //   - 回调在注册线程（消息循环线程）上执行，与窗口过程同线程，无需加锁。
 //
+// 唯一的例外是黑名单判断：按下瞬间要知道前台进程名才决定吞不吞，这必须
+// 同步完成（异步问一句就晚了，事件已经进/不进目标队列了）。它只在按键
+// **按下**那一次发生，不是每个 mouse move 都查；QueryFullProcessImageNameW
+// 读的是内核里已有的映像路径，微秒级。查不到进程名（提权窗口等）按「不拉黑」
+// 处理 —— 宁可弹一次，也别让功能静默失效。
+//
 #pragma once
 
 #include "core/radial_menu.h"  // RadialTriggerConfig
 
 #include <Windows.h>
+
+#include <string>
+#include <vector>
 
 namespace ktile {
 namespace platform {
@@ -51,7 +60,9 @@ public:
     ~RadialMouseHook();
 
     // 安装钩子。trigger 为 enabled=false 时等同 uninstall()。
-    bool install(HWND notifyWindow, const core::RadialTriggerConfig& trigger);
+    // blacklist 是进程黑名单（命中即完全放行，既不吞事件也不弹轮盘）。
+    bool install(HWND notifyWindow, const core::RadialTriggerConfig& trigger,
+                 const std::vector<std::string>& blacklist);
 
     void uninstall() noexcept;
 
@@ -81,6 +92,9 @@ private:
     HHOOK hook_ = nullptr;
     HWND notifyWindow_ = nullptr;
     core::RadialTriggerConfig trigger_;
+    // 进程黑名单副本。装钩子时拷一份，配置变更靠重新 install 生效 ——
+    // 回调里不能去碰应用层的对象（跨线程且可能已被销毁）。
+    std::vector<std::string> blacklist_;
 
     State state_ = State::Idle;
     POINT startPoint_{};
@@ -111,6 +125,9 @@ private:
     // 问不出物理状态」的警告只针对鼠标键：抑制键是键盘键，我们既没装
     // 键盘钩子、也没吞任何键盘事件，它的异步状态是准确的。
     bool suppressionActive() const noexcept;
+
+    // 前台进程是否在黑名单里（是则整条放行，连状态机都不进）。
+    bool foregroundBlocked() const noexcept;
 
     // 把虚拟键码对应的鼠标按键重新注入（用于阈值内抬起时恢复原生点击）
     void reinjectClick() const;

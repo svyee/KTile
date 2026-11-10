@@ -33,31 +33,26 @@ constexpr UINT kEditorCloseMessage = WM_APP + 0x91U;
 constexpr int kDialogWidth = 700;
 // 高度按最密的一页（扇区动作：列表 + 三行动作表单）定，两页共用。
 // 再高就是纯留白 —— 实测 560 时底部空了近 90 DIP。
-constexpr int kDialogHeight = 520;
+constexpr int kDialogHeight = 460;
 constexpr int kMargin = 16;
 constexpr int kButtonWidth = 78;
 constexpr int kButtonHeight = 26;
 constexpr int kSmallButtonHeight = 24;
 
 // 左列（方案列表）
-constexpr int kMenuListLeft = 16;
-constexpr int kMenuListTop = 62;
-constexpr int kMenuListWidth = 168;
-constexpr int kMenuListHeight = 302;
+constexpr int kTabLeft = 16;      // 顶部两枚页签的起始横坐标
 
 // 右列（扇区列表 + 动作表单）
-constexpr int kRightLeft = 200;
-constexpr int kRightWidth = kDialogWidth - kMargin - kRightLeft;  // 484
+// 左侧原来放「轮盘方案」列表（多方案时代的产物）。现在只有一份通用轮盘，
+// 那 168px 还给内容区，扇区列表和动作表单都能更宽。
+constexpr int kRightLeft = kMargin;
+constexpr int kRightWidth = kDialogWidth - kMargin * 2;  // 668
 constexpr int kSectorListTop = 74;
 constexpr int kSectorListHeight = 210;
 
 // 控件 ID
 constexpr int kTabSectorsId = 2101;
 constexpr int kTabProfilesId = 2102;
-constexpr int kMenuListId = 2103;
-constexpr int kMenuNewId = 2104;
-constexpr int kMenuDeleteId = 2105;
-constexpr int kMenuNameEditId = 2106;
 constexpr int kSectorCountComboId = 2107;
 constexpr int kSectorListId = 2108;
 constexpr int kActionTypeComboId = 2109;
@@ -68,12 +63,11 @@ constexpr int kActionModifierComboId = 2113;
 constexpr int kActionKeyEditId = 2114;
 constexpr int kActionStateHintId = 2115;
 constexpr int kActionKeyHintId = 2116;
-constexpr int kProfileListId = 2120;
-constexpr int kProfileProcessEditId = 2121;
-constexpr int kProfileMenuComboId = 2122;
-constexpr int kProfileApplyId = 2123;
-constexpr int kProfileDeleteId = 2124;
-constexpr int kProfileHintId = 2125;
+constexpr int kBlacklistListId = 2120;
+constexpr int kBlacklistEditId = 2121;
+constexpr int kBlacklistAddId = 2123;
+constexpr int kBlacklistDeleteId = 2124;
+constexpr int kBlacklistHintId = 2125;
 constexpr int kOkId = 2130;
 constexpr int kCancelId = 2131;
 
@@ -124,7 +118,6 @@ struct RadialEditorState {
     core::RadialConfig draft;
 
     int activePage = 0;       // 0 = 扇区动作，1 = 按应用
-    int currentMenu = 0;      // 左列选中的方案下标
     int currentSector = -1;   // 扇区列表选中行
     int currentProfile = -1;  // 按应用列表选中行
 
@@ -251,12 +244,13 @@ std::wstring actionTargetLabel(const core::RadialAction& action) {
     return base::utf8ToWide(action.target);
 }
 
+// 现在只有一份通用轮盘，这个包装留着是因为调用点很多 —— 都改成
+// &state->draft.menu 也行，但保留一处取值点更容易看清「哪份菜单在被编辑」。
 core::RadialMenu* currentMenu(RadialEditorState* state) {
-    if (state == nullptr || state->currentMenu < 0 ||
-        static_cast<std::size_t>(state->currentMenu) >= state->draft.menus.size()) {
+    if (state == nullptr) {
         return nullptr;
     }
-    return &state->draft.menus[static_cast<std::size_t>(state->currentMenu)];
+    return &state->draft.menu;
 }
 
 core::RadialAction* currentAction(RadialEditorState* state) {
@@ -268,36 +262,7 @@ core::RadialAction* currentAction(RadialEditorState* state) {
     return &menu->actions[static_cast<std::size_t>(state->currentSector)];
 }
 
-// 生成一个不与现有方案重名的 id
-std::string makeMenuId(const core::RadialConfig& config) {
-    for (int seed = 1; seed < 1000; ++seed) {
-        const std::string candidate = "menu" + std::to_string(seed);
-        if (config.findMenu(candidate) == nullptr) {
-            return candidate;
-        }
-    }
-    return "menu";
-}
-
 // ---------------------------------------------------------------- 列表刷新
-
-void refreshMenuList(HWND dialog, RadialEditorState* state) {
-    HWND list = GetDlgItem(dialog, kMenuListId);
-    if (list == nullptr || state == nullptr) {
-        return;
-    }
-    state->suppressNotify = true;
-    SendMessageW(list, LB_RESETCONTENT, 0, 0);
-    for (const auto& menu : state->draft.menus) {
-        const std::wstring name = menu.name.empty()
-                                      ? base::utf8ToWide(menu.id)
-                                      : base::utf8ToWide(menu.name);
-        SendMessageW(list, LB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(name.c_str()));
-    }
-    SendMessageW(list, LB_SETCURSEL, static_cast<WPARAM>(state->currentMenu), 0);
-    state->suppressNotify = false;
-}
 
 void refreshSectorList(HWND dialog, RadialEditorState* state) {
     HWND list = GetDlgItem(dialog, kSectorListId);
@@ -370,7 +335,7 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
     if (menu == nullptr) {
         text = L"先在左侧新建一个轮盘方案。";
     } else if (state->currentSector < 0) {
-        text = L"选中左侧扇区后即可编辑它的动作。";
+        text = L"选中上方扇区后即可编辑它的动作。";
     } else if (const core::RadialAction* action = currentAction(state)) {
         if (action->isEmpty()) {
             text = L"该扇区为空，拖动到这里不会触发任何动作。";
@@ -455,67 +420,28 @@ void refreshActionForm(HWND dialog, RadialEditorState* state) {
     refreshActionStateHint(dialog, state);
 }
 
-void refreshProfileMenuCombo(HWND dialog, RadialEditorState* state) {
-    HWND combo = GetDlgItem(dialog, kProfileMenuComboId);
-    if (combo == nullptr || state == nullptr) {
-        return;
-    }
-    state->suppressNotify = true;
-    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    for (const auto& menu : state->draft.menus) {
-        const std::wstring name = menu.name.empty()
-                                      ? base::utf8ToWide(menu.id)
-                                      : base::utf8ToWide(menu.name);
-        SendMessageW(combo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(name.c_str()));
-    }
-    if (!state->draft.menus.empty()) {
-        SendMessageW(combo, CB_SETCURSEL, 0, 0);
-    }
-    state->suppressNotify = false;
-}
-
-void refreshProfileList(HWND dialog, RadialEditorState* state) {
-    HWND list = GetDlgItem(dialog, kProfileListId);
+// 黑名单列表：只列进程名，命中即「在这个应用里不弹轮盘」。
+void refreshBlacklist(HWND dialog, RadialEditorState* state) {
+    HWND list = GetDlgItem(dialog, kBlacklistListId);
     if (list == nullptr || state == nullptr) {
         return;
     }
     state->suppressNotify = true;
     ListView_DeleteAllItems(list);
 
-    for (std::size_t i = 0; i < state->draft.profiles.size(); ++i) {
-        const core::RadialProfile& profile = state->draft.profiles[i];
-        const std::wstring processText =
-            profile.processPattern.empty()
-                ? std::wstring(L"（全局默认）")
-                : base::utf8ToWide(profile.processPattern);
-
-        // 方案名可能已被删掉（理论上删除方案时会一并清理，这里仍做兜底）
-        std::wstring menuText;
-        if (const core::RadialMenu* menu =
-                state->draft.findMenu(profile.menuId)) {
-            menuText = menu->name.empty() ? base::utf8ToWide(menu->id)
-                                          : base::utf8ToWide(menu->name);
-        } else {
-            menuText = L"（方案已删除）";
-        }
-
+    for (std::size_t i = 0; i < state->draft.blacklist.size(); ++i) {
+        const std::wstring text = base::utf8ToWide(state->draft.blacklist[i]);
         LVITEMW item{};
         item.mask = LVIF_TEXT | LVIF_PARAM;
         item.iItem = static_cast<int>(i);
-        item.pszText = const_cast<LPWSTR>(processText.c_str());
+        item.pszText = const_cast<LPWSTR>(text.c_str());
         item.lParam = static_cast<LPARAM>(i);
-        const int index = ListView_InsertItem(list, &item);
-        if (index < 0) {
-            continue;
-        }
-        ListView_SetItemText(list, index, 1,
-                             const_cast<LPWSTR>(menuText.c_str()));
+        ListView_InsertItem(list, &item);
     }
 
     if (state->currentProfile >= 0 &&
         static_cast<std::size_t>(state->currentProfile) <
-            state->draft.profiles.size()) {
+            state->draft.blacklist.size()) {
         ListView_SetItemState(list, state->currentProfile,
                               LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
@@ -523,37 +449,20 @@ void refreshProfileList(HWND dialog, RadialEditorState* state) {
     state->suppressNotify = false;
 }
 
-// 把「按应用」列表的选中行回填到表单
-void refreshProfileForm(HWND dialog, RadialEditorState* state) {
+// 把选中的黑名单行回填到输入框（选中 → 改 → 添加即覆盖原项）
+void refreshBlacklistForm(HWND dialog, RadialEditorState* state) {
     if (state == nullptr) {
         return;
     }
     state->suppressNotify = true;
-
     std::wstring process;
-    std::string menuId;
     if (state->currentProfile >= 0 &&
         static_cast<std::size_t>(state->currentProfile) <
-            state->draft.profiles.size()) {
-        const core::RadialProfile& profile =
-            state->draft.profiles[static_cast<std::size_t>(state->currentProfile)];
-        process = base::utf8ToWide(profile.processPattern);
-        menuId = profile.menuId;
+            state->draft.blacklist.size()) {
+        process = base::utf8ToWide(
+            state->draft.blacklist[static_cast<std::size_t>(state->currentProfile)]);
     }
-    setControlText(dialog, kProfileProcessEditId, process);
-
-    HWND combo = GetDlgItem(dialog, kProfileMenuComboId);
-    if (combo != nullptr) {
-        int index = 0;
-        for (std::size_t i = 0; i < state->draft.menus.size(); ++i) {
-            if (state->draft.menus[i].id == menuId) {
-                index = static_cast<int>(i);
-                break;
-            }
-        }
-        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
-    }
-
+    setControlText(dialog, kBlacklistEditId, process);
     state->suppressNotify = false;
 }
 
@@ -574,9 +483,8 @@ void switchPage(HWND dialog, RadialEditorState* state, const int page) {
     InvalidateRect(GetDlgItem(dialog, kTabSectorsId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kTabProfilesId), nullptr, TRUE);
     if (page == 1) {
-        refreshProfileMenuCombo(dialog, state);
-        refreshProfileList(dialog, state);
-        refreshProfileForm(dialog, state);
+        refreshBlacklist(dialog, state);
+        refreshBlacklistForm(dialog, state);
     }
 }
 
@@ -802,75 +710,6 @@ void pickTargetPath(HWND dialog, RadialEditorState* state) {
     commitActionForm(dialog, state);
 }
 
-// ---------------------------------------------------------------- 方案增删
-
-void createMenu(HWND dialog, RadialEditorState* state) {
-    if (state == nullptr) {
-        return;
-    }
-    core::RadialMenu menu(makeMenuId(state->draft), std::string(), 8);
-    menu.name = "新方案 " + std::to_string(state->draft.menus.size() + 1);
-    state->draft.menus.push_back(menu);
-    state->currentMenu = static_cast<int>(state->draft.menus.size()) - 1;
-    state->currentSector = -1;
-
-    refreshMenuList(dialog, state);
-    setControlText(dialog, kMenuNameEditId, base::utf8ToWide(menu.name));
-    HWND countCombo = GetDlgItem(dialog, kSectorCountComboId);
-    if (countCombo != nullptr) {
-        SendMessageW(countCombo, CB_SETCURSEL, 2, 0);  // 8 扇区
-    }
-    refreshSectorList(dialog, state);
-    refreshActionForm(dialog, state);
-    refreshProfileMenuCombo(dialog, state);
-}
-
-void deleteMenu(HWND dialog, RadialEditorState* state) {
-    if (state == nullptr || state->draft.menus.size() <= 1) {
-        MessageBoxW(dialog, L"至少要保留一个轮盘方案。", L"轮盘菜单",
-                    MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    core::RadialMenu* menu = currentMenu(state);
-    if (menu == nullptr) {
-        return;
-    }
-    const std::wstring name =
-        menu->name.empty() ? base::utf8ToWide(menu->id)
-                           : base::utf8ToWide(menu->name);
-    const std::wstring message =
-        L"删除方案「" + name + L"」？按应用里引用它的规则会一并移除。";
-    if (MessageBoxW(dialog, message.c_str(), L"删除轮盘方案",
-                    MB_YESNO | MB_ICONQUESTION) != IDYES) {
-        return;
-    }
-
-    const std::string removedId = menu->id;
-    state->draft.menus.erase(state->draft.menus.begin() + state->currentMenu);
-
-    // 引用该方案的按应用规则一起清掉：方案没了，规则只会静默失效
-    std::vector<core::RadialProfile> kept;
-    for (const auto& profile : state->draft.profiles) {
-        if (profile.menuId != removedId) {
-            kept.push_back(profile);
-        }
-    }
-    state->draft.profiles = kept;
-
-    if (state->currentMenu >= static_cast<int>(state->draft.menus.size())) {
-        state->currentMenu = static_cast<int>(state->draft.menus.size()) - 1;
-    }
-    state->currentSector = -1;
-    state->currentProfile = -1;
-
-    refreshMenuList(dialog, state);
-    refreshSectorList(dialog, state);
-    refreshActionForm(dialog, state);
-    refreshProfileMenuCombo(dialog, state);
-    refreshProfileList(dialog, state);
-    refreshProfileForm(dialog, state);
-}
-
 // ---------------------------------------------------------------- 窗口过程
 
 LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
@@ -939,40 +778,19 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     sink = nullptr;
     makeControl(L"BUTTON", L"扇区动作",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_OWNERDRAW,
-                0, kMenuListLeft, 14, 96, kButtonHeight, kTabSectorsId);
-    makeControl(L"BUTTON", L"按应用",
+                0, kTabLeft, 14, 96, kButtonHeight, kTabSectorsId);
+    makeControl(L"BUTTON", L"黑名单",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kMenuListLeft + 104, 14, 96, kButtonHeight, kTabProfilesId);
+                kTabLeft + 104, 14, 96, kButtonHeight, kTabProfilesId);
 
     // ==================== 第 1 页：扇区动作 ====================
     sink = &state->sectorPageControls;
 
-    makeLabel(L"轮盘方案", kMenuListLeft, 44, kMenuListWidth, 18);
-    makeControl(L"LISTBOX", L"",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-                    LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-                WS_EX_CLIENTEDGE, kMenuListLeft, kMenuListTop, kMenuListWidth,
-                kMenuListHeight, kMenuListId);
-    makeControl(L"BUTTON", L"新建",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kMenuListLeft, kMenuListTop + kMenuListHeight + 8, 80,
-                kSmallButtonHeight, kMenuNewId);
-    makeControl(L"BUTTON", L"删除",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kMenuListLeft + 88, kMenuListTop + kMenuListHeight + 8, 80,
-                kSmallButtonHeight, kMenuDeleteId);
-
-    makeLabel(L"方案名称", kRightLeft, 44, 56, 18);
-    makeControl(L"EDIT", L"",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
-                WS_EX_CLIENTEDGE, kRightLeft + 60, 40, 180, 24,
-                kMenuNameEditId);
-
-    makeLabel(L"扇区数", kRightLeft + 252, 44, 44, 18);
+    makeLabel(L"扇区数", kRightLeft, 44, 44, 18);
     HWND countCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-        kRightLeft + 300, 40, 80, 160, kSectorCountComboId);
+        kRightLeft + 48, 40, 90, 160, kSectorCountComboId);
     if (countCombo != nullptr) {
         SendMessageW(countCombo, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(L"4 扇区"));
@@ -996,8 +814,13 @@ void createControls(HWND hwnd, RadialEditorState* state) {
             const wchar_t* text;
             int width;
         };
+        // 「目标」列吃满剩余宽度：列表加宽后固定列宽会在右边留一条空白，
+        // 视觉上像多了一列空表头。
         const ColumnSpec columns[] = {
-            {L"扇区", 92}, {L"类型", 84}, {L"名称", 120}, {L"目标", 176},
+            {L"扇区", 92},
+            {L"类型", 84},
+            {L"名称", 120},
+            {L"目标", kRightWidth - 92 - 84 - 120 - 8},
         };
         const int columnCount =
             static_cast<int>(sizeof(columns) / sizeof(columns[0]));
@@ -1070,7 +893,7 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     makeControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kRightLeft,
                 keyTop + 30, kRightWidth, 36, kActionStateHintId);
 
-    // ==================== 第 2 页：按应用 ====================
+    // ==================== 第 2 页：黑名单 ====================
     sink = &state->profilePageControls;
 
     HWND profileList = makeControl(
@@ -1078,50 +901,42 @@ void createControls(HWND hwnd, RadialEditorState* state) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
             LVS_SHOWSELALWAYS,
         WS_EX_CLIENTEDGE, kMargin, 62, kDialogWidth - 2 * kMargin, 220,
-        kProfileListId);
+        kBlacklistListId);
     if (profileList != nullptr) {
         ListView_SetExtendedListViewStyle(
             profileList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-        column.pszText = const_cast<LPWSTR>(L"前台进程名");
-        column.cx = scaleFor(hwnd, 320);
+        column.pszText = const_cast<LPWSTR>(L"进程名（这些程序里不弹轮盘）");
+        column.cx = scaleFor(hwnd, kDialogWidth - 2 * kMargin - 8);
         column.fmt = LVCFMT_LEFT;
         ListView_InsertColumn(profileList, 0, &column);
-        column.pszText = const_cast<LPWSTR>(L"使用的轮盘方案");
-        column.cx = scaleFor(hwnd, 320);
-        ListView_InsertColumn(profileList, 1, &column);
     }
 
     const int profileFormTop = 294;
     makeLabel(L"进程名", kMargin, profileFormTop + 4, 48, 18);
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                WS_EX_CLIENTEDGE, kMargin + 52, profileFormTop - 2, 220, 24,
-                kProfileProcessEditId);
-    makeLabel(L"使用", kMargin + 284, profileFormTop + 4, 32, 18);
-    HWND profileMenuCombo = makeControl(
-        L"COMBOBOX", L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-        kMargin + 320, profileFormTop - 2, 200, 200, kProfileMenuComboId);
-    (void)profileMenuCombo;
+                WS_EX_CLIENTEDGE, kMargin + 52, profileFormTop - 2, 260, 24,
+                kBlacklistEditId);
     makeControl(L"BUTTON", L"添加 / 更新",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kMargin + 532, profileFormTop - 2, 110, kSmallButtonHeight,
-                kProfileApplyId);
-    makeControl(L"BUTTON", L"删除规则",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, kMargin,
-                profileFormTop + 34, 90, kSmallButtonHeight,
-                kProfileDeleteId);
+                kMargin + 324, profileFormTop - 2, 110, kSmallButtonHeight,
+                kBlacklistAddId);
+    makeControl(L"BUTTON", L"删除选中",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                kMargin + 442, profileFormTop - 2, 90, kSmallButtonHeight,
+                kBlacklistDeleteId);
 
     // 说明按四行给高度：150% 缩放下这段中文会折到第四行，给少了末尾会被裁掉
     makeControl(
         L"STATIC",
-        L"按「前台进程名」精确匹配（如 chrome.exe，不区分大小写），匹配不到时"
-        L"使用进程名为空的那条规则（全局默认）。\r\n"
-        L"进程名留空就表示全局默认；这条规则通常只会有一条。",
-        WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kMargin + 100, profileFormTop + 34,
-        kDialogWidth - 2 * kMargin - 100, 72, kProfileHintId);
+        L"只按进程名整名匹配、不区分大小写（如 chrome.exe），不支持通配符。\r\n"
+        L"命中后鼠标事件完全放行：该应用里的右键菜单、鼠标手势都不受影响。\r\n"
+        L"少数 UWP 应用的进程名统一是 ApplicationFrameHost.exe，拉黑会连带"
+        L"全部 UWP 应用。",
+        WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kMargin, profileFormTop + 34,
+        kDialogWidth - 2 * kMargin, 72, kBlacklistHintId);
 
     // ---- 底部按钮 ----
     sink = nullptr;
@@ -1192,11 +1007,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
             createControls(hwnd, state);
 
             // 载入草稿到界面
-            refreshMenuList(hwnd, state);
-            if (!state->draft.menus.empty()) {
-                const core::RadialMenu& menu = state->draft.menus.front();
-                setControlText(hwnd, kMenuNameEditId,
-                               base::utf8ToWide(menu.name));
+            {
+                const core::RadialMenu& menu = state->draft.menu;
                 HWND countCombo = GetDlgItem(hwnd, kSectorCountComboId);
                 if (countCombo != nullptr) {
                     const int index = menu.sectorCount >= 8
@@ -1208,9 +1020,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             refreshSectorList(hwnd, state);
             refreshActionForm(hwnd, state);
-            refreshProfileMenuCombo(hwnd, state);
-            refreshProfileList(hwnd, state);
-            refreshProfileForm(hwnd, state);
+            refreshBlacklist(hwnd, state);
+            refreshBlacklistForm(hwnd, state);
             switchPage(hwnd, state, 0);
             return 0;
         }
@@ -1260,12 +1071,12 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                 refreshActionForm(hwnd, state);
                 return 0;
             }
-            if (header->idFrom == static_cast<UINT_PTR>(kProfileListId) &&
+            if (header->idFrom == static_cast<UINT_PTR>(kBlacklistListId) &&
                 header->code == LVN_ITEMCHANGED && !state->suppressNotify) {
-                HWND list = GetDlgItem(hwnd, kProfileListId);
+                HWND list = GetDlgItem(hwnd, kBlacklistListId);
                 const int selected = ListView_GetNextItem(list, -1, LVNI_SELECTED);
                 state->currentProfile = selected;
-                refreshProfileForm(hwnd, state);
+                refreshBlacklistForm(hwnd, state);
                 return 0;
             }
             break;
@@ -1299,59 +1110,6 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
             if (controlId == kCancelId) {
                 state->accepted = false;
                 DestroyWindow(hwnd);
-                return 0;
-            }
-
-            // ---- 左列：方案列表 ----
-            if (controlId == kMenuListId && notification == LBN_SELCHANGE) {
-                HWND list = GetDlgItem(hwnd, kMenuListId);
-                const int selected = static_cast<int>(
-                    SendMessageW(list, LB_GETCURSEL, 0, 0));
-                if (selected >= 0 &&
-                    static_cast<std::size_t>(selected) <
-                        state->draft.menus.size()) {
-                    state->currentMenu = selected;
-                    state->currentSector = -1;
-                    const core::RadialMenu& menu =
-                        state->draft.menus[static_cast<std::size_t>(selected)];
-                    state->suppressNotify = true;
-                    setControlText(hwnd, kMenuNameEditId,
-                                   base::utf8ToWide(menu.name));
-                    HWND countCombo = GetDlgItem(hwnd, kSectorCountComboId);
-                    if (countCombo != nullptr) {
-                        const int index = menu.sectorCount >= 8
-                                              ? 2
-                                              : (menu.sectorCount >= 6 ? 1 : 0);
-                        SendMessageW(countCombo, CB_SETCURSEL,
-                                     static_cast<WPARAM>(index), 0);
-                    }
-                    state->suppressNotify = false;
-                    refreshSectorList(hwnd, state);
-                    refreshActionForm(hwnd, state);
-                }
-                return 0;
-            }
-
-            if (controlId == kMenuNewId && notification == BN_CLICKED) {
-                createMenu(hwnd, state);
-                return 0;
-            }
-            if (controlId == kMenuDeleteId && notification == BN_CLICKED) {
-                deleteMenu(hwnd, state);
-                return 0;
-            }
-
-            // 方案名：边打字边写回草稿（左列同步显示），不需要额外按钮
-            if (controlId == kMenuNameEditId && notification == EN_CHANGE &&
-                !state->suppressNotify) {
-                core::RadialMenu* menu = currentMenu(state);
-                if (menu != nullptr) {
-                    menu->name =
-                        base::wideToUtf8Lossy(trimWide(controlText(hwnd, kMenuNameEditId)));
-                    const int keep = state->currentMenu;
-                    refreshMenuList(hwnd, state);
-                    state->currentMenu = keep;
-                }
                 return 0;
             }
 
@@ -1404,60 +1162,61 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                 return 0;
             }
 
-            // ---- 按应用页 ----
-            if (controlId == kProfileApplyId && notification == BN_CLICKED) {
+            // ---- 黑名单页 ----
+            if (controlId == kBlacklistAddId && notification == BN_CLICKED) {
                 const std::wstring process =
-                    trimWide(controlText(hwnd, kProfileProcessEditId));
-                HWND combo = GetDlgItem(hwnd, kProfileMenuComboId);
-                const int selection =
-                    combo != nullptr
-                        ? static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0))
-                        : -1;
-                if (selection < 0 ||
-                    static_cast<std::size_t>(selection) >=
-                        state->draft.menus.size()) {
-                    MessageBoxW(hwnd, L"请先选择一个轮盘方案。", L"按应用匹配",
-                                MB_OK | MB_ICONINFORMATION);
+                    trimWide(controlText(hwnd, kBlacklistEditId));
+                if (process.empty()) {
+                    MessageBoxW(hwnd, L"请先填写进程名，例如 game.exe。",
+                                L"黑名单", MB_OK | MB_ICONINFORMATION);
                     return 0;
                 }
-                const std::string menuId =
-                    state->draft.menus[static_cast<std::size_t>(selection)].id;
                 const std::string pattern = base::wideToUtf8Lossy(process);
 
-                int existing = -1;
-                for (std::size_t i = 0; i < state->draft.profiles.size(); ++i) {
-                    if (state->draft.profiles[i].processPattern == pattern) {
-                        existing = static_cast<int>(i);
-                        break;
+                const bool editing =
+                    state->currentProfile >= 0 &&
+                    static_cast<std::size_t>(state->currentProfile) <
+                        state->draft.blacklist.size();
+                const std::size_t slot =
+                    editing ? static_cast<std::size_t>(state->currentProfile)
+                            : state->draft.blacklist.size();
+
+                // 判重时跳过选中行自身：「把 A 改成 A」不该报重复
+                for (std::size_t i = 0; i < state->draft.blacklist.size(); ++i) {
+                    if (editing && i == slot) continue;
+                    if (core::processNameEquals(state->draft.blacklist[i],
+                                                pattern)) {
+                        MessageBoxW(hwnd, L"这个进程名已经在列表里了。",
+                                    L"黑名单", MB_OK | MB_ICONINFORMATION);
+                        return 0;
                     }
                 }
-                if (existing >= 0) {
-                    state->draft.profiles[static_cast<std::size_t>(existing)]
-                        .menuId = menuId;
-                    state->currentProfile = existing;
+
+                if (editing) {
+                    state->draft.blacklist[slot] = pattern;
                 } else {
-                    state->draft.profiles.emplace_back(pattern, menuId);
+                    state->draft.blacklist.push_back(pattern);
                     state->currentProfile =
-                        static_cast<int>(state->draft.profiles.size()) - 1;
+                        static_cast<int>(state->draft.blacklist.size()) - 1;
                 }
-                refreshProfileList(hwnd, state);
-                refreshProfileForm(hwnd, state);
+                refreshBlacklist(hwnd, state);
+                refreshBlacklistForm(hwnd, state);
                 return 0;
             }
 
-            if (controlId == kProfileDeleteId && notification == BN_CLICKED) {
+            if (controlId == kBlacklistDeleteId && notification == BN_CLICKED) {
                 if (state->currentProfile < 0 ||
                     static_cast<std::size_t>(state->currentProfile) >=
-                        state->draft.profiles.size()) {
-                    MessageBoxW(hwnd, L"请先在列表中选择要删除的规则。",
-                                L"按应用匹配", MB_OK | MB_ICONINFORMATION);
+                        state->draft.blacklist.size()) {
+                    MessageBoxW(hwnd, L"请先在列表中选择要删除的进程。",
+                                L"黑名单", MB_OK | MB_ICONINFORMATION);
                     return 0;
                 }
-                state->draft.profiles.erase(
-                    state->draft.profiles.begin() + state->currentProfile);
+                state->draft.blacklist.erase(
+                    state->draft.blacklist.begin() + state->currentProfile);
                 state->currentProfile = -1;
-                refreshProfileList(hwnd, state);
-                refreshProfileForm(hwnd, state);
+                refreshBlacklist(hwnd, state);
+                refreshBlacklistForm(hwnd, state);
                 return 0;
             }
             break;
@@ -1505,10 +1264,12 @@ bool showRadialEditorWindow(HWND owner, core::RadialConfig* config) {
 
     RadialEditorState state;
     state.draft = *config;
-    // 首启或配置被清空时给一个能编辑的兜底方案，避免界面全空
-    if (state.draft.menus.empty()) {
-        core::RadialMenu menu("default", "全局默认", 8);
-        state.draft.menus.push_back(menu);
+    // 兜底：动作数量和扇区数对不上时补成 8 扇区骨架（首启、配置被清空、
+    // 手改文件写成 4 扇区却给 8 个动作等）。编辑器本身要求两者恒等。
+    if (state.draft.menu.actions.size() != state.draft.menu.sectorCount ||
+        state.draft.menu.sectorCount < core::kMinSectors) {
+        state.draft.menu.sectorCount = 8;
+        state.draft.menu.actions.assign(8, core::RadialAction());
     }
 
     RECT desired{0, 0, scaleFor(owner, kDialogWidth),
