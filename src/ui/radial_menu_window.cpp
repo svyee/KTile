@@ -200,7 +200,7 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
     centerScreen_ = centerScreen;
     highlightedValid_ = false;
 
-    // 外甩取消半径：低于花瓣外缘的值没有意义（会切掉花瓣自己），夹到下限。
+    // 外甩取消半径：低于卡片环外缘的值没有意义（会切掉卡片自己），夹到下限。
     cancelRadiusDip_ = cancelRadiusDip > 0 ? static_cast<float>(cancelRadiusDip)
                                            : kOuterRadiusDip;
     if (cancelRadiusDip_ < static_cast<float>(core::kMinCancelRadiusDip)) {
@@ -472,6 +472,112 @@ const platform::win32::SvgGlyph* RadialMenuWindow::glyphForAction(
 
 // ================================================================ D2D 资源
 
+IDWriteTextFormat* RadialMenuWindow::labelFormatForSize(float size) {
+    // 量化成 0.5 DIP 步进：字号是算出来的浮点数，直接用 float 当 map 键
+    // 会因为 8.799999 和 8.800001 各建一份格式。
+    int step = static_cast<int>(std::lround(size * 2.0F));
+    if (step < static_cast<int>(kLabelMinFontDip * 2.0F)) {
+        step = static_cast<int>(kLabelMinFontDip * 2.0F);
+    }
+    auto it = labelFormats_.find(step);
+    if (it != labelFormats_.end()) {
+        return it->second.get();
+    }
+
+    platform::win32::ComPtr<IDWriteTextFormat> format;
+    const HRESULT hr = dwriteFactory_->CreateTextFormat(
+        L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        static_cast<float>(step) / 2.0F, L"zh-CN", format.put());
+    if (FAILED(hr)) {
+        return nullptr;
+    }
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    // 不换行：轮盘卡片里的标签必须是一行，折成两行会把图标挤掉
+    format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+    IDWriteTextFormat* raw = format.get();
+    labelFormats_.emplace(step, std::move(format));
+    return raw;
+}
+
+float RadialMenuWindow::measureLabelWidth(const std::wstring& text, float fontDip) {
+    IDWriteTextFormat* format = labelFormatForSize(fontDip);
+    if (format == nullptr || text.empty()) {
+        return 0.0F;
+    }
+    // 让 DirectWrite 自己量：中英混排、全角标点、连字都会让「字符数 x 字号」
+    // 这种估算偏得离谱，偏小就溢出、偏大又把字白缩一圈。
+    platform::win32::ComPtr<IDWriteTextLayout> layout;
+    const HRESULT hr = dwriteFactory_->CreateTextLayout(
+        text.c_str(), static_cast<UINT32>(text.size()), format, 4096.0F, 4096.0F,
+        layout.put());
+    if (FAILED(hr)) {
+        return 0.0F;
+    }
+    DWRITE_TEXT_METRICS metrics{};
+    if (FAILED(layout->GetMetrics(&metrics))) {
+        return 0.0F;
+    }
+    return metrics.widthIncludingTrailingWhitespace;
+}
+
+RadialMenuWindow::LabelFit RadialMenuWindow::fitLabel(
+    const std::string& cacheKey, const std::wstring& text,
+    float availableWidth) {
+    const auto cached = labelFitCache_.find(cacheKey);
+    if (cached != labelFitCache_.end()) {
+        return cached->second;
+    }
+
+    const int baseStep = static_cast<int>(std::lround(kLabelFontDip * 2.0F));
+    const int minStep = static_cast<int>(std::lround(kLabelMinFontDip * 2.0F));
+    LabelFit fit;
+    fit.text = text;
+    fit.fontStep = baseStep;
+
+    const float natural = measureLabelWidth(text, kLabelFontDip);
+    if (availableWidth <= 0.0F || natural <= availableWidth || natural <= 0.0F) {
+        labelFitCache_.emplace(cacheKey, fit);
+        return fit;   // 放得下，原样用基准字号
+    }
+
+    // 第一步：按比例缩字号，缩到下限为止
+    const float scaled = kLabelFontDip * availableWidth / natural;
+    fit.fontStep = static_cast<int>(std::lround(scaled * 2.0F));
+    if (fit.fontStep < minStep) {
+        fit.fontStep = minStep;
+    }
+    if (measureLabelWidth(text, static_cast<float>(fit.fontStep) / 2.0F) <=
+        availableWidth) {
+        labelFitCache_.emplace(cacheKey, fit);
+        return fit;
+    }
+
+    // 第二步：缩到下限还放不下 —— 截断加省略号。
+    // 宁可少显示几个字，也不许在字中间切一刀：半个汉字看起来像渲染坏了。
+    fit.fontStep = minStep;
+    const std::wstring ellipsis = L"\u2026";
+    if (measureLabelWidth(ellipsis, kLabelMinFontDip) > availableWidth) {
+        labelFitCache_.emplace(cacheKey, fit);   // 连省略号都放不下，交给裁剪
+        return fit;
+    }
+    for (std::size_t keep = text.size(); keep > 0; --keep) {
+        const std::wstring candidate = text.substr(0, keep - 1) + ellipsis;
+        if (measureLabelWidth(candidate, kLabelMinFontDip) <= availableWidth) {
+            fit.text = candidate;
+            break;
+        }
+    }
+    if (fit.text == text) {
+        // 一个字符都装不下：至少留一个字 + 省略号，剩下的让裁剪兜底
+        fit.text = text.substr(0, 1) + ellipsis;
+    }
+    labelFitCache_.emplace(cacheKey, fit);
+    return fit;
+}
+
 bool RadialMenuWindow::createDeviceResources() {
     if (!d2dFactory_) {
         D2D1_FACTORY_OPTIONS options{};
@@ -488,14 +594,10 @@ bool RadialMenuWindow::createDeviceResources() {
             reinterpret_cast<IUnknown**>(dwriteFactory_.put()));
         if (FAILED(hr)) return false;
 
-        hr = dwriteFactory_->CreateTextFormat(
-            L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            10.0F, L"zh-CN", labelFormat_.put());
-        if (FAILED(hr)) return false;
-        labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        labelFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        // 基准字号必须建得出来，否则后面所有标签都没有格式可用
+        if (labelFormatForSize(kLabelFontDip) == nullptr) {
+            return false;
+        }
     }
 
     if (!wicFactory_) {
@@ -543,7 +645,7 @@ bool RadialMenuWindow::createDeviceResources() {
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(1.0F, 1.0F, 1.0F, 0.06F), emptyCellBrush_.put());
         // 空槽位的轮廓必须用「深色」而不是白色：
-        // 填了动作的花瓣是近乎不透明的白卡 + 深色描边，浅壁纸上靠描边显形；
+        // 填了动作的卡片是近乎不透明的白卡 + 深色描边，浅壁纸上靠描边显形；
         // 空槽位如果也画白色描边，在浅壁纸上就彻底消失，用户会以为自己只有
         // 4 个扇区（其实是 8 个，另外 4 个只是没配）。白色填充留给深壁纸。
         renderTarget_->CreateSolidColorBrush(
@@ -587,7 +689,10 @@ void RadialMenuWindow::discardDeviceResources() {
     hubBorderBrush_.reset();
     glyphAccentBrush_.reset();
     glyphStrokeStyle_.reset();
-    labelFormat_.reset();
+    // 排版缓存与格式缓存一起清：格式来自旧的 DWrite 工厂，工厂都重建了，
+    // 留着的旧结果虽然还能用，但换机器/换字体后量出来的宽度会不一样
+    labelFormats_.clear();
+    labelFitCache_.clear();
     wicFactory_.reset();
     renderTarget_.reset();
     dwriteFactory_.reset();
@@ -621,23 +726,35 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     const bool empty = index >= menu_.actions.size() ||
                        menu_.actions[index].isEmpty();
 
-    // 花瓣矩形（未旋转时位于正上方）
-    const float left = centerX - kCellWidthDip * 0.5F;
-    const float top = centerY - kCellCenterRadiusDip - kCellHeightDip * 0.5F;
+    // 卡片矩形：以扇区中心 pos 为中心的 62x40 圆角卡片
+    // 卡片位置：挂在半径 kCellCenterRadiusDip 的圆上。卡片本身**不随角度
+    // 旋转**（以前是像花瓣一样沿径向歪着的）。
+    //
+    // 为什么放弃旋转：卡片里要放一行水平文字，而图标和文字都不跟着转。一个
+    // 62x40 的矩形转过 45° 之后，能容下的居中水平文字宽度只剩三十几 DIP——
+    // 四个汉字（40 DIP）就会从斜边探出去，看着就是「字跑到按钮外面」。
+    // 改成轴对齐之后，8 个卡片长得一模一样、标签也在同一高度，辨识起来反而
+    // 更省力；「环」的感觉靠位置维持，不靠歪着的卡片。
+    // 相邻卡片也不会打挤：45° 方向上是 68.6 DIP 的横向错开（> 62），横向那一对
+    // 则是 68.6 DIP 的纵向错开（> 40），总有一个方向是让开的。
+    const D2D1_POINT_2F pos =
+        D2D1::Point2F(centerX + pointOnCircle(angle, kCellCenterRadiusDip).x,
+                      centerY + pointOnCircle(angle, kCellCenterRadiusDip).y);
+
+    const float left = pos.x - kCellWidthDip * 0.5F;
+    const float top = pos.y - kCellHeightDip * 0.5F;
     const D2D1_RECT_F rect = D2D1::RectF(
         left, top, left + kCellWidthDip, top + kCellHeightDip);
     const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(
         rect, kCellCornerDip, kCellCornerDip);
 
-    // 缩放 + 旋转到对应角度。
     // 高亮只改颜色不放大：放大单元格会让鼠标相对扇区边界的几何关系
     // 跟着变化（本单元格外扩会盖住相邻扇区的判定角），扫过边界时容易
     // 出现「在两个扇区之间来回跳」的抖动。
     const float popScale = animScale_;
     const D2D1_MATRIX_3X2_F base =
         D2D1::Matrix3x2F::Scale(popScale, popScale, center);
-    renderTarget_->SetTransform(
-        base * D2D1::Matrix3x2F::Rotation(angle, center));
+    renderTarget_->SetTransform(base);
 
     // 伪阴影（D2D 1.0 没有模糊效果，用偏移的半透明圆角矩形近似）
     const D2D1_ROUNDED_RECT shadow = D2D1::RoundedRect(
@@ -661,12 +778,6 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
             highlighted ? 2.0F : 1.0F);
     }
 
-    // 图标与文字保持正向（不随花瓣旋转）
-    renderTarget_->SetTransform(base);
-    const D2D1_POINT_2F pos =
-        D2D1::Point2F(centerX + pointOnCircle(angle, kCellCenterRadiusDip).x,
-                      centerY + pointOnCircle(angle, kCellCenterRadiusDip).y);
-
     if (!empty && index < menu_.actions.size()) {
         const core::RadialAction& action = menu_.actions[index];
         // 图标解析顺序：动作自带的 SVG（插件目录里的）→ 可提取的位图/文件图标
@@ -683,7 +794,9 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
         if (hasIcon) {
             const float half = kIconSizeDip * 0.5F;
-            const float iconCenterY = pos.y - 6.0F;
+            // 图标中心比卡片中心稍高，给下方文字留位：19 DIP 的图标占
+            // -16.5~+2.5，文字框从 +3 开始，两者刚好不打架。
+            const float iconCenterY = pos.y - 7.0F;
 
             if (icon != nullptr) {
                 const D2D1_RECT_F dest = D2D1::RectF(
@@ -751,14 +864,26 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
         if (!action.name.empty()) {
             const std::wstring wideName = base::utf8ToWideLossy(action.name);
-            const float labelY = hasIcon ? pos.y + 4.0F : pos.y - 9.0F;
+            // 有图标：文字框落在图标下方（顶边距卡片中心 3 DIP，下沿离卡片
+            // 下沿还有 40/2-3-14 = 3 DIP，圆角啃不到字）。
+            // 没图标：文字框垂直居中。
+            const float labelTop = hasIcon ? pos.y + kLabelTopOffsetDip
+                                           : pos.y - kLabelHeightDip * 0.5F;
+            const float labelWidth = kCellWidthDip - kLabelSidePaddingDip * 2.0F;
             const D2D1_RECT_F textRect = D2D1::RectF(
-                pos.x - kCellWidthDip * 0.5F + 3.0F, labelY,
-                pos.x + kCellWidthDip * 0.5F - 3.0F, labelY + 16.0F);
+                pos.x - kCellWidthDip * 0.5F + kLabelSidePaddingDip, labelTop,
+                pos.x + kCellWidthDip * 0.5F - kLabelSidePaddingDip,
+                labelTop + kLabelHeightDip);
+            const LabelFit fit = fitLabel(action.name, wideName, labelWidth);
+            // 兜底裁剪：字号与截断已经处理过绝大多数情况，但「极短卡片 + 全角
+            // 标点」这类边角仍可能超出去，宁可切掉也不许画到卡片外——
+            // 「字跑到按钮外面」是最难解释的一类观感问题。
             renderTarget_->DrawText(
-                wideName.c_str(), static_cast<UINT32>(wideName.size()),
-                labelFormat_.get(), textRect,
-                highlighted ? accentTextBrush_.get() : textBrush_.get());
+                fit.text.c_str(), static_cast<UINT32>(fit.text.size()),
+                labelFormatForSize(static_cast<float>(fit.fontStep) / 2.0F),
+                textRect,
+                highlighted ? accentTextBrush_.get() : textBrush_.get(),
+                D2D1_DRAW_TEXT_OPTIONS_CLIP);
         }
     }
 

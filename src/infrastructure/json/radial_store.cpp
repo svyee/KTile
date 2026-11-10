@@ -245,8 +245,8 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
             trigger.find("cancelRadiusPx").asUint32(160));
 
         // 手改过的离谱值夹回可用区间，别让不合法的配置流到 UI 和窗口里。
-        // （阈值 0 会让「按下即呼出」，卡死右键；取消半径小于花瓣外缘
-        //   会把花瓣自己判成已甩出，看起来像半个轮盘坏了。）
+        // （阈值 0 会让「按下即呼出」，卡死右键；取消半径小于卡片环外缘
+        //   会把卡片自己判成已甩出，看起来像半个轮盘坏了。）
         if (result.value.trigger.activationThresholdPx < 1) {
             result.value.trigger.activationThresholdPx = 1;
         }

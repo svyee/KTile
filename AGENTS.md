@@ -243,7 +243,7 @@ app/            组装与生命周期
 | `src/core/tab_operations.{h,cpp}` | 标签页增删改与排序 |
 | `src/core/search.{h,cpp}` | 子串搜索与高亮区间 |
 | `src/core/radial_menu.{h,cpp}` | 轮盘动作模型、角度→扇区命中（纯函数，有单测） |
-| `src/ui/radial_menu_window.{h,cpp}` | 轮盘花瓣环绘制、命中测试、出现动画 |
+| `src/ui/radial_menu_window.{h,cpp}` | 轮盘卡片环绘制、标签自适应排版、命中测试、出现动画 |
 | `src/ui/radial_editor_dialog.{h,cpp}` | 轮盘编辑器（扇区动作 / 进程黑名单） |
 | `src/core/radial_plugin.{h,cpp}` | 轮盘插件模型：进程匹配（priority + id 字典序）、插件校验 |
 | `src/infrastructure/radial_plugin_store.{h,cpp}` | 扫描 `slugin/<id>/radial.json`，图标相对路径在加载期转绝对 |
