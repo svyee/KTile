@@ -458,8 +458,12 @@ bool RadialMenuWindow::createDeviceResources() {
             D2D1::ColorF(1.0F, 1.0F, 1.0F, 0.97F), cellBrush_.put());
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(1.0F, 1.0F, 1.0F, 0.06F), emptyCellBrush_.put());
+        // 空槽位的轮廓必须用「深色」而不是白色：
+        // 填了动作的花瓣是近乎不透明的白卡 + 深色描边，浅壁纸上靠描边显形；
+        // 空槽位如果也画白色描边，在浅壁纸上就彻底消失，用户会以为自己只有
+        // 4 个扇区（其实是 8 个，另外 4 个只是没配）。白色填充留给深壁纸。
         renderTarget_->CreateSolidColorBrush(
-            D2D1::ColorF(1.0F, 1.0F, 1.0F, 0.16F), emptyOutlineBrush_.put());
+            D2D1::ColorF(0.06F, 0.09F, 0.16F, 0.11F), emptyOutlineBrush_.put());
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.231F, 0.510F, 0.965F, 1.0F), highlightBrush_.put());
         renderTarget_->CreateSolidColorBrush(
