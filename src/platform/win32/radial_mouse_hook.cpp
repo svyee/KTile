@@ -79,21 +79,6 @@ WPARAM RadialMouseHook::upMessage() const noexcept {
     return WM_RBUTTONUP;
 }
 
-bool isTriggerButtonDown(core::RadialTriggerButton button) noexcept {
-    int vk = 0;
-    switch (button) {
-        case core::RadialTriggerButton::Right:  vk = VK_RBUTTON;  break;
-        case core::RadialTriggerButton::Middle: vk = VK_MBUTTON;  break;
-        case core::RadialTriggerButton::Side1:  vk = VK_XBUTTON1; break;
-        case core::RadialTriggerButton::Side2:  vk = VK_XBUTTON2; break;
-    }
-    if (vk == 0) {
-        return false;
-    }
-    // 高位为 1 表示当前按下（与 modifierSatisfied 同一套判断）
-    return (GetAsyncKeyState(vk) & 0x8000) != 0;
-}
-
 bool RadialMouseHook::matchesTriggerButton(const MSLLHOOKSTRUCT& event) const noexcept {
     switch (trigger_.button) {
         case core::RadialTriggerButton::Right:

@@ -67,7 +67,12 @@ constexpr UINT kLogFlushIntervalMs = 2000;
 constexpr UINT kHookWatchdogIntervalMs = 60 * 1000;
 // 轮盘兜底的检查节奏。120ms 足够「松手后不觉得菜单还赖着」，又不至于
 // 让 GetAsyncKeyState 变成忙轮询。只在轮盘可见期间挂表，其余时间零开销。
-constexpr UINT kRadialWatchdogIntervalMs = 120;
+constexpr UINT kRadialWatchdogIntervalMs = 250;
+// 轮盘最长停留时间。钩子彻底失效（被系统卸载、远程会话切换）时收不到任何
+// 事件，只能靠这个上限把窗口收掉；正常选择用不了这么久。
+constexpr ULONGLONG kRadialMaxVisibleMs = 10 * 1000;
+// 「窗口亮着但钩子已回 Idle」要连续观察到几次才动手，防止和抬起消息抢跑。
+constexpr int kRadialMismatchTicksToHide = 2;
 // 手势钩子的强制重装周期：系统负载高时会静默跳过超时的钩子回调
 //（没有任何通知），只能定期重装把钩子链顺序抢回来。
 constexpr ULONGLONG kForceReinstallIntervalMs = 10 * 60 * 1000;
@@ -753,15 +758,54 @@ void Application::onRadialWatchdog() {
     if (messageWindow_ == nullptr || !radialWindow_ ||
         !radialWindow_->isVisible()) {
         KillTimer(messageWindow_, kRadialWatchdogTimerId);
+        radialWatchdogMismatchTicks_ = 0;
         return;
     }
-    if (platform::win32::isTriggerButtonDown(radialConfig_.trigger.button)) {
+
+    // 判据一：钩子没了。收不到任何鼠标事件，窗口不会再有机会被收起。
+    if (!radialHook_.isInstalled()) {
+        infrastructure::applog::warn("轮盘菜单：鼠标钩子已失效，强制收起");
+        hideRadialMenu();
         return;
     }
-    infrastructure::applog::warn("轮盘菜单：抬起事件丢失，按物理键状态强制收起");
-    radialWindow_->hide();
+
+    // 判据二：两侧状态不一致 —— 窗口还亮着，钩子却已回到 Idle。
+    // 说明抬起事件钩子处理过了、但 kRadialReleaseMessage 没送到这里
+    // （PostMessage 失败、消息窗口重建等）。连续观察到两次才收，避免和
+    // 正常路径上的抬起消息抢跑（那种情况下窗口会先被 release 收掉）。
+    if (!radialHook_.isGestureActive()) {
+        if (++radialWatchdogMismatchTicks_ >= kRadialMismatchTicksToHide) {
+            infrastructure::applog::warn("轮盘菜单：手势已结束但窗口未收，强制收起");
+            hideRadialMenu();
+        }
+        return;
+    }
+    radialWatchdogMismatchTicks_ = 0;
+
+    // 判据三：可见时长上限。
+    //
+    // 这里**不能**去问「触发键还按着吗」：手势开始时我们吞掉了按下事件，
+    // GetAsyncKeyState 的鼠标键状态要等事件进入目标队列才更新，被吞掉的
+    // 那次按下它永远看不到 —— 整个拖动期间它都回答「已松开」。1.2.0 的
+    // 第一版兜底就是这么写的，结果每 120ms 判一次「松开了」，轮盘刚出现
+    // 就被收掉，用户根本来不及选。
+    const ULONGLONG now = GetTickCount64();
+    if (radialShownTick_ != 0 && now - radialShownTick_ >= kRadialMaxVisibleMs) {
+        infrastructure::applog::warn("轮盘菜单：停留超过 10 秒，强制收起");
+        hideRadialMenu();
+    }
+}
+
+void Application::hideRadialMenu() {
+    if (radialWindow_) {
+        radialWindow_->hide();
+    }
     activeRadialMenu_ = nullptr;
-    KillTimer(messageWindow_, kRadialWatchdogTimerId);
+    radialShownTick_ = 0;
+    radialWatchdogMismatchTicks_ = 0;
+    if (messageWindow_ != nullptr) {
+        KillTimer(messageWindow_, kRadialWatchdogTimerId);
+    }
 }
 
 void Application::onPluginVisibleTick() {
@@ -1049,7 +1093,9 @@ void Application::onRadialShow(POINT startPoint) {
     }
     radialWindow_->show(*menu, startPoint,
                         static_cast<int>(radialConfig_.trigger.cancelRadiusPx));
-    // 挂上「抬起丢失」兜底定时器；onRadialWatchdog 在键松开时收起轮盘
+    radialShownTick_ = GetTickCount64();
+    radialWatchdogMismatchTicks_ = 0;
+    // 挂上兜底定时器（钩子失效 / 状态不一致 / 停留过久三种收尾）
     if (messageWindow_ != nullptr) {
         SetTimer(messageWindow_, kRadialWatchdogTimerId,
                  kRadialWatchdogIntervalMs, nullptr);
@@ -1066,6 +1112,8 @@ void Application::onRadialRelease(POINT currentPoint) {
     if (messageWindow_ != nullptr) {
         KillTimer(messageWindow_, kRadialWatchdogTimerId);
     }
+    radialShownTick_ = 0;
+    radialWatchdogMismatchTicks_ = 0;
     if (!radialWindow_ || !radialWindow_->isVisible()) {
         activeRadialMenu_ = nullptr;
         return;

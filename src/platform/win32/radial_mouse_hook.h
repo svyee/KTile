@@ -31,12 +31,15 @@ inline constexpr UINT kRadialShowMessage    = WM_APP + 0x71U;
 inline constexpr UINT kRadialMoveMessage    = WM_APP + 0x72U;
 inline constexpr UINT kRadialReleaseMessage = WM_APP + 0x73U;
 
-// 触发键当前是否真的处于按下状态（物理状态，不看钩子状态机）。
+// 触发键「物理上还按着吗」这件事，在本模块里是**问不出来**的，别试：
 //
-// 用途：低级钩子会被系统静默跳过（回调超时的老问题，见 CHANGELOG 1.1.0），
-// 一旦「抬起」事件丢失，轮盘就会永远挂在屏幕上。应用层据此做兜底：
-// 轮盘可见期间定期问一句「键还按着吗」，松开了就强制收起。
-bool isTriggerButtonDown(core::RadialTriggerButton button) noexcept;
+// 手势开始时我们吞掉了按下事件，而 GetAsyncKeyState / GetKeyState 的鼠标键
+// 状态是在事件**通过钩子链、进入目标队列**时才更新的。事件被吞 = 系统从未
+// 认为这个键被按下过，于是整个拖动期间它都回答「没按下」。
+//
+// 1.2.0 就栽在这里：兜底定时器每 120ms 问一次物理状态，答案永远是「松开了」，
+// 轮盘刚出现就被强制收起，用户根本来不及选（日志里能看到连续 4 条
+// 「抬起事件丢失」）。应用层现在改成用 isGestureActive() + 可见时长上限兜底。
 
 class RadialMouseHook {
 public:
@@ -53,6 +56,17 @@ public:
     void uninstall() noexcept;
 
     bool isInstalled() const noexcept { return hook_ != nullptr; }
+
+    // 状态机是否还处在一次手势里（Tracking / Shown）。
+    //
+    // 应用层的兜底用它做「两侧状态不一致」的判定：轮到主线程处理时窗口还
+    // 亮着、但钩子这边已经回到 Idle，说明抬起事件被我们处理掉了、而
+    // kRadialReleaseMessage 没走到（PostMessage 失败、窗口刚被重建等），
+    // 这时可以把窗口收掉，不用干等超时。
+    //
+    // 注意它回答的是「钩子自己看到的手势进度」，不是物理按键状态 ——
+    // 见文件开头那段说明。
+    bool isGestureActive() const noexcept { return state_ != State::Idle; }
 
     // 供钩子回调使用（文件级单例转发）
     bool handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& event);

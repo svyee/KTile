@@ -157,6 +157,8 @@ public:
     void onRadialShow(POINT startPoint);
     void onRadialMove(POINT currentPoint);
     void onRadialRelease(POINT currentPoint);
+    // 收起轮盘并清理与它绑定的临时状态（动作分发指针、兜底定时器、计时）
+    void hideRadialMenu();
 private:
     // 各初始化步骤，任一步失败则终止启动
     bool initializeConfig();
@@ -293,6 +295,10 @@ private:
     std::unique_ptr<ui::RadialMenuWindow> radialWindow_;
     // 轮盘当前显示的方案（显示期间保持引用，避免悬空）
     const core::RadialMenu* activeRadialMenu_ = nullptr;
+    // 轮盘出现时刻（兜底的可见时长上限用）；0 表示当前没有轮盘在显示
+    ULONGLONG radialShownTick_ = 0;
+    // 「窗口亮着但钩子已回 Idle」的连续观察次数
+    int radialWatchdogMismatchTicks_ = 0;
 };
 
 }  // namespace app
