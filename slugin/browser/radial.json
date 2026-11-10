@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "name": "浏览器",
+  "processes": [
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "360chromex.exe",
+    "360chrome.exe",
+    "360se.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "浏览器",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "到顶",
+        "key": "Home",
+        "icon": "icons/arrow-up.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "刷新",
+        "modifiers": ["control"],
+        "key": "R",
+        "icon": "icons/refresh.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "关闭标签",
+        "modifiers": ["control"],
+        "key": "W",
+        "icon": "icons/x.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "恢复",
+        "modifiers": ["control", "shift"],
+        "key": "T",
+        "icon": "icons/history.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "到底",
+        "key": "End",
+        "icon": "icons/arrow-down.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "新标签",
+        "modifiers": ["control"],
+        "key": "T",
+        "icon": "icons/plus.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "后退",
+        "modifiers": ["alt"],
+        "key": "Left",
+        "icon": "icons/arrow-left.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "前进",
+        "modifiers": ["alt"],
+        "key": "Right",
+        "icon": "icons/arrow-right.svg"
+      }
+    ]
+  }
+}

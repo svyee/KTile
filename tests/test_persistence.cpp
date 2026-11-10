@@ -7,6 +7,7 @@
 //   4. ApplicationConfig 往返一致性
 //   5. 容错：非法 JSON、缺失字段、越界值
 //   6. RadialConfig 往返一致性 + 触发参数越界夹取
+//   7. 轮盘插件扫描、坏插件隔离、随包插件（slugin/）是否都还能加载
 //
 #include "core/data_model.h"
 #include "infrastructure/json/config_store.h"
@@ -841,6 +842,96 @@ void testRadialPluginRejectsFutureSchema() {
     std::filesystem::remove_all(root, error);
 }
 
+// 随包提供的插件（`slugin/`）必须全部能加载、图标一个不缺。
+//
+// 为什么值得单测：手写 JSON 和手写 SVG 的错法都很安静。少一个逗号，整个插件被
+// 跳过、轮盘静默回落成通用那份；图标名打错，那张卡片静默换成内置符号。两者都
+// 不影响编译、不报错，只有真机在浏览器里划出来才看得见。测试里兜住三件事：
+//   - 清单合法（valid：扇区数 4~8、动作数与扇区数一致、processes 非空）
+//   - 每个动作都有名字（空标签在轮盘上就是一块白板）
+//   - 每个 icon 指向的文件真的存在
+// 找不到 slugin 目录就跳过——只拿到 src/ 的人不该因此红一片。
+std::filesystem::path findBundledPluginRoot() {
+    std::error_code error;
+    if (std::filesystem::is_directory(L"slugin", error)) {
+        return std::filesystem::path(L"slugin");   // 从仓库根运行测试
+    }
+    wchar_t buffer[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        // 测试 exe 在 build/ 下，同级 slugin/ 是构建时从仓库拷过去的发布形态
+        const std::filesystem::path besideExe =
+            std::filesystem::path(buffer).parent_path() / L"slugin";
+        if (std::filesystem::is_directory(besideExe, error)) {
+            return besideExe;
+        }
+    }
+    return {};
+}
+
+void testBundledPluginsLoad() {
+    const std::filesystem::path root = findBundledPluginRoot();
+    if (root.empty()) {
+        std::printf("  （没有 slugin 目录，跳过随包插件检查）\n");
+        return;
+    }
+
+    RadialPluginStore store;
+    store.discover(root.wstring());
+    const auto& plugins = store.plugins();
+    CHECK(plugins.size() >= 2);   // explorer + browser
+
+    bool sawBrowser = false;
+    for (const auto& plugin : plugins) {
+        CHECK(plugin.valid);
+        if (!plugin.valid) {
+            std::printf("  插件 %s 加载失败：%s\n", plugin.id.c_str(),
+                        plugin.error.c_str());
+            continue;
+        }
+        CHECK(!plugin.processes.empty());
+        CHECK_EQ(static_cast<long long>(plugin.menu.actions.size()),
+                 static_cast<long long>(plugin.menu.sectorCount));
+
+        for (const auto& action : plugin.menu.actions) {
+            CHECK(!action.name.empty());
+            // 随包插件都自带图标：没有 icon 字段就说明写漏了
+            CHECK(action.icon.has_value());
+            if (!action.icon.has_value()) {
+                std::printf("  插件 %s 的动作「%s」缺图标\n", plugin.id.c_str(),
+                            action.name.c_str());
+                continue;
+            }
+            // 清单里是 UTF-8 路径，u8path 直接按 UTF-8 解释
+            std::error_code iconError;
+            const bool existed = std::filesystem::is_regular_file(
+                std::filesystem::u8path(*action.icon), iconError);
+            CHECK(existed);
+            if (!existed) {
+                std::printf("  插件 %s 找不到图标：%s\n", plugin.id.c_str(),
+                            action.icon->c_str());
+            }
+        }
+        if (plugin.id == "browser") {
+            sawBrowser = true;
+        }
+    }
+    CHECK(sawBrowser);
+
+    // 浏览器插件要真能按进程名命中（大小写不敏感，与运行期同一条路径）
+    const core::RadialPlugin* hit =
+        core::findPluginForProcess(plugins, "Chrome.exe");
+    CHECK(hit != nullptr);
+    if (hit != nullptr) {
+        CHECK(hit->id == "browser");
+    }
+    hit = core::findPluginForProcess(plugins, "360ChromeX.exe");
+    CHECK(hit != nullptr);
+    if (hit != nullptr) {
+        CHECK(hit->id == "browser");
+    }
+}
+
 }  // namespace
 
 int wmain() {
@@ -877,6 +968,7 @@ int wmain() {
     testRadialSchemaVersionStamped();
     testRadialPluginStoreDiscovery();
     testRadialPluginRejectsFutureSchema();
+    testBundledPluginsLoad();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);
     if (g_failures == 0) {
