@@ -157,6 +157,7 @@ function Get-CoreSources {
         (Join-Path $SrcDir "core\plugin_model.cpp")
         (Join-Path $SrcDir "core\plugin_binding.cpp")
         (Join-Path $SrcDir "core\plugin_layout.cpp")
+        (Join-Path $SrcDir "core\radial_menu.cpp")
         (Join-Path $SrcDir "base\text_convert.cpp")
     )
     return @($candidates | Where-Object { Test-Path $_ })
@@ -189,11 +190,13 @@ function Get-AppSources {
         (Join-Path $SrcDir "core\plugin_model.cpp")
         (Join-Path $SrcDir "core\plugin_binding.cpp")
         (Join-Path $SrcDir "core\plugin_layout.cpp")
+        (Join-Path $SrcDir "core\radial_menu.cpp")
         # infrastructure
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
+        (Join-Path $SrcDir "infrastructure\json\radial_store.cpp")
         (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
         (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
         # platform/win32
@@ -209,6 +212,9 @@ function Get-AppSources {
         (Join-Path $SrcDir "platform\win32\icon_store.cpp")
         (Join-Path $SrcDir "platform\win32\drop_target.cpp")
         (Join-Path $SrcDir "platform\win32\system_actions.cpp")
+        (Join-Path $SrcDir "platform\win32\foreground_process.cpp")
+        (Join-Path $SrcDir "platform\win32\key_injector.cpp")
+        (Join-Path $SrcDir "platform\win32\radial_mouse_hook.cpp")
         (Join-Path $SrcDir "platform\win32\builtin_icon.cpp")
         (Join-Path $SrcDir "platform\win32\svg_path.cpp")
         (Join-Path $SrcDir "platform\win32\uuid.cpp")
@@ -228,6 +234,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "ui\text_input_dialog.cpp")
         (Join-Path $SrcDir "ui\about_dialog.cpp")
         (Join-Path $SrcDir "ui\settings_window.cpp")
+        (Join-Path $SrcDir "ui\radial_menu_window.cpp")
         # app
         (Join-Path $SrcDir "app\application.cpp")
         (Join-Path $SrcDir "app\plugin_controller.cpp")
@@ -258,7 +265,7 @@ if ($Tests) {
         # 依据测试文件包含的头，决定需要附带哪些源文件
         $needsCore = $true
         $content = Get-Content $tf.FullName -Raw
-        if ($content -notmatch "tile_layout\.h|item_operations\.h|tab_operations\.h|search\.h|plugin_model\.h|plugin_binding\.h|plugin_layout\.h") {
+        if ($content -notmatch "tile_layout\.h|item_operations\.h|tab_operations\.h|search\.h|plugin_model\.h|plugin_binding\.h|plugin_layout\.h|radial_menu\.h") {
             $needsCore = $false
         }
         $extra = if ($needsCore) { $coreSources } else { @() }

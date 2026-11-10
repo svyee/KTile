@@ -44,6 +44,11 @@ struct SvgGlyph {
     ComPtr<ID2D1PathGeometry> strokeGeometry;
     ComPtr<ID2D1PathGeometry> fillGeometry;
     std::vector<SvgColorLayer> colorLayers;
+    // 所有几何（描边 + 填充 + 彩色层）合并后的包围盒（已包含 scale/dx/dy）。
+    D2D1_RECT_F bounds = D2D1::RectF(0.0F, 0.0F, 0.0F, 0.0F);
+    // 弧长加权质心（描边图元的光学中心）。优先用它居中，其次退回 bounds。
+    D2D1_POINT_2F centroid = D2D1::Point2F(0.0F, 0.0F);
+    bool hasCentroid = false;
 };
 
 // 把 SVG 形状片段转成 D2D 几何。

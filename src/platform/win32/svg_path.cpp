@@ -95,13 +95,17 @@ public:
         endFigure(D2D1_FIGURE_END_OPEN);
         current_ = mapPoint(transform_, x, y);
         subpathStart_ = current_;
+        expandBounds(current_);
         sink_->BeginFigure(current_, figureBegin_);
         open_ = true;
     }
 
     void lineTo(const float x, const float y) {
         ensureOpen();
+        const D2D1_POINT_2F start = current_;
         current_ = mapPoint(transform_, x, y);
+        expandBounds(current_);
+        addSegment(start, current_);
         sink_->AddLine(current_);
     }
 
@@ -112,6 +116,11 @@ public:
         segment.point1 = mapPoint(transform_, x1, y1);
         segment.point2 = mapPoint(transform_, x2, y2);
         segment.point3 = mapPoint(transform_, x, y);
+        expandBounds(segment.point1);
+        expandBounds(segment.point2);
+        expandBounds(segment.point3);
+        // 用 de Casteljau 细分采样贝塞尔，累加弧长加权质心。
+        sampleBezier(current_, segment.point1, segment.point2, segment.point3, 4);
         sink_->AddBezier(&segment);
         current_ = segment.point3;
     }
@@ -121,6 +130,10 @@ public:
         D2D1_QUADRATIC_BEZIER_SEGMENT segment;
         segment.point1 = mapPoint(transform_, x1, y1);
         segment.point2 = mapPoint(transform_, x, y);
+        expandBounds(segment.point1);
+        expandBounds(segment.point2);
+        // 二次贝塞尔转三次（p1,p1,p2）后用同一采样器
+        sampleBezier(current_, segment.point1, segment.point1, segment.point2, 3);
         sink_->AddQuadraticBezier(&segment);
         current_ = segment.point2;
     }
@@ -132,10 +145,13 @@ public:
                const bool largeArc, const bool sweep, const float x,
                const float y) {
         ensureOpen();
+        const D2D1_POINT_2F start = current_;
         const D2D1_POINT_2F end = mapPoint(transform_, x, y);
         // 半径为 0 或起终点重合时，SVG 规定退化成直线
-        if (rx <= 0.0F || ry <= 0.0F || (end.x == current_.x && end.y == current_.y)) {
+        if (rx <= 0.0F || ry <= 0.0F || (end.x == start.x && end.y == start.y)) {
             sink_->AddLine(end);
+            expandBounds(end);
+            addSegment(start, end);
             current_ = end;
             return;
         }
@@ -147,6 +163,14 @@ public:
                                        : D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE;
         segment.arcSize = largeArc ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL;
         sink_->AddArc(&segment);
+        // 弧的包围盒粗略用起终点 + 半径估算。
+        const float rxPx = rx * scale_;
+        const float ryPx = ry * scale_;
+        expandBounds(D2D1::Point2F(end.x - rxPx, end.y - ryPx));
+        expandBounds(D2D1::Point2F(end.x + rxPx, end.y + ryPx));
+        expandBounds(end);
+        // 弧长质心：用弦细分近似（圆/椭圆弧，8 段足够居中用）。
+        sampleArc(start, end, rx * scale_, ry * scale_, 8);
         current_ = end;
     }
 
@@ -161,6 +185,19 @@ public:
     }
 
     void finish() { endFigure(D2D1_FIGURE_END_OPEN); }
+
+    bool hasBounds() const { return hasBounds_; }
+    D2D1_RECT_F bounds() const { return bounds_; }
+
+    // 弧长加权质心（描边图元的视觉中心近似）。
+    // 剪刀左重右轻、撤销箭头尾重头轻这类不对称形状，用包围盒中心会
+    // 把视觉重心甩到一边；用沿路径长度加权的质心更接近人眼看到的中心。
+    bool hasCentroid() const { return totalLength_ > 0.0F; }
+    D2D1_POINT_2F centroid() const {
+        return D2D1::Point2F(weightedCx_ / totalLength_,
+                             weightedCy_ / totalLength_);
+    }
+    float totalLength() const { return totalLength_; }
 
 private:
     void ensureOpen() {
@@ -179,6 +216,78 @@ private:
         open_ = false;
     }
 
+    void expandBounds(const D2D1_POINT_2F& p) {
+        if (!hasBounds_) {
+            bounds_ = D2D1::RectF(p.x, p.y, p.x, p.y);
+            hasBounds_ = true;
+        } else {
+            if (p.x < bounds_.left) bounds_.left = p.x;
+            if (p.y < bounds_.top) bounds_.top = p.y;
+            if (p.x > bounds_.right) bounds_.right = p.x;
+            if (p.y > bounds_.bottom) bounds_.bottom = p.y;
+        }
+    }
+
+    void addSegment(const D2D1_POINT_2F& a, const D2D1_POINT_2F& b) {
+        const float dx = b.x - a.x;
+        const float dy = b.y - a.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len <= 0.0F) return;
+        totalLength_ += len;
+        weightedCx_ += (a.x + b.x) * 0.5F * len;
+        weightedCy_ += (a.y + b.y) * 0.5F * len;
+    }
+
+    void sampleBezier(const D2D1_POINT_2F& p0, const D2D1_POINT_2F& p1,
+                      const D2D1_POINT_2F& p2, const D2D1_POINT_2F& p3,
+                      int subdivisions) {
+        D2D1_POINT_2F prev = p0;
+        for (int i = 1; i <= subdivisions; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(subdivisions);
+            const float u = 1.0F - t;
+            const D2D1_POINT_2F pt = D2D1::Point2F(
+                u * u * u * p0.x + 3.0F * u * u * t * p1.x +
+                    3.0F * u * t * t * p2.x + t * t * t * p3.x,
+                u * u * u * p0.y + 3.0F * u * u * t * p1.y +
+                    3.0F * u * t * t * p2.y + t * t * t * p3.y);
+            addSegment(prev, pt);
+            prev = pt;
+        }
+    }
+
+    void sampleArc(const D2D1_POINT_2F& start, const D2D1_POINT_2F& end,
+                   float rx, float ry, int segments) {
+        // 不精确反解椭圆参数，直接用起终点间的圆弧细分：把弦等分后
+        // 沿半径方向外推，足以近似弧长质心。
+        if (rx <= 0.0F) rx = ry;
+        if (ry <= 0.0F) ry = rx;
+        const float r = (rx + ry) * 0.5F;
+        const float dx = end.x - start.x;
+        const float dy = end.y - start.y;
+        const float chord = std::sqrt(dx * dx + dy * dy);
+        if (chord <= 0.0F || r <= 0.0F) {
+            addSegment(start, end);
+            return;
+        }
+        // 弓形高度（近似）：h = r - sqrt(r^2 - (chord/2)^2)
+        const float halfChord = chord * 0.5F;
+        float h = r - std::sqrt((std::max)(0.0F, r * r - halfChord * halfChord));
+        if (h > r) h = r;
+        const float nx = -dy / chord;
+        const float ny = dx / chord;
+        D2D1_POINT_2F prev = start;
+        for (int i = 1; i <= segments; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(segments);
+            const float bx = start.x + dx * t;
+            const float by = start.y + dy * t;
+            const float sagitta = 4.0F * h * t * (1.0F - t);
+            const D2D1_POINT_2F pt =
+                D2D1::Point2F(bx + nx * sagitta, by + ny * sagitta);
+            addSegment(prev, pt);
+            prev = pt;
+        }
+    }
+
     ID2D1GeometrySink* sink_;
     Affine transform_;
     D2D1_FIGURE_BEGIN figureBegin_;
@@ -186,6 +295,11 @@ private:
     D2D1_POINT_2F current_ = D2D1::Point2F(0.0F, 0.0F);
     D2D1_POINT_2F subpathStart_ = D2D1::Point2F(0.0F, 0.0F);
     bool open_ = false;
+    bool hasBounds_ = false;
+    D2D1_RECT_F bounds_ = D2D1::RectF(0.0F, 0.0F, 0.0F, 0.0F);
+    float totalLength_ = 0.0F;
+    float weightedCx_ = 0.0F;
+    float weightedCy_ = 0.0F;
 };
 
 // ---------------------------------------------------------------- 路径数据
@@ -598,6 +712,27 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
     base.dx = dx;
     base.dy = dy;
 
+    // 累计所有 PathWriter 的包围盒，用于绘制时光学居中。
+    D2D1_RECT_F combinedBounds_ = D2D1::RectF(0.0F, 0.0F, 0.0F, 0.0F);
+    bool hasCombinedBounds = false;
+    auto unionCombinedBounds = [&](const D2D1_RECT_F& g) {
+        if (!hasCombinedBounds) {
+            combinedBounds_ = g;
+            hasCombinedBounds = true;
+        } else {
+            if (g.left < combinedBounds_.left) combinedBounds_.left = g.left;
+            if (g.top < combinedBounds_.top) combinedBounds_.top = g.top;
+            if (g.right > combinedBounds_.right) combinedBounds_.right = g.right;
+            if (g.bottom > combinedBounds_.bottom) combinedBounds_.bottom = g.bottom;
+        }
+    };
+
+    // 累计弧长加权质心：每个 PathWriter 自己算 Σ(中点 × 段长)，
+    // 这里把所有 writer 的累加再除以总长，得到整图的光学中心。
+    float combinedLength = 0.0F;
+    float combinedWcx = 0.0F;
+    float combinedWcy = 0.0F;
+
     const wchar_t* p = markup;
     bool ok = true;
     while (ok && *p != L'\0') {
@@ -763,6 +898,16 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
         // 其它标签（g/title/defs 等）静默跳过
 
         writer.finish();
+        if (writer.hasBounds()) {
+            unionCombinedBounds(writer.bounds());
+        }
+        if (writer.hasCentroid()) {
+            const D2D1_POINT_2F c = writer.centroid();
+            const float writerLen = writer.totalLength();
+            combinedLength += writerLen;
+            combinedWcx += c.x * writerLen;
+            combinedWcy += c.y * writerLen;
+        }
     }
 
     if (!ok) {
@@ -782,6 +927,20 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
     }
     out->strokeGeometry = strokeGeometry;
     out->fillGeometry = fillGeometry;
+
+    // 包围盒由 PathWriter 在写入时同步累计（见 PathWriter::expandBounds），
+    // 不依赖 ID2D1Geometry::GetBounds——实测在某些 D2D 运行时下 GetBounds
+    // 对空心图元返回 inf，导致居中失效。
+    out->bounds = combinedBounds_;
+
+    // 弧长加权质心：描边图元的光学中心。
+    if (combinedLength > 0.0F) {
+        out->centroid = D2D1::Point2F(combinedWcx / combinedLength,
+                                      combinedWcy / combinedLength);
+        out->hasCentroid = true;
+    } else {
+        out->hasCentroid = false;
+    }
     return true;
 }
 

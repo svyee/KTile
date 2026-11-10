@@ -7,10 +7,13 @@
 
 #include "app/plugin_controller.h"
 #include "core/data_model.h"
+#include "core/radial_menu.h"
 #include "infrastructure/filesystem/portable_paths.h"
 #include "infrastructure/json/config_store.h"
+#include "infrastructure/json/radial_store.h"
 #include "platform/win32/drop_target.h"
 #include "platform/win32/global_hotkey.h"
+#include "platform/win32/radial_mouse_hook.h"
 #include "platform/win32/single_instance.h"
 #include "platform/win32/startup_registration.h"
 #include "platform/win32/tray_icon.h"
@@ -25,6 +28,7 @@
 namespace ktile {
 namespace ui {
 class LauncherWindow;
+class RadialMenuWindow;
 }
 
 namespace app {
@@ -93,12 +97,18 @@ struct DebugOptions {
     // --debug-opacity=<50..100>：把主窗口设成指定不透明度（0 = 不改）。
     // 用于验证「分层窗口 + D2D 渲染目标」在真实窗口上是否成立。
     int opacityPercent = 0;
+    // --debug-radial：渲染轮盘菜单到 radial-shot.png 后退出（视觉验证）。
+    // 可选 =x,y 指定高亮扇区的相对中心偏移（DIP），如 --debug-radial=0,108
+    // 高亮正下方扇区。
+    bool radial = false;
+    int radialHoverX = 0;
+    int radialHoverY = 0;
 
     // 是否有任何开关被打开
     bool any() const noexcept {
         return shot || settings || settingsKeepAlive || about || editor ||
                newItem || !search.empty() || !addPaths.empty() ||
-               dragSrcX >= 0 || opacityPercent > 0;
+               dragSrcX >= 0 || opacityPercent > 0 || radial;
     }
 };
 
@@ -136,6 +146,11 @@ public:
     // 休眠恢复：钩子链顺序可能被电源事件打乱，重装保险一次
     void onPowerResume();
 
+    // ---- 轮盘菜单（由消息窗口过程调用） ----
+    void onRadialShow(POINT startPoint);
+    void onRadialMove(POINT currentPoint);
+    void onRadialRelease(POINT currentPoint);
+
 private:
     // 各初始化步骤，任一步失败则终止启动
     bool initializeConfig();
@@ -154,6 +169,10 @@ private:
 
     // 持久化：从磁盘加载配置与磁贴数据
     void loadPersistedState();
+    // 加载轮盘菜单配置（radial.json）
+    void loadRadialConfig();
+    // 保存轮盘菜单配置
+    void persistRadialConfig();
     // 首次运行或数据缺失时植入示例磁贴（便于用户直观看到界面）
     void seedSampleDocument();
     // 把当前状态写回磁盘
@@ -211,6 +230,10 @@ private:
     // 打开模态设置窗口，并把用户改动应用到配置与窗口。
     void openSettings();
 
+    // ---- 轮盘菜单 ----
+    // 执行轮盘扇区动作
+    void executeRadialAction(const core::RadialAction& action);
+
     // ---- 关于对话框 ----
     // 弹出「关于 KTile」（产品名、版本、联系方式）。
     void openAbout();
@@ -253,6 +276,14 @@ private:
 
     core::ApplicationConfig config_;
     core::ItemsDocument document_;
+
+    // ---- 轮盘菜单 ----
+    core::RadialConfig radialConfig_;
+    infrastructure::RadialStore radialStore_;
+    platform::win32::RadialMouseHook radialHook_;
+    std::unique_ptr<ui::RadialMenuWindow> radialWindow_;
+    // 轮盘当前显示的方案（显示期间保持引用，避免悬空）
+    const core::RadialMenu* activeRadialMenu_ = nullptr;
 };
 
 }  // namespace app

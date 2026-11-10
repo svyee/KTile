@@ -8,8 +8,12 @@
 #include "infrastructure/json/config_store.h"
 #include "infrastructure/log/app_log.h"
 #include "ui/launcher_window.h"
+#include "ui/radial_menu_window.h"
+#include "platform/win32/foreground_process.h"
 #include "platform/win32/item_launcher.h"
 #include "platform/win32/icon_store.h"
+#include "platform/win32/key_injector.h"
+#include "platform/win32/system_actions.h"
 #include "platform/win32/uuid.h"
 #include "ui/item_editor_dialog.h"
 #include "ui/about_dialog.h"
@@ -341,6 +345,31 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
             break;
         }
 
+        case platform::win32::kRadialShowMessage: {
+            if (self != nullptr) {
+                POINT p = {static_cast<LONG>(wParam), static_cast<LONG>(lParam)};
+                self->onRadialShow(p);
+                return 0;
+            }
+            break;
+        }
+        case platform::win32::kRadialMoveMessage: {
+            if (self != nullptr) {
+                POINT p = {static_cast<LONG>(wParam), static_cast<LONG>(lParam)};
+                self->onRadialMove(p);
+                return 0;
+            }
+            break;
+        }
+        case platform::win32::kRadialReleaseMessage: {
+            if (self != nullptr) {
+                POINT p = {static_cast<LONG>(wParam), static_cast<LONG>(lParam)};
+                self->onRadialRelease(p);
+                return 0;
+            }
+            break;
+        }
+
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -469,6 +498,33 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     // 的屏幕截图）。
     if (debug.opacityPercent > 0 && launcherWindow_ != nullptr) {
         launcherWindow_->setWindowOpacityPercent(debug.opacityPercent);
+    }
+
+    // ---- 调试截图：轮盘菜单 ----
+    if (debug.radial) {
+        if (radialConfig_.menus.empty()) {
+            return 2;
+        }
+        auto radialWindow = std::make_unique<ui::RadialMenuWindow>();
+        if (!radialWindow->create(instance_)) {
+            return 3;
+        }
+        const core::RadialMenu& menu = radialConfig_.menus.front();
+        // 以屏幕中心为基准，保证完整可见
+        POINT center{};
+        center.x = GetSystemMetrics(SM_CXSCREEN) / 2;
+        center.y = GetSystemMetrics(SM_CYSCREEN) / 2;
+        radialWindow->show(menu, center);
+        // 可选：按相对中心的偏移（DIP）模拟光标，高亮对应扇区
+        if (debug.radialHoverX != 0 || debug.radialHoverY != 0) {
+            POINT cursor = center;
+            cursor.x += debug.radialHoverX;
+            cursor.y += debug.radialHoverY;
+            radialWindow->updateCursor(cursor);
+        }
+        const bool ok = radialWindow->debugExportPng(L"radial-shot.png");
+        radialWindow->hide();
+        return ok ? 0 : 4;
     }
 
     // ---- 调试截图模式：渲染导出后直接退出 ----
@@ -601,6 +657,15 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         MessageBoxW(nullptr, message.c_str(),
                     kApplicationName,
                     MB_OK | MB_ICONWARNING);
+    }
+
+    // 安装轮盘菜单鼠标钩子（Ctrl+右键拖动等）
+    if (radialConfig_.trigger.enabled) {
+        if (radialHook_.install(messageWindow_, radialConfig_.trigger)) {
+            infrastructure::applog::info("轮盘菜单钩子已安装");
+        } else {
+            infrastructure::applog::error("轮盘菜单钩子安装失败");
+        }
     }
 
     // 启动期的工作集裁剪由 LauncherWindow 的延迟定时器负责
@@ -780,6 +845,9 @@ bool Application::initializeConfig() {
         persistConfig();
     }
 
+    // 加载轮盘菜单配置
+    loadRadialConfig();
+
     return true;
 }
 
@@ -862,6 +930,104 @@ void Application::persistConfig() {
         return;
     }
     (void)store_.saveConfig(paths_.configFilePath(), config_);
+}
+
+void Application::loadRadialConfig() {
+    if (!pathsReady_) return;
+    const std::wstring path = paths_.dataDirectory() + L"\\radial.json";
+    const auto result = radialStore_.load(path);
+    radialConfig_ = result.value;
+    if (!result.fromFile) {
+        // 首次运行：写一份默认配置
+        persistRadialConfig();
+    }
+}
+
+void Application::persistRadialConfig() {
+    if (!pathsReady_) return;
+    const std::wstring path = paths_.dataDirectory() + L"\\radial.json";
+    (void)radialStore_.save(path, radialConfig_);
+}
+
+// ================================================================ 轮盘菜单
+
+void Application::onRadialShow(POINT startPoint) {
+    if (radialConfig_.menus.empty()) {
+        return;
+    }
+
+    // 根据前台进程匹配轮盘方案
+    const std::wstring processName = platform::win32::foregroundProcessName();
+    const core::RadialMenu* menu = radialConfig_.menuForProcess(
+        base::wideToUtf8Lossy(processName));
+    if (menu == nullptr) {
+        return;
+    }
+
+    activeRadialMenu_ = menu;
+
+    if (!radialWindow_) {
+        radialWindow_ = std::make_unique<ui::RadialMenuWindow>();
+        if (!radialWindow_->create(instance_)) {
+            radialWindow_.reset();
+            return;
+        }
+        radialWindow_->setActionHandler(
+            [this](std::uint8_t sectorIndex) {
+                if (activeRadialMenu_ == nullptr) return;
+                if (sectorIndex >= activeRadialMenu_->actions.size()) return;
+                executeRadialAction(activeRadialMenu_->actions[sectorIndex]);
+            });
+    }
+    radialWindow_->show(*menu, startPoint);
+}
+
+void Application::onRadialMove(POINT currentPoint) {
+    if (radialWindow_ && radialWindow_->isVisible()) {
+        radialWindow_->updateCursor(currentPoint);
+    }
+}
+
+void Application::onRadialRelease(POINT currentPoint) {
+    if (!radialWindow_ || !radialWindow_->isVisible()) {
+        activeRadialMenu_ = nullptr;
+        return;
+    }
+    // 窗口自行判定扇区并触发动作，然后隐藏
+    radialWindow_->releaseAt(currentPoint);
+    activeRadialMenu_ = nullptr;
+}
+
+void Application::executeRadialAction(const core::RadialAction& action) {
+    if (action.isEmpty()) return;
+
+    switch (action.type) {
+        case core::RadialActionType::Application:
+        case core::RadialActionType::File:
+        case core::RadialActionType::Folder:
+        case core::RadialActionType::Url: {
+            // 转成 LaunchItem 后复用 item_launcher
+            core::LaunchItem item;
+            item.type = static_cast<core::ItemType>(action.type);
+            item.name = action.name;
+            item.target = action.target;
+            item.arguments = action.arguments;
+            if (action.icon.has_value()) {
+                item.icon = *action.icon;
+            }
+            platform::win32::launchItem(item, false);
+            break;
+        }
+        case core::RadialActionType::Shortcut: {
+            platform::win32::injectShortcut(action.modifiers, action.key);
+            break;
+        }
+        case core::RadialActionType::Builtin: {
+            std::wstring id = base::utf8ToWide(action.target);
+            platform::win32::runBuiltinAction(id);
+            break;
+        }
+    }
 }
 
 bool Application::initializeWindow() {
@@ -2366,6 +2532,7 @@ void Application::handleTrayCommand(const UINT commandId) {
             // 退出前把内存状态刷回磁盘
             persistItems();
             persistConfig();
+            persistRadialConfig();
             tray_.destroy();
             if (messageWindow_ != nullptr) {
                 DestroyWindow(messageWindow_);

@@ -157,6 +157,21 @@ int WINAPI wWinMain(HINSTANCE instance,
         }
     }
 
+    // --debug-radial[=x,y]：渲染轮盘菜单到 radial-shot.png
+    debugOptions.radial = hasFlag(L"--debug-radial");
+    {
+        const std::wstring args = flagValue(L"--debug-radial=");
+        if (!args.empty()) {
+            const std::size_t comma = args.find(L',');
+            if (comma != std::wstring::npos) {
+                debugOptions.radialHoverX =
+                    _wtoi(args.substr(0, comma).c_str());
+                debugOptions.radialHoverY =
+                    _wtoi(args.substr(comma + 1).c_str());
+            }
+        }
+    }
+
     if (debugOptions.shot) {
         // 可选参数（都在 = 之后给出）：
         //   --debug-shot=x,y                 模拟悬停到 (x,y)
