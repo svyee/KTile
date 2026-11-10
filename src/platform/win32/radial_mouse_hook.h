@@ -31,6 +31,13 @@ inline constexpr UINT kRadialShowMessage    = WM_APP + 0x71U;
 inline constexpr UINT kRadialMoveMessage    = WM_APP + 0x72U;
 inline constexpr UINT kRadialReleaseMessage = WM_APP + 0x73U;
 
+// 触发键当前是否真的处于按下状态（物理状态，不看钩子状态机）。
+//
+// 用途：低级钩子会被系统静默跳过（回调超时的老问题，见 CHANGELOG 1.1.0），
+// 一旦「抬起」事件丢失，轮盘就会永远挂在屏幕上。应用层据此做兜底：
+// 轮盘可见期间定期问一句「键还按着吗」，松开了就强制收起。
+bool isTriggerButtonDown(core::RadialTriggerButton button) noexcept;
+
 class RadialMouseHook {
 public:
     RadialMouseHook() = default;
@@ -64,8 +71,6 @@ private:
     State state_ = State::Idle;
     POINT startPoint_{};
     POINT currentPoint_{};
-    // 触发时按下的是哪个键（WM_RBUTTONDOWN / WM_MBUTTONDOWN / WM_XBUTTONDOWN）
-    WPARAM triggerMessage_ = 0;
 
     // 自身注入的事件签名（避免重复处理自己注入的点击）
     static constexpr ULONG_PTR kInjectSignature = 0x4B545244;  // "KTRD"
@@ -74,6 +79,14 @@ private:
 
     // 低级鼠标钩子回调（文件级静态，转发到 active_ 实例）
     static LRESULT CALLBACK mouseHookProc(int code, WPARAM wParam, LPARAM lParam);
+
+    // 事件是否属于配置的触发键。
+    //
+    // WM_XBUTTONDOWN / WM_XBUTTONUP 把侧键1 与侧键2 合并成同一个消息，
+    // 只能靠 MSLLHOOKSTRUCT::mouseData 的高位字区分。因此右键/中键比消息
+    // 类型即可，侧键还必须比 mouseData —— 否则配了侧键2 的人按侧键1 也会
+    // 被吞掉并呼出轮盘。
+    bool matchesTriggerButton(const MSLLHOOKSTRUCT& event) const noexcept;
 
     // 检查修饰键是否满足配置
     bool modifierSatisfied() const noexcept;

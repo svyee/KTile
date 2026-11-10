@@ -150,7 +150,6 @@ public:
     void onRadialShow(POINT startPoint);
     void onRadialMove(POINT currentPoint);
     void onRadialRelease(POINT currentPoint);
-
 private:
     // 各初始化步骤，任一步失败则终止启动
     bool initializeConfig();
@@ -233,6 +232,8 @@ private:
     // ---- 轮盘菜单 ----
     // 执行轮盘扇区动作
     void executeRadialAction(const core::RadialAction& action);
+    // 轮盘可见期间的兜底：触发键已物理松开但「抬起」事件丢了，就强制收起
+    void onRadialWatchdog();
 
     // ---- 关于对话框 ----
     // 弹出「关于 KTile」（产品名、版本、联系方式）。

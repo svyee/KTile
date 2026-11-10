@@ -79,6 +79,35 @@ WPARAM RadialMouseHook::upMessage() const noexcept {
     return WM_RBUTTONUP;
 }
 
+bool isTriggerButtonDown(core::RadialTriggerButton button) noexcept {
+    int vk = 0;
+    switch (button) {
+        case core::RadialTriggerButton::Right:  vk = VK_RBUTTON;  break;
+        case core::RadialTriggerButton::Middle: vk = VK_MBUTTON;  break;
+        case core::RadialTriggerButton::Side1:  vk = VK_XBUTTON1; break;
+        case core::RadialTriggerButton::Side2:  vk = VK_XBUTTON2; break;
+    }
+    if (vk == 0) {
+        return false;
+    }
+    // 高位为 1 表示当前按下（与 modifierSatisfied 同一套判断）
+    return (GetAsyncKeyState(vk) & 0x8000) != 0;
+}
+
+bool RadialMouseHook::matchesTriggerButton(const MSLLHOOKSTRUCT& event) const noexcept {
+    switch (trigger_.button) {
+        case core::RadialTriggerButton::Right:
+        case core::RadialTriggerButton::Middle:
+            // 右键与中键各有独立的消息类型，消息对上了就是对的键
+            return true;
+        case core::RadialTriggerButton::Side1:
+            return HIWORD(event.mouseData) == XBUTTON1;
+        case core::RadialTriggerButton::Side2:
+            return HIWORD(event.mouseData) == XBUTTON2;
+    }
+    return false;
+}
+
 bool RadialMouseHook::modifierSatisfied() const noexcept {
     if (trigger_.modifier == core::RadialTriggerModifier::None) {
         return true;  // 无修饰键要求，直接满足
@@ -140,6 +169,10 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
     const WPARAM upMsg = upMessage();
 
     if (message == downMsg) {
+        // 侧键1/侧键2 共用 WM_XBUTTONDOWN，还得看 mouseData 才知是哪一个
+        if (!matchesTriggerButton(event)) {
+            return false;  // 另一个侧键：放行给目标窗口
+        }
         // 按键按下
         if (!modifierSatisfied()) {
             // 修饰键不满足：放行，让 MouseInc 等处理
@@ -149,7 +182,6 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         state_ = State::Tracking;
         startPoint_ = event.pt;
         currentPoint_ = event.pt;
-        triggerMessage_ = message;
         return true;  // 吞掉
     }
 
@@ -180,6 +212,11 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         }
 
         if (message == upMsg) {
+            // 同上：抬起也要确认是配置的那一个侧键（另一个侧键的抬起
+            // 不能当成手势结束，否则会把状态机提前打回 Idle）
+            if (!matchesTriggerButton(event)) {
+                return false;
+            }
             // 按键抬起
             currentPoint_ = event.pt;
             if (state_ == State::Shown) {

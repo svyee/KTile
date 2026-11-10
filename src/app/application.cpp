@@ -62,8 +62,12 @@ HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
 constexpr UINT_PTR kLogFlushTimerId = 1;        // 日志落盘
 constexpr UINT_PTR kHookWatchdogTimerId = 2;    // 手势钩子看门狗
 constexpr UINT_PTR kPluginVisibleTimerId = 3;   // 面板可见时的插件高频刷新
+constexpr UINT_PTR kRadialWatchdogTimerId = 4;  // 轮盘可见期间的按键兜底
 constexpr UINT kLogFlushIntervalMs = 2000;
 constexpr UINT kHookWatchdogIntervalMs = 60 * 1000;
+// 轮盘兜底的检查节奏。120ms 足够「松手后不觉得菜单还赖着」，又不至于
+// 让 GetAsyncKeyState 变成忙轮询。只在轮盘可见期间挂表，其余时间零开销。
+constexpr UINT kRadialWatchdogIntervalMs = 120;
 // 手势钩子的强制重装周期：系统负载高时会静默跳过超时的钩子回调
 //（没有任何通知），只能定期重装把钩子链顺序抢回来。
 constexpr ULONGLONG kForceReinstallIntervalMs = 10 * 60 * 1000;
@@ -683,6 +687,7 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     KillTimer(messageWindow_, kLogFlushTimerId);
     KillTimer(messageWindow_, kHookWatchdogTimerId);
     KillTimer(messageWindow_, kPluginVisibleTimerId);
+    KillTimer(messageWindow_, kRadialWatchdogTimerId);
     pluginVisibleTimerSeconds_ = 0;
     infrastructure::applog::markSessionEnd();
     infrastructure::applog::info("正常退出");
@@ -730,7 +735,30 @@ void Application::onMessageTimer(const UINT_PTR timerId) {
         onHookWatchdog();
     } else if (timerId == kPluginVisibleTimerId) {
         onPluginVisibleTick();
+    } else if (timerId == kRadialWatchdogTimerId) {
+        onRadialWatchdog();
     }
+}
+
+// 轮盘可见期间的兜底：触发键已经松开就强制收起。
+//
+// 为什么需要它：WH_MOUSE_LL 的回调会被系统静默跳过（回调超时，没有任何
+// 通知 —— 与 1.1.0 修「单按 Win 偶发没反应」同一个根因）。一旦「抬起」
+// 事件丢了，轮盘窗口没有焦点、没有 Esc 通道，就会一直挂在屏幕最上层，
+// 用户只能杀进程。这里用物理键状态对账，代价是一次 GetAsyncKeyState。
+void Application::onRadialWatchdog() {
+    if (messageWindow_ == nullptr || !radialWindow_ ||
+        !radialWindow_->isVisible()) {
+        KillTimer(messageWindow_, kRadialWatchdogTimerId);
+        return;
+    }
+    if (platform::win32::isTriggerButtonDown(radialConfig_.trigger.button)) {
+        return;
+    }
+    infrastructure::applog::warn("轮盘菜单：抬起事件丢失，按物理键状态强制收起");
+    radialWindow_->hide();
+    activeRadialMenu_ = nullptr;
+    KillTimer(messageWindow_, kRadialWatchdogTimerId);
 }
 
 void Application::onPluginVisibleTick() {
@@ -980,6 +1008,11 @@ void Application::onRadialShow(POINT startPoint) {
             });
     }
     radialWindow_->show(*menu, startPoint);
+    // 挂上「抬起丢失」兜底定时器；onRadialWatchdog 在键松开时收起轮盘
+    if (messageWindow_ != nullptr) {
+        SetTimer(messageWindow_, kRadialWatchdogTimerId,
+                 kRadialWatchdogIntervalMs, nullptr);
+    }
 }
 
 void Application::onRadialMove(POINT currentPoint) {
@@ -989,6 +1022,9 @@ void Application::onRadialMove(POINT currentPoint) {
 }
 
 void Application::onRadialRelease(POINT currentPoint) {
+    if (messageWindow_ != nullptr) {
+        KillTimer(messageWindow_, kRadialWatchdogTimerId);
+    }
     if (!radialWindow_ || !radialWindow_->isVisible()) {
         activeRadialMenu_ = nullptr;
         return;
