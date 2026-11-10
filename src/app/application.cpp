@@ -518,7 +518,8 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         POINT center{};
         center.x = GetSystemMetrics(SM_CXSCREEN) / 2;
         center.y = GetSystemMetrics(SM_CYSCREEN) / 2;
-        radialWindow->show(menu, center);
+        radialWindow->show(menu, center,
+                           static_cast<int>(radialConfig_.trigger.cancelRadiusPx));
         // 可选：按相对中心的偏移（DIP）模拟光标，高亮对应扇区
         if (debug.radialHoverX != 0 || debug.radialHoverY != 0) {
             POINT cursor = center;
@@ -1007,7 +1008,8 @@ void Application::onRadialShow(POINT startPoint) {
                 executeRadialAction(activeRadialMenu_->actions[sectorIndex]);
             });
     }
-    radialWindow_->show(*menu, startPoint);
+    radialWindow_->show(*menu, startPoint,
+                        static_cast<int>(radialConfig_.trigger.cancelRadiusPx));
     // 挂上「抬起丢失」兜底定时器；onRadialWatchdog 在键松开时收起轮盘
     if (messageWindow_ != nullptr) {
         SetTimer(messageWindow_, kRadialWatchdogTimerId,

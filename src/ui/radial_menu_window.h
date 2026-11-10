@@ -46,8 +46,15 @@ public:
 
     bool create(HINSTANCE instance);
 
-    // 显示轮盘，centerScreen 为轮盘中心的屏幕坐标
-    void show(const core::RadialMenu& menu, POINT centerScreen);
+    // 显示轮盘，centerScreen 为轮盘中心的屏幕坐标。
+    //
+    // cancelRadiusDip 是外甩取消半径（DIP）：松手时距中心超过这个半径
+    // 就不算命中任何扇区。传 0 表示用默认值（花瓣外缘 kWindowRadiusDip）。
+    //
+    // 这里用 DIP 而不是物理像素：花瓣布局本身就是 DIP，用物理像素会让
+    // 150% 缩放的机器上「取消半径 160」落进花瓣内部，导致怎么拖都取消。
+    void show(const core::RadialMenu& menu, POINT centerScreen,
+              int cancelRadiusDip = 0);
 
     // 更新光标位置（屏幕坐标），用于高亮扇区
     void updateCursor(POINT screenPoint);
@@ -162,6 +169,10 @@ private:
     // 命中测试用的内/外半径（与花瓣布局对应）
     static constexpr float kInnerRadiusDip = 47.0F;
     static constexpr float kOuterRadiusDip = 153.0F;
+
+    // 实际生效的外甩取消半径（DIP）。下界用 core::kMinCancelRadiusDip，
+    // 保证不会小于花瓣环外缘；见 show() 的注释。
+    float cancelRadiusDip_ = kOuterRadiusDip;
 };
 
 }  // namespace ui

@@ -170,6 +170,14 @@ struct RadialTriggerConfig {
     std::uint16_t cancelRadiusPx = 160;        // 拖出此半径外松手 = 取消
 };
 
+// 外甩取消半径的可用区间（DIP，逻辑像素）。
+//
+// 下限 142 就是花瓣环的外缘：比它更小的半径会把花瓣自己判成「已甩出去」，
+// 用户会觉得有半个轮盘是坏的。上限只是防呆，别让配置写成一个永远取消不了
+// 的天文数字。
+inline constexpr std::uint16_t kMinCancelRadiusDip = 142;
+inline constexpr std::uint16_t kMaxCancelRadiusDip = 600;
+
 // ================================================================ 轮盘总配置
 
 struct RadialConfig {

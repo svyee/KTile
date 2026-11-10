@@ -6,11 +6,13 @@
 //   3. ItemsDocument 序列化 -> 反序列化 往返一致性
 //   4. ApplicationConfig 往返一致性
 //   5. 容错：非法 JSON、缺失字段、越界值
+//   6. RadialConfig 往返一致性 + 触发参数越界夹取
 //
 #include "core/data_model.h"
 #include "infrastructure/json/config_store.h"
 #include "infrastructure/json/json_parser.h"
 #include "infrastructure/json/json_writer.h"
+#include "infrastructure/json/radial_store.h"
 
 #include <cstdio>
 #include <string>
@@ -521,6 +523,113 @@ void testPluginItemRoundTrip() {
     CHECK(item.pluginParam("missing").empty());
 }
 
+// 轮盘配置：多方案 + 按应用规则 + 各种动作类型必须原样往返。
+//
+// 最容易坏的是「空槽位」：actions 长度必须始终等于 sectorCount，少存一个
+// 空动作，读回来所有扇区就整体错位，用户配的动作会跑到别的方向上去。
+void testRadialConfigRoundTrip() {
+    core::RadialConfig config;
+    config.menus.clear();
+    config.profiles.clear();
+
+    core::RadialMenu global("default", "全局默认", 8);
+    global.actions[0].type = core::RadialActionType::Shortcut;
+    global.actions[0].name = "复制";
+    global.actions[0].modifiers = {core::HotkeyModifier::Control};
+    global.actions[0].key = "C";
+    global.actions[2].type = core::RadialActionType::Url;
+    global.actions[2].name = "搜索";
+    global.actions[2].target = "https://example.com";
+    config.menus.push_back(global);
+
+    core::RadialMenu note("notepad", "记事本", 4);
+    note.actions[1].type = core::RadialActionType::Builtin;
+    note.actions[1].name = "锁屏";
+    note.actions[1].target = "ktile:lock";
+    config.menus.push_back(note);
+
+    config.profiles.push_back(core::RadialProfile("", "default"));
+    config.profiles.push_back(core::RadialProfile("notepad.exe", "notepad"));
+    config.trigger.button = core::RadialTriggerButton::Side2;
+    config.trigger.modifier = core::RadialTriggerModifier::Shift;
+    config.trigger.cancelRadiusPx = 200;
+
+    const std::string text = RadialStore::serialize(config);
+    const auto loaded = RadialStore::deserialize(text);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
+    }
+
+    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion), 2);
+    CHECK_EQ(static_cast<long long>(loaded.value.menus.size()), 2);
+    CHECK_EQ(static_cast<long long>(loaded.value.profiles.size()), 2);
+    CHECK(loaded.value.trigger.button == core::RadialTriggerButton::Side2);
+    CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Shift);
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 200);
+
+    const auto& restored = loaded.value.menus[0];
+    CHECK_EQ(static_cast<long long>(restored.actions.size()), 8);
+    CHECK(restored.actions[0].type == core::RadialActionType::Shortcut);
+    CHECK_STREQ(restored.actions[0].name, "复制");
+    CHECK_STREQ(restored.actions[0].key, "C");
+    CHECK_EQ(static_cast<long long>(restored.actions[0].modifiers.size()), 1);
+    if (!restored.actions[0].modifiers.empty()) {
+        CHECK(restored.actions[0].modifiers[0] == core::HotkeyModifier::Control);
+    }
+    // 中间的空槽位必须还是空的，不能被后面的动作顶上
+    CHECK(restored.actions[1].isEmpty());
+    CHECK(restored.actions[2].type == core::RadialActionType::Url);
+    CHECK_STREQ(restored.actions[2].target, "https://example.com");
+
+    const auto& restoredNote = loaded.value.menus[1];
+    CHECK_EQ(static_cast<long long>(restoredNote.sectorCount), 4);
+    CHECK_EQ(static_cast<long long>(restoredNote.actions.size()), 4);
+    CHECK(restoredNote.actions[1].type == core::RadialActionType::Builtin);
+    CHECK_STREQ(restoredNote.actions[1].target, "ktile:lock");
+
+    // 按进程名挑方案：精确命中 notepad，其他回落到全局默认
+    const core::RadialMenu* byProcess = loaded.value.menuForProcess("notepad.exe");
+    CHECK(byProcess != nullptr);
+    if (byProcess != nullptr) {
+        CHECK_STREQ(byProcess->id, "notepad");
+    }
+    const core::RadialMenu* fallback = loaded.value.menuForProcess("chrome.exe");
+    CHECK(fallback != nullptr);
+    if (fallback != nullptr) {
+        CHECK_STREQ(fallback->id, "default");
+    }
+}
+
+// 手改过的 JSON：离谱值必须夹回可用区间，且不能因为校验失败就把整份配置
+// 丢掉换默认（用户配的几十个动作不能因为一个滑杆值就没了）。
+void testRadialTriggerValuesClamped() {
+    const std::string text =
+        "{\"schemaVersion\": 2,"
+        "\"trigger\": {\"enabled\": true, \"button\": \"bogus\","
+        "\"modifier\": \"ctrl\", \"activationThresholdPx\": 0,"
+        "\"cancelRadiusPx\": 40},"
+        "\"menus\": [{\"id\": \"m\", \"name\": \"M\", \"sectorCount\": 99,"
+        "\"actions\": []}],"
+        "\"profiles\": []}";
+    const auto loaded = RadialStore::deserialize(text);
+    CHECK(loaded.ok);
+    if (!loaded.ok) {
+        return;
+    }
+
+    // 阈值 0 等于「按下即呼出」，右键会被彻底吃掉 → 夹到 1
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.activationThresholdPx), 1);
+    // 取消半径比花瓣外缘（142 DIP）还小会把花瓣自己判成已甩出 → 夹到下限
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx),
+             static_cast<long long>(core::kMinCancelRadiusDip));
+    // 认不出的触发键回落到右键（安全的默认，不会突然吞中键）
+    CHECK(loaded.value.trigger.button == core::RadialTriggerButton::Right);
+    // 扇区数夹进 4~8，动作补齐到扇区数
+    CHECK_EQ(static_cast<long long>(loaded.value.menus[0].sectorCount), 8);
+    CHECK_EQ(static_cast<long long>(loaded.value.menus[0].actions.size()), 8);
+}
+
 }  // namespace
 
 int wmain() {
@@ -549,6 +658,8 @@ int wmain() {
     testUnknownTileSizeFallsBack();
     testLabelModeRoundTripAndFallback();
     testPluginItemRoundTrip();
+    testRadialConfigRoundTrip();
+    testRadialTriggerValuesClamped();
 
     std::printf("检查 %d 项，失败 %d 项\n", g_checks, g_failures);
     if (g_failures == 0) {

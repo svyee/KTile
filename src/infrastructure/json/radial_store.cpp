@@ -168,6 +168,19 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
             trigger.find("activationThresholdPx").asUint32(8));
         result.value.trigger.cancelRadiusPx = static_cast<std::uint16_t>(
             trigger.find("cancelRadiusPx").asUint32(160));
+
+        // 手改过的离谱值夹回可用区间，别让不合法的配置流到 UI 和窗口里。
+        // （阈值 0 会让「按下即呼出」，卡死右键；取消半径小于花瓣外缘
+        //   会把花瓣自己判成已甩出，看起来像半个轮盘坏了。）
+        if (result.value.trigger.activationThresholdPx < 1) {
+            result.value.trigger.activationThresholdPx = 1;
+        }
+        if (result.value.trigger.cancelRadiusPx < core::kMinCancelRadiusDip) {
+            result.value.trigger.cancelRadiusPx = core::kMinCancelRadiusDip;
+        }
+        if (result.value.trigger.cancelRadiusPx > core::kMaxCancelRadiusDip) {
+            result.value.trigger.cancelRadiusPx = core::kMaxCancelRadiusDip;
+        }
     }
 
     // menus

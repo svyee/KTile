@@ -168,9 +168,12 @@ function Get-PersistenceSources {
     $candidates = @(
         (Join-Path $SrcDir "base\text_convert.cpp")
         (Join-Path $SrcDir "core\plugin_model.cpp")
+        # radial_store 依赖 core::RadialConfig 的成员函数（findMenu / menuForProcess）
+        (Join-Path $SrcDir "core\radial_menu.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
+        (Join-Path $SrcDir "infrastructure\json\radial_store.cpp")
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
         (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
     )
@@ -204,7 +207,6 @@ function Get-AppSources {
         (Join-Path $SrcDir "platform\win32\global_hotkey.cpp")
         (Join-Path $SrcDir "platform\win32\tray_icon.cpp")
         (Join-Path $SrcDir "platform\win32\startup_registration.cpp")
-        (Join-Path $SrcDir "platform\win32\shell_link.cpp")
         (Join-Path $SrcDir "platform\win32\icon_loader.cpp")
         (Join-Path $SrcDir "platform\win32\outside_click_monitor.cpp")
         (Join-Path $SrcDir "platform\win32\popup_menu.cpp")
@@ -271,7 +273,7 @@ if ($Tests) {
         }
         $extra = if ($needsCore) { $coreSources } else { @() }
 
-        if ($content -match "config_store\.h|json_writer\.h|json_parser\.h|portable_paths\.h") {
+        if ($content -match "config_store\.h|json_writer\.h|json_parser\.h|radial_store\.h|portable_paths\.h") {
             $extra = @($extra) + (Get-PersistenceSources)
             # 避免 text_convert.cpp 重复出现导致重复符号
             $extra = $extra | Select-Object -Unique

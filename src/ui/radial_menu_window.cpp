@@ -174,10 +174,18 @@ void RadialMenuWindow::tickAnimation() {
     render();
 }
 
-void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen) {
+void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
+                            int cancelRadiusDip) {
     menu_ = menu;
     centerScreen_ = centerScreen;
     highlightedValid_ = false;
+
+    // 外甩取消半径：低于花瓣外缘的值没有意义（会切掉花瓣自己），夹到下限。
+    cancelRadiusDip_ = cancelRadiusDip > 0 ? static_cast<float>(cancelRadiusDip)
+                                           : kOuterRadiusDip;
+    if (cancelRadiusDip_ < static_cast<float>(core::kMinCancelRadiusDip)) {
+        cancelRadiusDip_ = static_cast<float>(core::kMinCancelRadiusDip);
+    }
 
     // 系统 DPI（GetDpiForWindow 是 Win10 1607+，用 Win7 可用的兼容方案）
     HDC screenDc = GetDC(nullptr);
@@ -240,7 +248,7 @@ void RadialMenuWindow::updateCursor(POINT screenPoint) {
     float dx = 0, dy = 0;
     screenToDipOffset(screenPoint, dx, dy);
 
-    auto hit = core::hitTestSector(dx, dy, kInnerRadiusDip, kOuterRadiusDip,
+    auto hit = core::hitTestSector(dx, dy, kInnerRadiusDip, cancelRadiusDip_,
                                    menu_.sectorCount);
     std::optional<std::uint8_t> next;
     if (hit.has_value() && *hit < menu_.actions.size() &&

@@ -196,10 +196,12 @@ constexpr int kRadialSummaryId = 1189;
 constexpr int kRadialCoexistHintId = 1190;
 
 // 滑块范围：阈值太小会被手抖误触，太大则拖半天不出轮盘；
-// 取消半径给 100~400 足够覆盖「轻轻一甩」到「大臂横甩」。
+// 取消半径给 150~400 足够覆盖「刚好越过花瓣」到「大臂横甩」。
+// 下限 150 是因为花瓣外缘在 142 DIP，比它更小的值会被窗口夹回 142，
+// 滑杆留在 100 只会给用户「拖了没反应」的错觉。
 constexpr int kRadialThresholdMin = 4;
 constexpr int kRadialThresholdMax = 40;
-constexpr int kRadialCancelMin = 100;
+constexpr int kRadialCancelMin = 150;
 constexpr int kRadialCancelMax = 400;
 
 // 插件页：说明 + 列表 + 操作按钮 + 脚注（均在右侧内容区内自上而下排布）
