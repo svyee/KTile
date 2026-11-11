@@ -184,7 +184,7 @@
     "settings.radialPlugins.openJson": "Open JSON…",
     "settings.radialPlugins.openFolder": "Open folder",
     "settings.radialPlugins.rescan": "Rescan",
-    "settings.radialPlugins.footnote": "\"Open JSON\" edits the manifest with the system default editor; click \"Rescan\" to apply.\r\nMatching compares process names only (case-insensitive); when several plugins match one process,\r\nthe higher priority wins. Icons live in the plugin's own icons folder; SVGs use a 24×24 canvas.",
+    "settings.radialPlugins.footnote": "\"Open JSON\" edits the manifest in the default editor; \"Rescan\" applies it.\r\nMatching compares process names only; ties go to the higher priority.\r\nIcons live in the plugin folder; SVGs use a 24×24 canvas.",
     "settings.radialPlugins.loaded": "Loaded",
     "settings.radialPlugins.skipped": "Skipped",
 
