@@ -62,11 +62,14 @@ constexpr int kCardTop = 8;
 constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
 constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
-constexpr int kCardHeightRadial = 456;      // 触发方式 + 抑制键 + 黑名单入口
 // 轮盘插件页：说明 + 列表 + 按钮 + 脚注（结构与磁贴插件页一致）。
 // 比磁贴插件页矮一些：它的脚注只有三行，按四行给高会在白卡下沿留一条
 // 明显的空带（实测截图能看出来）。
 constexpr int kCardHeightRadialPlugins = 350;
+
+// 轮盘页：说明文字搬进 tooltip 之后只剩「三行设置 + 扇区入口」。
+// 高度要跟着缩 —— 留着空白的白卡会让人以为下面还有没加载出来的内容。
+constexpr int kCardHeightRadial = 262;
 constexpr int kRadialPluginHintHeight = 66;
 constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
@@ -121,19 +124,23 @@ constexpr int kRadialButtonOptionCount = static_cast<int>(
     sizeof(kRadialButtonOptions) / sizeof(kRadialButtonOptions[0]));
 
 // 抑制键：按着这些键的时候，轮盘一律不弹（鼠标事件原样放行）。
-// 用 HotkeyModifier 而不是 RadialTriggerModifier，因为滑块要覆盖 Win，
+// 用 HotkeyModifier 而不是 RadialTriggerModifier，因为要覆盖 Win，
 // 而触发修饰键里没有 Win（Win+右键 是系统手势的地盘，不做触发键）。
+//
+// width 是各复选框自己的宽度：这一组要和触发键 / 修饰键挤在同一行，
+// 统一 72 宽会直接顶出内容区。Shift 多一个字符，单独给宽一点。
 struct RadialSuppressOption {
     const wchar_t* label;
     core::HotkeyModifier value;
     int controlId;
+    int width;
 };
 
 constexpr RadialSuppressOption kRadialSuppressOptions[] = {
-    {L"Ctrl", core::HotkeyModifier::Control, 1191},
-    {L"Shift", core::HotkeyModifier::Shift,  1192},
-    {L"Alt", core::HotkeyModifier::Alt,      1193},
-    {L"Win", core::HotkeyModifier::Win,      1194},
+    {L"Ctrl", core::HotkeyModifier::Control, 1191, 48},
+    {L"Shift", core::HotkeyModifier::Shift,  1192, 56},
+    {L"Alt", core::HotkeyModifier::Alt,      1193, 42},
+    {L"Win", core::HotkeyModifier::Win,      1194, 48},
 };
 
 constexpr int kRadialSuppressOptionCount = static_cast<int>(
@@ -145,7 +152,9 @@ struct RadialModifierOption {
 };
 
 constexpr RadialModifierOption kRadialModifierOptions[] = {
-    {L"无（独占该键）", core::RadialTriggerModifier::None},
+    // 只写「无」：括号里的「独占该键」四个字把下拉撑到 110 宽，
+    // 而这一行还要塞抑制键。解释挪到下拉的 tooltip 上。
+    {L"无", core::RadialTriggerModifier::None},
     {L"Ctrl", core::RadialTriggerModifier::Ctrl},
     {L"Shift", core::RadialTriggerModifier::Shift},
     {L"Alt", core::RadialTriggerModifier::Alt},
@@ -153,6 +162,24 @@ constexpr RadialModifierOption kRadialModifierOptions[] = {
 
 constexpr int kRadialModifierOptionCount = static_cast<int>(
     sizeof(kRadialModifierOptions) / sizeof(kRadialModifierOptions[0]));
+
+// 触发方式第一行的三段横排：触发键 / 修饰键 / 抑制键。
+//
+// 三者是一条因果链（按住什么键 + 组合什么修饰键 + 什么情况下让路），拆成两三行
+// 就看不出它们在描述同一件事。但一行要放下 2 个下拉 + 4 个复选框，共用
+// kLabelWidth（76）根本不够，所以这里按实际文字宽度把列位置卡死：
+//
+//   150 标签 44 | 194 下拉 84 | 284 标签 44 | 328 下拉 66 | 400 标签 44 |
+//   448 四个复选框 48+56+42+48 = 194  →  右边缘 642（正好等于内容区右界）
+constexpr int kRadialLabelWidthTight = 44;
+constexpr int kRadialTriggerLabelX = kContentLeft + 8;   // 150
+constexpr int kRadialTriggerComboX = 194;
+constexpr int kRadialTriggerComboW = 84;
+constexpr int kRadialModifierLabelX = 284;
+constexpr int kRadialModifierComboX = 328;
+constexpr int kRadialModifierComboW = 66;
+constexpr int kRadialSuppressLabelX = 400;
+constexpr int kRadialSuppressBoxX = 448;
 
 // ---------------------------------------------------------------- 控件 ID
 
@@ -218,9 +245,10 @@ constexpr int kRadialCancelSliderId = 1186;
 constexpr int kRadialCancelValueId = 1187;
 constexpr int kRadialEditButtonId = 1188;
 constexpr int kRadialSummaryId = 1189;
-constexpr int kRadialCoexistHintId = 1190;
-// 抑制键的四个复选框用 1191~1194（见 kRadialSuppressOptions），这里只补提示行
-constexpr int kRadialSuppressHintId = 1195;
+// 抑制键的四个复选框用 1191~1194（见 kRadialSuppressOptions）。
+// 1190 / 1195 是「说明行」拆掉后空出来的两个位，现在给抑制键的标签用：
+// 选修饰键时整组连标签一起变灰，标签也得有个句柄。
+constexpr int kRadialSuppressLabelId = 1190;
 
 // ---- 轮盘插件页 ----
 //
@@ -277,6 +305,8 @@ constexpr const wchar_t* kPropTabFont = L"KTileSetTabFont";
 constexpr const wchar_t* kPropSectionFont = L"KTileSetSectionFont";
 constexpr const wchar_t* kPropPluginList = L"KTileSetPluginList";
 constexpr const wchar_t* kPropRadialPluginList = L"KTileSetRadialPluginList";
+// 悬停提示窗口（整个设置窗口共用一个，控件只是 TTM_ADDTOOL 挂上去）
+constexpr const wchar_t* kPropTooltip = L"KTileSetTooltip";
 
 // ---------------------------------------------------------------- 状态
 
@@ -595,6 +625,97 @@ void refreshRadialSummary(HWND dialog, const SettingsDialogState* state) {
                 L" 个进程已拉黑";
     }
     SetWindowTextW(summary, text.c_str());
+}
+
+// ---------------------------------------------------------------- 悬停提示
+
+// 设置项旁边成段的灰字说明，看起来像「说明书」而不是「设置」。改成：控件上
+// 只留名字，解释挂在鼠标悬停上。想知道的人停一下就有，不想知道的人眼前干净。
+//
+// 用系统 TOOLTIPS_CLASS + TTF_SUBCLASS：subclass 模式由 tooltip 自己消化
+// 鼠标消息，不必给每个控件写 TrackMouseEvent，也不会因为控件被重父化而失效。
+// Win7 自带（comctl32 v5），不引入任何新依赖，符合本项目的零依赖底线。
+HWND ensureTooltip(HWND owner, HFONT font) {
+    HWND tip = static_cast<HWND>(GetPropW(owner, kPropTooltip));
+    if (tip != nullptr) {
+        return tip;
+    }
+    tip = CreateWindowExW(
+        WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        owner, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (tip == nullptr) {
+        return nullptr;
+    }
+    SetWindowPos(tip, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    // 不给上限的话，一句长解释会被拉成一整条横贯屏幕的文字
+    SendMessageW(tip, TTM_SETMAXTIPWIDTH, 0,
+                 static_cast<LPARAM>(scaleFor(owner, 260)));
+    if (font != nullptr) {
+        SendMessageW(tip, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    }
+    SetPropW(owner, kPropTooltip, tip);
+    return tip;
+}
+
+void addTooltip(HWND owner, HWND tool, const wchar_t* text) {
+    if (owner == nullptr || tool == nullptr || text == nullptr) {
+        return;
+    }
+    HWND tip = ensureTooltip(owner,
+                             static_cast<HFONT>(GetPropW(owner, kPropFont)));
+    if (tip == nullptr) {
+        return;
+    }
+    TOOLINFOW info{};
+    // 必须用 V1 尺寸（56 字节），不能用 sizeof(TOOLINFOW)（72 字节）。
+    //
+    // 这是踩出来的：本程序没有 comctl32 v6 的 manifest，进程加载的是系统自带的
+    // v5.82，它的 TOOLINFO 还是 IE4 时代那份（到 lpszText 为止）。头文件里的
+    // TOOLINFOW 多出 lParam / lpReserved（v6 才有），按 sizeof 传过去，v5 认为
+    // 「结构尺寸不认识」，TTM_ADDTOOL 直接返回 FALSE —— 不报错、不写事件日志，
+    // 表现就是「悬停死活不弹」，只能靠 TTM_GETTOOLCOUNT 看出挂载数还是 0。
+    // V1 尺寸在 v6 下同样被接受（向后兼容），所以这是两个版本都安全的写法。
+    info.cbSize = TTTOOLINFOW_V1_SIZE;
+    // TTF_IDISHWND：uId 是控件句柄本身，一个控件一条 tip，不用编 ID
+    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    info.hwnd = owner;
+    info.uId = reinterpret_cast<UINT_PTR>(tool);
+    info.lpszText = const_cast<LPWSTR>(text);
+    SendMessageW(tip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
+}
+
+// ---------------------------------------------------------------- 轮盘触发
+
+// 修饰键不是「无」时，抑制键整组失效。
+//
+// 理由（用户提的规则，也确实是这套状态机本来的语义）：选了修饰键，那么「不按
+// 修饰键」这件事本身就是不触发，再让抑制键参与判断等于让同一个键既必须按、
+// 又必须不按。所以此时抑制键不是「另一个选择」，而是一条死规则。
+//
+// 灰显而不是清空勾选：切回「无」时用户之前的选择还在，不用重勾一遍。
+void refreshRadialSuppressEnabled(HWND dialog) {
+    if (dialog == nullptr) {
+        return;
+    }
+    bool usable = true;
+    HWND modifierCombo = GetDlgItem(dialog, kRadialModifierComboId);
+    if (modifierCombo != nullptr) {
+        const int selection = static_cast<int>(
+            SendMessageW(modifierCombo, CB_GETCURSEL, 0, 0));
+        if (selection >= 0 && selection < kRadialModifierOptionCount) {
+            usable = core::suppressionApplies(
+                kRadialModifierOptions[selection].value);
+        }
+    }
+    const BOOL enable = usable ? TRUE : FALSE;
+    EnableWindow(GetDlgItem(dialog, kRadialSuppressLabelId), enable);
+    for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
+        EnableWindow(GetDlgItem(dialog, kRadialSuppressOptions[i].controlId),
+                     enable);
+    }
 }
 
 // ---------------------------------------------------------------- 轮盘插件列表
@@ -1476,6 +1597,10 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //
             // 这一页只放「什么时候呼出」；扇区动作与按应用匹配在
             // radial_editor_dialog 里编辑（列表 + 表单，塞不进单列表单）。
+            //
+            // 版式原则：控件上只写名字，解释全部挂 tooltip。成段的灰字说明读起来
+            // 像说明书，还会把「这一行该改哪个控件」冲淡 —— 想看解释的人停一下
+            // 鼠标就有，不想看的人眼前干净。
             sink = &state->radialControls;
             int yRadial = kContentTop;
 
@@ -1483,7 +1608,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         yRadial, false);
 
             HWND radialEnabled = makeControl(
-                L"BUTTON", L"启用轮盘菜单（按住触发键拖动呼出）",
+                L"BUTTON", L"启用轮盘菜单",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTOCHECKBOX,
                 0, kContentLeft + 8, yRadial, kColumnWidth - 8, 20,
                 kRadialEnabledCheckId);
@@ -1495,12 +1620,17 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRadial += 28;
 
-            makeLabel(L"触发键", kContentLeft + 8, yRadial + 4, kLabelWidth - 8,
-                      18);
+            // ---- 一行三组：触发键 / 修饰键 / 抑制键 ----
+            //
+            // 三者描述同一件事（按住什么键、还要按下什么、什么情况下让路），
+            // 拆成两三行就看不出这层关系。列位置见 kRadialTriggerLabelX 一带
+            // 的注释：一行要塞 2 个下拉 + 4 个复选框，宽度按实际文字卡死。
+            makeLabel(L"触发键", kRadialTriggerLabelX, yRadial + 4,
+                      kRadialLabelWidthTight, 18);
             HWND radialButtonCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-                kContentLeft + kLabelWidth, yRadial, 110, 160,
+                kRadialTriggerComboX, yRadial, kRadialTriggerComboW, 160,
                 kRadialButtonComboId);
             if (radialButtonCombo != nullptr) {
                 int index = 0;
@@ -1517,12 +1647,12 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                              static_cast<WPARAM>(index), 0);
             }
 
-            makeLabel(L"修饰键", kContentLeft + kLabelWidth + 120, yRadial + 4,
-                      44, 18);
+            makeLabel(L"修饰键", kRadialModifierLabelX, yRadial + 4,
+                      kRadialLabelWidthTight, 18);
             HWND radialModifierCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-                kContentLeft + kLabelWidth + 166, yRadial, 140, 160,
+                kRadialModifierComboX, yRadial, kRadialModifierComboW, 160,
                 kRadialModifierComboId);
             if (radialModifierCombo != nullptr) {
                 int index = 0;
@@ -1537,6 +1667,32 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 }
                 SendMessageW(radialModifierCombo, CB_SETCURSEL,
                              static_cast<WPARAM>(index), 0);
+            }
+
+            // 抑制键：按住这些键时轮盘一律不弹，鼠标事件原样放行。
+            // 四个横排复选框比下拉多选更直观（一眼看到开了哪几个），
+            // 也少一次展开动作。标签带 ID：选修饰键时它要跟着一起变灰。
+            makeControl(L"STATIC", L"抑制键", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                        kRadialSuppressLabelX, yRadial + 3,
+                        kRadialLabelWidthTight, 18, kRadialSuppressLabelId);
+            HWND suppressBoxes[kRadialSuppressOptionCount] = {};
+            int boxX = kRadialSuppressBoxX;
+            for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
+                const RadialSuppressOption& option = kRadialSuppressOptions[i];
+                HWND box = makeControl(
+                    L"BUTTON", option.label,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,
+                    boxX, yRadial, option.width, 20, option.controlId);
+                suppressBoxes[i] = box;
+                if (box != nullptr) {
+                    const auto& held = state->radial.trigger.suppressWhileHeld;
+                    const bool checked =
+                        std::find(held.begin(), held.end(), option.value) !=
+                        held.end();
+                    SendMessageW(box, BM_SETCHECK,
+                                 checked ? BST_CHECKED : BST_UNCHECKED, 0);
+                }
+                boxX += option.width;
             }
             yRadial += 30;
 
@@ -1592,68 +1748,54 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRadial += 28;
 
-            // 抑制键：按住这些键时轮盘一律不弹，鼠标事件原样放行。
-            // 四个横排复选框比下拉多选更直观（一眼看到开了哪几个），
-            // 也少一次展开动作 —— 这一页要调的东西本来就不多。
-            makeLabel(L"抑制键", kContentLeft + 8, yRadial + 3,
-                      kLabelWidth - 8, 18);
-            for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
-                const RadialSuppressOption& option = kRadialSuppressOptions[i];
-                HWND box = makeControl(
-                    L"BUTTON", option.label,
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,
-                    kContentLeft + kLabelWidth + i * 74, yRadial, 72, 20,
-                    option.controlId);
-                if (box != nullptr) {
-                    const auto& held = state->radial.trigger.suppressWhileHeld;
-                    const bool checked =
-                        std::find(held.begin(), held.end(), option.value) !=
-                        held.end();
-                    SendMessageW(box, BM_SETCHECK,
-                                 checked ? BST_CHECKED : BST_UNCHECKED, 0);
-                }
-            }
-            yRadial += 24;
-            makeControl(
-                L"STATIC",
-                L"与上面的修饰键重复的项会被忽略（否则永远触发不了）。",
-                WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                kContentLeft + kLabelWidth, yRadial, kColumnWidth - kLabelWidth,
-                18, kRadialSuppressHintId);
-            yRadial += 26;
-
-            // 这段说明在 150% 缩放下会折成四行，高度必须按四行给 ——
-            // 按两行算的话最后一行会被下面的分隔线压住（实测踩过）。
-            makeControl(
-                L"STATIC",
-                L"带修饰键：只有「修饰键 + 该键」的组合才呼出轮盘，单按该键拖动"
-                L"放行给 MouseInc 等鼠标手势软件。\r\n"
-                L"设为「无」：该键由 KTile 接管 —— 原地单击仍会补发原生按键，"
-                L"拖动则不再传给手势软件。",
-                WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft + 8, yRadial,
-                kColumnWidth - 8, 72, kRadialCoexistHintId);
-            yRadial += 76;
-
             makeSection(L"扇区动作", kSectionRadialSectorId, kContentLeft,
                         yRadial, true);
 
-            makeControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                        kContentLeft + 8, yRadial, kColumnWidth - 8, 18,
-                        kRadialSummaryId);
+            HWND radialSummary = makeControl(
+                L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                kContentLeft + 8, yRadial, kColumnWidth - 8, 18,
+                kRadialSummaryId);
             yRadial += 24;
 
             makeControl(L"BUTTON", L"编辑扇区动作…",
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                         kContentLeft + 8, yRadial, 118, 26, kRadialEditButtonId);
-            yRadial += 34;
 
-            makeControl(
-                L"STATIC",
-                L"扇区动作与「黑名单」都在编辑窗口里设置。按应用显示不同轮盘由\r\n"
-                L"slugin 插件目录提供，不放这里。首次运行已内置「复制 / 粘贴 /\r\n"
-                L"剪切 / 撤销」四个扇区，可直接改。",
-                WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft + 8, yRadial,
-                kColumnWidth - 8, 54, -1);
+            // ---- 悬停提示 ----
+            //
+            // 这些正是原先印在页面上的那几段灰字。措辞基本照搬，只是从
+            // 「一直占着版面」改成「想知道才看」。
+            addTooltip(hwnd, radialEnabled,
+                       L"按住触发键拖出超过「拖动启动」的距离，就呼出轮盘；"
+                       L"原地单击不算手势，仍会补发原生按键。");
+            addTooltip(hwnd, radialButtonCombo,
+                       L"按住这个键拖动呼出轮盘。");
+            addTooltip(hwnd, radialModifierCombo,
+                       L"带修饰键（Ctrl / Shift / Alt）：只有「修饰键 + 触发键」"
+                       L"同时按下才呼出，单按触发键拖动会放行给 MouseInc 等"
+                       L"鼠标手势软件。\r\n"
+                       L"无：触发键由 KTile 独占 —— 原地单击仍补发原生按键，"
+                       L"拖动不再传给手势软件。\r\n"
+                       L"抑制键只在选「无」时可用：选了修饰键，「不按修饰键」"
+                       L"本身就是不触发，再叠一层抑制规则等于让同一个键既必须按、"
+                       L"又必须不按。");
+            addTooltip(hwnd, thresholdSlider,
+                       L"按下后移动超过这个距离才算手势。太小会被手抖误触，"
+                       L"太大则要拖半天才出轮盘。");
+            addTooltip(hwnd, cancelSlider,
+                       L"拖出这个半径再松手 = 取消，不触发任何动作。"
+                       L"必须大于「拖动启动」。");
+            for (HWND box : suppressBoxes) {
+                addTooltip(hwnd, box,
+                           L"按住其中任意一个键时，轮盘不弹、鼠标事件原样放行。"
+                           L"仅在修饰键为「无」时可用。");
+            }
+            addTooltip(hwnd, radialSummary,
+                       L"扇区动作与进程黑名单都在「编辑扇区动作」里改。\r\n"
+                       L"按应用显示不同轮盘由 slugin 插件目录提供，不在这里设。");
+
+            // 初始可用性：修饰键若是 Ctrl / Shift / Alt，抑制键一进来就该是灰的
+            refreshRadialSuppressEnabled(hwnd);
 
             // ==================== 轮盘插件页 ====================
             //
@@ -1964,6 +2106,16 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 } else if (hooks.openFolder) {
                     hooks.openFolder(id);
                 }
+                return 0;
+            }
+
+            // ---- 轮盘：修饰键变化决定抑制键是否可用 ----
+            //
+            // 只在选中项真的变了时更新。这里不改 state（草稿），因为
+            // 保存时统一从控件读；回调只负责把界面调成「能表达的样子」。
+            if (controlId == kRadialModifierComboId &&
+                notification == CBN_SELCHANGE) {
+                refreshRadialSuppressEnabled(hwnd);
                 return 0;
             }
 

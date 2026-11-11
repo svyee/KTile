@@ -234,6 +234,16 @@ app/            组装与生命周期
    `build.ps1` 里的正则，否则依赖源文件不会被编译进去。
 10. **调试截图路径**：`--debug-shot` 输出到**当前工作目录**的
     `debug-shot.png`，建议从仓库根目录运行。
+11. **`TOOLINFO.cbSize` 必须用 `TTTOOLINFOW_V1_SIZE`（56），不能用
+    `sizeof(TOOLINFOW)`（72）**：本程序没有 comctl32 v6 的 manifest，加载的是
+    系统自带的 v5.82，它认的还是 IE4 时代那份结构（到 `lpszText` 为止）。
+    按 `sizeof` 传 72，`TTM_ADDTOOL` 直接返回 `FALSE` —— 不报错、不写事件日志，
+    表现只有「悬停死活不弹」。注意 `TTM_GETTOOLCOUNT` 在 v5 下也不返回真实
+    挂载数（恒 0），别拿它当判据；要看效果就 `PrintWindow` 那个
+    `tooltips_class32` 窗口截图。
+12. **整屏截图在无交互会话里是全黑的**：`BitBlt` 抓屏幕拿不到内容，但
+    `PrintWindow` 抓单个窗口正常。UI 验证优先用 `PrintWindow`，不要用桌面截图
+    判断「有没有画出来」。
 
 ## 12. 关键文件导航
 

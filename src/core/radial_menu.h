@@ -176,6 +176,14 @@ bool suppressionConflictsTrigger(const RadialTriggerConfig& trigger) noexcept;
 bool modifierIsTriggerModifier(HotkeyModifier held,
                                RadialTriggerModifier trigger) noexcept;
 
+// 抑制键在什么情况下才参与判断：只有触发修饰键为「无」时。
+//
+// 选了修饰键，那么「不按修饰键」本身就是不触发 —— 再叠一层抑制规则，等于让
+// 同一个键既必须按、又必须不按。所以设置页在选了修饰键时把抑制键整组灰掉，
+// 钩子那边也必须按同一条规则忽略它；只让界面灰掉而运行期照旧生效，会变成
+// 「看不见却起作用」，是最难排查的那类问题。
+bool suppressionApplies(RadialTriggerModifier trigger) noexcept;
+
 // 外甩取消半径的可用区间（DIP，逻辑像素）。
 //
 // 下限 142 就是卡片环的外缘：比它更小的半径会把卡片自己判成「已甩出去」，

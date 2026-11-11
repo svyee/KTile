@@ -34,6 +34,10 @@ bool suppressionConflictsTrigger(const RadialTriggerConfig& trigger) noexcept {
     return false;
 }
 
+bool suppressionApplies(RadialTriggerModifier trigger) noexcept {
+    return trigger == RadialTriggerModifier::None;
+}
+
 // ================================================================ 黑名单匹配
 
 bool processNameEquals(const std::string& left,

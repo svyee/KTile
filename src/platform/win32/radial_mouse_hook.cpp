@@ -115,6 +115,12 @@ bool RadialMouseHook::modifierSatisfied() const noexcept {
 }
 
 bool RadialMouseHook::suppressionActive() const noexcept {
+    // 选了触发修饰键，抑制键就没有意义（见 core::suppressionApplies）。
+    // 设置页在那种情况下会把抑制键整组灰掉，这里必须同步 —— 界面灰了却
+    // 偷偷生效，是最难排查的那类问题。
+    if (!core::suppressionApplies(trigger_.modifier)) {
+        return false;
+    }
     // 见头文件说明：抑制键是键盘键，没被我们吞过，GetAsyncKeyState 可信。
     for (core::HotkeyModifier modifier : trigger_.suppressWhileHeld) {
         int vk = 0;

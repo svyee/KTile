@@ -256,6 +256,17 @@ static void testSuppressionConflict() {
                                      RadialTriggerModifier::Ctrl));
 }
 
+// 抑制键只在「触发修饰键 = 无」时参与判断。
+//
+// 设置页据此灰掉整组复选框，钩子据此跳过这段判断 —— 两处必须同一条规则，
+// 否则会出现「界面灰了但实际还在生效」的隐藏行为。
+static void testSuppressionApplies() {
+    CHECK(suppressionApplies(RadialTriggerModifier::None));
+    CHECK(!suppressionApplies(RadialTriggerModifier::Ctrl));
+    CHECK(!suppressionApplies(RadialTriggerModifier::Shift));
+    CHECK(!suppressionApplies(RadialTriggerModifier::Alt));
+}
+
 static void testValidateRejectsSuppressionConflict() {
     RadialConfig config;
     config.menu = RadialMenu("default", "全局", 4);
@@ -428,6 +439,7 @@ int wmain() {
     testTriggerButtonKey();
     testTriggerModifierKey();
     testSuppressionConflict();
+    testSuppressionApplies();
     testValidateRejectsSuppressionConflict();
     testFindPluginForProcess();
     testValidateRadialPlugin();
