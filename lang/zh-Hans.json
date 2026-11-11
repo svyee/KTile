@@ -165,7 +165,7 @@
     "settings.radial.tip.enable": "按住触发键拖出超过「拖动启动」的距离，就呼出轮盘；原地单击不算手势，仍会补发原生按键。",
     "settings.radial.tip.triggerKey": "按住这个键拖动呼出轮盘。",
     "settings.radial.tip.modifier": "带修饰键（Ctrl / Shift / Alt）：只有「修饰键 + 触发键」同时按下才呼出，单按触发键拖动会放行给 MouseInc 等鼠标手势软件。\r\n无：触发键由 KTile 独占 —— 原地单击仍补发原生按键，拖动不再传给手势软件。\r\n抑制键只在选「无」时可用：选了修饰键，「不按修饰键」本身就是不触发，再叠一层抑制规则等于让同一个键既必须按、又必须不按。",
-    "settings.radial.tip.dragThreshold": "按下后移动超过这个距离才算手势。太小会被手抖误触，太大则要拖半天才出轮盘。",
+    "settings.radial.tip.dragThreshold": "按下后移动超过这个距离才算手势。太小容易被手抖误触——每个人用鼠标的习惯不同，15~20 像素比较稳妥；太大则要拖半天才出轮盘。",
     "settings.radial.tip.cancelRadius": "拖出这个半径再松手 = 取消，不触发任何动作。必须大于「拖动启动」。",
     "settings.radial.tip.suppress": "按住其中任意一个键时，轮盘不弹、鼠标事件原样放行。下拉可以连续勾选，点列表外面收起。\r\n仅在修饰键为「无」时可用。",
     "settings.radial.tip.summary": "扇区动作与进程黑名单都在「编辑扇区动作」里改。\r\n按应用显示不同轮盘由 slugin 插件目录提供，不在这里设。",

@@ -559,7 +559,8 @@ void testRadialConfigRoundTrip() {
         return;
     }
 
-    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion), 3);
+    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion),
+             static_cast<long long>(core::kRadialSchemaVersion));
     CHECK(loaded.value.trigger.button == core::RadialTriggerButton::Side2);
     CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Shift);
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 200);
@@ -617,7 +618,8 @@ void testRadialLegacyMenusArrayMigrated() {
     // profiles 整段丢弃：按应用差异化已交给 slugin 插件，不转成黑名单
     CHECK(loaded.value.blacklist.empty());
     // 版本号盖成当前值，下次保存就是新格式
-    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion), 3);
+    CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion),
+             static_cast<long long>(core::kRadialSchemaVersion));
 }
 
 // 手改过的 JSON：离谱值必须夹回可用区间，且不能因为校验失败就把整份配置
@@ -701,6 +703,7 @@ void testRadialSuppressionFilteredOnLoad() {
 // 没有迁移函数是有意的：字段缺失走默认值、认不出的枚举回落、越界值夹取，
 // 老文件本来就能读。但版本号得跟着升，否则下次保存又原样写回旧值，
 // 以后真要做破坏性变更时就没有判断依据了。
+// （唯一的例外是 v3 → v4 的阈值抬升，见 testRadialThresholdMigration。）
 void testRadialSchemaVersionStamped() {
     const std::string text =
         "{\"schemaVersion\": 1,"
@@ -715,10 +718,50 @@ void testRadialSchemaVersionStamped() {
     }
     CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion),
              static_cast<long long>(core::kRadialSchemaVersion));
-    // 缺省的 trigger 字段走默认值：Ctrl + 右键，阈值 8，取消半径 160
+    // 缺省的 trigger 字段走默认值：Ctrl + 右键，阈值 15，取消半径 160
     CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Ctrl);
-    CHECK_EQ(static_cast<long long>(loaded.value.trigger.activationThresholdPx), 8);
+    CHECK_EQ(static_cast<long long>(loaded.value.trigger.activationThresholdPx), 15);
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 160);
+}
+
+// v3 → v4：旧默认阈值 8 被抬到 15；用户自己调过的值一个都不许动。
+void testRadialThresholdMigration() {
+    const char* kTail =
+        "\"menus\": [{\"id\": \"m\", \"name\": \"M\", \"sectorCount\": 4,"
+        "\"actions\": [{}, {}, {}, {}]}],"
+        "\"profiles\": []}";
+
+    auto loadWith = [&](int version, int threshold) {
+        std::string text = "{\"schemaVersion\": " + std::to_string(version) +
+                           ",\"trigger\": {\"button\": \"right\", "
+                           "\"activationThresholdPx\": " +
+                           std::to_string(threshold) + "}, " + kTail;
+        return RadialStore::deserialize(text);
+    };
+
+    // 旧版本 + 恰好是旧默认值 → 抬到 15
+    const auto legacy = loadWith(3, 8);
+    CHECK(legacy.ok);
+    if (legacy.ok) {
+        CHECK_EQ(static_cast<long long>(legacy.value.trigger.activationThresholdPx), 15);
+    }
+
+    // 旧版本 + 用户自己调过 → 原样保留
+    for (int custom : {4, 12, 30}) {
+        const auto kept = loadWith(3, custom);
+        CHECK(kept.ok);
+        if (kept.ok) {
+            CHECK_EQ(static_cast<long long>(kept.value.trigger.activationThresholdPx),
+                     custom);
+        }
+    }
+
+    // 已经是 v4 的配置里写 8 → 那是用户自己选的，不动
+    const auto current = loadWith(4, 8);
+    CHECK(current.ok);
+    if (current.ok) {
+        CHECK_EQ(static_cast<long long>(current.value.trigger.activationThresholdPx), 8);
+    }
 }
 
 // ---------------------------------------------------------------- 轮盘插件扫描
@@ -966,6 +1009,7 @@ int wmain() {
     testRadialSuppressionFilteredOnLoad();
     testRadialLegacyMenusArrayMigrated();
     testRadialSchemaVersionStamped();
+    testRadialThresholdMigration();
     testRadialPluginStoreDiscovery();
     testRadialPluginRejectsFutureSchema();
     testBundledPluginsLoad();

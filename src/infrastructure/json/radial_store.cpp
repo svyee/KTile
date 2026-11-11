@@ -226,7 +226,8 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
     }
 
     const JsonValue& root = parsed.root;
-    result.value.schemaVersion = root.find("schemaVersion").asUint32(1);
+    const std::uint32_t fileVersion = root.find("schemaVersion").asUint32(1);
+    result.value.schemaVersion = fileVersion;
 
     // trigger
     const JsonValue& trigger = root.find("trigger");
@@ -244,9 +245,20 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
             modifierKey.empty() ? defaults.modifier
                                 : core::radialTriggerModifierFromKey(modifierKey);
         result.value.trigger.activationThresholdPx = static_cast<std::uint16_t>(
-            trigger.find("activationThresholdPx").asUint32(8));
+            trigger.find("activationThresholdPx").asUint32(
+                core::RadialTriggerConfig().activationThresholdPx));
         result.value.trigger.cancelRadiusPx = static_cast<std::uint16_t>(
             trigger.find("cancelRadiusPx").asUint32(160));
+
+        // v3 → v4：把还停在旧默认值的阈值抬到新默认值。
+        //
+        // 旧默认 8 像素太窄 —— 拇指按右键时带出几个像素很常见，很多人
+        // 「只想点一下右键」也会把轮盘拽出来。只动**恰好等于旧默认值**的
+        // 配置：用户自己调过（哪怕是别的怪值）一律不碰，判断依据是版本号
+        // 加数值双重命中，不是「猜用户想不想改」。
+        if (fileVersion < 4 && result.value.trigger.activationThresholdPx == 8) {
+            result.value.trigger.activationThresholdPx = 15;
+        }
 
         // 手改过的离谱值夹回可用区间，别让不合法的配置流到 UI 和窗口里。
         // （阈值 0 会让「按下即呼出」，卡死右键；取消半径小于卡片环外缘
@@ -342,10 +354,13 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
 
     // 读成功就统一盖成当前版本号。
     //
-    // 这里没有「迁移函数」这一类东西：字段缺失走默认值、认不出的枚举值回落到
-    // 安全项、越界值上面已经夹过，所以老文件本来就能读。既然如此，让 schemaVersion
-    // 一直停在文件里的旧值没有意义（下次保存又会原样写回去，版本号永远不动），
-    // 反而会让以后真正的破坏性变更失去判断依据。
+    // 迁移函数只在**语义上无法靠默认值补回来**时才写：字段缺失走默认值、认不出
+    // 的枚举值回落到安全项、越界值上面已经夹过，这些老文件本来就能读，所以一直
+    // 没有迁移。目前的唯一一条是 v3 → v4 把激活阈值从旧默认 8 抬到 15 —— 那是个
+    // 「值本来就写对了，但对新版本来说不合适」的情况，读默认值补不了，只能改。
+    //
+    // 版本号必须跟着升：一直停在文件里的旧值，下次保存又会原样写回去，以后真要
+    // 做破坏性变更时就失去判断依据。
     result.value.schemaVersion = core::kRadialSchemaVersion;
     return result;
 }

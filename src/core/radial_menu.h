@@ -154,7 +154,12 @@ struct RadialTriggerConfig {
     bool enabled = true;
     RadialTriggerButton button = RadialTriggerButton::Right;
     RadialTriggerModifier modifier = RadialTriggerModifier::Ctrl;  // 默认 Ctrl+右键
-    std::uint16_t activationThresholdPx = 8;   // 拖动超过此距离才呼出轮盘
+    // 拖动超过此距离才呼出轮盘（物理像素）。
+    //
+    // 15 而不是 8：每个人按右键的手感差别很大，拇指一压就带出几个像素很常见；
+    // 8 像素的窗口太窄，很多人「只想点一下右键」也会把轮盘拽出来。15 仍远小于
+    // 卡片环内半径（47 DIP），正常选择动作完全不受影响。
+    std::uint16_t activationThresholdPx = 15;
     std::uint16_t cancelRadiusPx = 160;        // 拖出此半径外松手 = 取消
 
     // 抑制键：按住其中任意一个键时，轮盘不弹出，鼠标事件原样放行给目标窗口。
@@ -200,8 +205,9 @@ inline constexpr std::uint16_t kMaxCancelRadiusDip = 600;
 // config.json 的版本，两者结构毫无关系。共用同一个常量意味着给轮盘加字段
 // 会把磁贴配置的版本号一起推上去，下次真要按版本做迁移时就分不清是谁变了。
 // 轮盘自己一条版本线：1 = 初版，2 = 多方案 + 按应用白名单，
-// 3 = 通用项 + 进程黑名单（按应用差异化交给 slugin 插件）。
-inline constexpr std::uint32_t kRadialSchemaVersion = 3;
+// 3 = 通用项 + 进程黑名单（按应用差异化交给 slugin 插件），
+// 4 = 激活阈值默认值 8 → 15（见 radial_store 里那条唯一的迁移）。
+inline constexpr std::uint32_t kRadialSchemaVersion = 4;
 
 // 进程名是否命中黑名单（大小写不敏感）。
 //
