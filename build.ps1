@@ -227,6 +227,8 @@ function Get-AppSources {
         (Join-Path $SrcDir "platform\win32\outside_click_monitor.cpp")
         (Join-Path $SrcDir "platform\win32\popup_menu.cpp")
         (Join-Path $SrcDir "platform\win32\item_launcher.cpp")
+        (Join-Path $SrcDir "platform\win32\program_paths.cpp")
+        (Join-Path $SrcDir "platform\win32\follow_launcher.cpp")
         (Join-Path $SrcDir "platform\win32\icon_store.cpp")
         (Join-Path $SrcDir "platform\win32\drop_target.cpp")
         (Join-Path $SrcDir "platform\win32\system_actions.cpp")
@@ -304,6 +306,12 @@ if ($Tests) {
                 (Join-Path $SrcDir "infrastructure\json\json_parser.cpp"),
                 (Join-Path $SrcDir "base\text_convert.cpp")
             )
+            $extra = $extra | Select-Object -Unique
+        }
+
+        # 相对路径解析测试需要带上 program_paths.cpp（只用 shlwapi，无其它依赖）
+        if ($content -match "program_paths\.h") {
+            $extra = @($extra) + (Join-Path $SrcDir "platform\win32\program_paths.cpp")
             $extra = $extra | Select-Object -Unique
         }
 

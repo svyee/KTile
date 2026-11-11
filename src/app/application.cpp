@@ -10,8 +10,10 @@
 #include "infrastructure/log/app_log.h"
 #include "ui/launcher_window.h"
 #include "ui/radial_menu_window.h"
+#include "platform/win32/follow_launcher.h"
 #include "platform/win32/foreground_process.h"
 #include "platform/win32/item_launcher.h"
+#include "platform/win32/program_paths.h"
 #include "platform/win32/icon_store.h"
 #include "platform/win32/key_injector.h"
 #include "platform/win32/system_actions.h"
@@ -735,6 +737,18 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     SetTimer(messageWindow_, kHookWatchdogTimerId, kHookWatchdogIntervalMs,
              nullptr);
 
+    // ---- 跟随启动 ----
+    //
+    // 放在消息循环之前、所有初始化之后：此时窗口、托盘、热键都已就绪，
+    // 拉起外部程序不会拖慢自己的启动流程（ShellExecuteW 只负责把进程
+    // 交出去）。
+    //
+    // 自动化 / 调试开关下不执行：那些入口会被反复启动几十次，顺手把
+    // 用户的一堆程序拉起来既没意义，还会干扰截图与断言。
+    if (!automationMode) {
+        launchFollowStartupItems();
+    }
+
     const int exitCode = runMessageLoop();
 
     KillTimer(messageWindow_, kLogFlushTimerId);
@@ -1108,6 +1122,49 @@ void Application::persistConfig() {
         return;
     }
     (void)store_.saveConfig(paths_.configFilePath(), config_);
+}
+
+void Application::launchFollowStartupItems() {
+    const std::vector<core::FollowLaunchEntry>& entries =
+        config_.activation.followLaunch;
+    if (entries.empty()) {
+        return;
+    }
+    infrastructure::applog::info("跟随启动：" + std::to_string(entries.size()) +
+                                 " 项待处理");
+
+    for (const core::FollowLaunchEntry& entry : entries) {
+        // 路径解析与磁贴同一条规则：相对路径以 exe 目录为基准。
+        const std::wstring target = platform::win32::resolveProgramRelativePath(
+            base::utf8ToWideLossy(entry.target));
+        if (target.empty()) {
+            continue;
+        }
+        const std::string label =
+            entry.name.empty() ? entry.target : entry.name;
+
+        // 已经在运行就不重复启动。开机那一会儿这些程序常常已经被系统
+        // 或用户自己拉起来过，再开一次等于托盘里出现两份。
+        if (platform::win32::isProgramRunning(target)) {
+            infrastructure::applog::info("跟随启动：跳过 " + label +
+                                         "（已在运行）");
+            continue;
+        }
+
+        core::LaunchItem item;
+        item.type = core::ItemType::Application;
+        item.name = label;
+        item.target = base::wideToUtf8Lossy(target);
+        const platform::win32::LaunchResult result =
+            platform::win32::launchItem(item, false);
+        if (result.ok) {
+            infrastructure::applog::info("跟随启动：" + label + " 已启动");
+        } else {
+            infrastructure::applog::warn(
+                "跟随启动：" + label + " 启动失败 - " +
+                base::wideToUtf8Lossy(result.error));
+        }
+    }
 }
 
 void Application::loadRadialConfig() {
@@ -2383,6 +2440,7 @@ void Application::openSettings() {
         config_.appearance.themeName,
         config_.language,
         config_.activation.startWithWindows,
+        config_.activation.followLaunch,
         core::hotkeyPresetOf(config_.activation.hotkey),
         // 不透明度传「当前实际生效值」：磁贴背景若是「跟随皮肤」（-1），
         // 这里换成皮肤实际的 alpha 百分比，滑块才停在观感对应的位置。
@@ -2553,6 +2611,15 @@ void Application::openSettings() {
                         kApplicationName,
                         MB_OK | MB_ICONWARNING);
         }
+    }
+
+    // ---- 跟随启动 ----
+    //
+    // 只落盘，不在这里立刻执行：清单的语义是「下次 KTile 启动时一并拉起」。
+    // 点「添加」就当场把程序跑起来会让整理清单变成误触区。
+    if (result.followLaunch.has_value()) {
+        config_.activation.followLaunch = *result.followLaunch;
+        configChanged = true;
     }
 
     // ---- 唤醒快捷键 ----

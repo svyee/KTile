@@ -21,7 +21,9 @@ namespace core {
 //
 // v1 → v2：新增插件磁贴（ItemType::Plugin + pluginId + pluginParams）。
 // 旧文件没有这些字段，反序列化时保持默认值即可，不需要改写原文件。
-inline constexpr std::uint32_t kCurrentSchemaVersion = 2;
+// v2 → v3：配置新增 activation.followLaunch（跟随启动清单）。同样是
+// 「缺字段走默认值（空表）」，读得进、不需要改写原文件。
+inline constexpr std::uint32_t kCurrentSchemaVersion = 3;
 
 // 网格容量约束（单位：格）
 //
@@ -593,11 +595,32 @@ inline HotkeyPreset hotkeyPresetOf(const HotkeyConfig& config) noexcept {
     return HotkeyPreset::AltSpace;
 }
 
+// 「跟随启动」的一条：KTile 启动时顺带拉起的程序。
+//
+// 为什么不复用 LaunchItem：那条结构带着磁贴尺寸、颜色、标签归属等一整套
+// 磁贴字段，而这里只需要「叫什么、指哪儿」。分开还有个好处 —— 清空磁贴、
+// 换标签页都不会波及这份清单。
+struct FollowLaunchEntry {
+    // 显示名（空时界面按 target 推测）
+    std::string name;
+
+    // 目标程序路径。允许写相对 exe 目录的相对路径（"tools\app.exe"），
+    // 解析在 platform/win32/program_paths 里做。
+    std::string target;
+};
+
+// 跟随启动列表的上限。定这个数不是为了省内存，而是防止配置被写坏
+// （或用户误粘一长串路径）之后每次启动都去拉起几百个进程。
+inline constexpr std::size_t kMaximumFollowLaunchItems = 32;
+
 struct ActivationConfig {
     HotkeyConfig hotkey;
 
     // 是否开机自启
     bool startWithWindows = false;
+
+    // 跟随启动：KTile 启动时一并启动的外部程序，已经在运行的不重复启动。
+    std::vector<FollowLaunchEntry> followLaunch;
 
     // 是否启用屏幕边缘唤起（v2 功能，先留字段）
     bool screenEdgeEnabled = false;

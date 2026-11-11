@@ -62,6 +62,11 @@ struct SettingsResult {
     std::optional<std::string> backgroundImage;
     // 是否开机自动启动
     std::optional<bool> startWithWindows;
+    // 跟随启动清单（KTile 启动时一并拉起的程序）。
+    //
+    // 整份交回而不是逐条增删：界面上的「添加 / 移除」都是对一张表的编辑，
+    // 交回最终结果最简单，也不用为「删掉了哪一条」设计一套事件。
+    std::optional<std::vector<core::FollowLaunchEntry>> followLaunch;
     // 唤醒快捷键（预设）。未改动则留空
     std::optional<core::HotkeyPreset> hotkeyPreset;
     // 主窗口整体不透明度（50~100）
@@ -192,6 +197,7 @@ struct SettingsPreviewHooks {
 //   currentWindowPlacement 当前窗口出现位置
 //   currentThemeName     当前皮肤显示名（UTF-8，可为空 = 默认皮肤）
 //   currentStartup       当前是否开机自启
+//   currentFollowLaunch  当前的跟随启动清单
 //   currentHotkeyPreset  当前唤醒快捷键预设
 //   currentWindowOpacity 当前主窗口整体不透明度（50~100）
 //   currentTileOpacity   当前磁贴背景不透明度（0~100；-1 = 跟随皮肤）
@@ -214,6 +220,8 @@ bool showSettingsWindow(HWND owner,
                         const std::string& currentThemeName,
                         const std::string& currentLanguage,
                         bool currentStartup,
+                        const std::vector<core::FollowLaunchEntry>&
+                            currentFollowLaunch,
                         core::HotkeyPreset currentHotkeyPreset,
                         int currentWindowOpacity,
                         int currentTileOpacity,

@@ -3,6 +3,7 @@
 
 #include "base/text_convert.h"
 #include "platform/win32/icon_store.h"
+#include "platform/win32/program_paths.h"
 
 #include <ShlObj.h>
 #include <commoncontrols.h>  // IImageList / SHGetImageList
@@ -613,7 +614,10 @@ UniqueHIcon loadItemIcon(const std::string& targetUtf8,
         return loadDefaultApplicationIcon(hint);
     }
 
-    const std::wstring target = base::utf8ToWide(targetUtf8);
+    // 相对 exe 目录的路径（"tools\app.exe"）要先解析成绝对路径，
+    // 否则图标提取会按当前工作目录去找，磁贴变成空白方块。
+    const std::wstring target =
+        resolveProgramRelativePath(base::utf8ToWide(targetUtf8));
 
     // ---- 2. URL：用默认浏览器图标 ----
     if (isUrl) {

@@ -3,6 +3,7 @@
 #include "base/text_convert.h"
 #include "core/builtin_items.h"
 #include "infrastructure/i18n.h"
+#include "platform/win32/program_paths.h"
 #include "platform/win32/system_actions.h"
 
 #include <shellapi.h>
@@ -90,23 +91,28 @@ std::wstring lastErrorMessage(const HRESULT hr) {
 
 LaunchResult launchItem(const core::LaunchItem& item,
                         const bool forceAdministrator) {
-    const std::wstring target = base::utf8ToWideLossy(item.target);
-    if (target.empty()) {
+    const std::wstring rawTarget = base::utf8ToWideLossy(item.target);
+    if (rawTarget.empty()) {
         return {false, W("error.launchEmptyTarget")};
     }
 
     // 内置命令（"ktile:<id>"）没有文件或协议可执行，在 ShellExecute
     // 之前分派到系统命令执行端。提权参数对内置命令无意义 —— 命令自己
     // 知道要不要特权（如关机需要 SE_SHUTDOWN_NAME，内部已处理）。
-    const std::wstring builtinId = core::builtinIdFromTarget(target);
+    const std::wstring builtinId = core::builtinIdFromTarget(rawTarget);
     if (!builtinId.empty()) {
         return runBuiltinAction(builtinId);
     }
 
+    // 相对路径以 exe 目录为基准（"tools\app.exe"），绝对路径 / URL /
+    // 裸命令名原样通过，见 program_paths.h。
+    const std::wstring target = resolveProgramRelativePath(rawTarget);
+
     const std::wstring parameters = buildParameterString(item);
     const std::wstring workingDirectory =
         (item.workingDirectory.has_value() && !item.workingDirectory->empty())
-            ? base::utf8ToWideLossy(*item.workingDirectory)
+            ? resolveProgramRelativePath(
+                  base::utf8ToWideLossy(*item.workingDirectory))
             : std::wstring();
 
     // 动词：提权用 runas（触发 UAC）；否则 open 交给系统按类型分流。
@@ -148,7 +154,8 @@ LaunchResult revealItemInExplorer(const core::LaunchItem& item) {
         return {false, W("error.noFileLocation")};
     }
 
-    const std::wstring target = base::utf8ToWideLossy(item.target);
+    const std::wstring target =
+        resolveProgramRelativePath(base::utf8ToWideLossy(item.target));
     if (target.empty()) {
         return {false, W("error.launchEmptyTarget")};
     }

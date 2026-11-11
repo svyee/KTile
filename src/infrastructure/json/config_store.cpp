@@ -196,6 +196,19 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     writer.member("startWithWindows", config.activation.startWithWindows);
     writer.member("screenEdgeEnabled", config.activation.screenEdgeEnabled);
 
+    // ---- 跟随启动 ----
+    //
+    // 即使为空也写出去：键集合稳定（用户手改时能照着补），也让「清空」
+    // 这件事在文件里看得出来，而不是神秘地消失。
+    writer.key("followLaunch").beginArray();
+    for (const auto& entry : config.activation.followLaunch) {
+        writer.beginObject();
+        writer.member("name", entry.name);
+        writer.member("target", entry.target);
+        writer.endObject();
+    }
+    writer.endArray();
+
     writer.key("hotkey").beginObject();
     writer.member("enabled", config.activation.hotkey.enabled);
     writer.key("modifiers").beginArray();
@@ -240,10 +253,13 @@ ConfigStore::deserializeItems(const std::string& text) {
 
     const JsonValue& root = parsed.root;
 
-    // 版本校验（当前只有 v1）
-    const std::uint32_t version =
-        root.find("schemaVersion").asUint32(core::kCurrentSchemaVersion);
-    result.value.schemaVersion = version;
+    // 读成功就盖成当前版本号（与 radial_store 同一策略）。
+    //
+    // 这里没有迁移函数，也不需要：字段缺失走默认值、认不出的枚举回落、
+    // 越界值夹取，老文件本来就能读。既然如此，让 schemaVersion 停在旧值
+    // 只会让「文件里到底有没有 followLaunch 这种字段」失去判断依据 ——
+    // 尤其是它下次保存时会被原样写回去，版本号永远不动。
+    result.value.schemaVersion = core::kCurrentSchemaVersion;
 
     const JsonValue& tabs = root.find("tabs");
     if (tabs.isArray()) {
@@ -396,8 +412,11 @@ ConfigStore::deserializeConfig(const std::string& text) {
     }
 
     const JsonValue& root = parsed.root;
-    result.value.schemaVersion =
-        root.find("schemaVersion").asUint32(core::kCurrentSchemaVersion);
+    // 读成功就盖成当前版本号：字段缺失走默认值、认不出的枚举回落、越界值
+    // 夹取，老文件本来就能读，不需要迁移函数。反过来，让版本号停在文件里
+    // 的旧值只会让「这份配置到底按哪版结构解释」失去判断依据 —— 下次保存
+    // 又会把旧值原样写回去，那它永远不动。
+    result.value.schemaVersion = core::kCurrentSchemaVersion;
     result.value.loggingEnabled = root.find("loggingEnabled").asBool(true);
     result.value.language = root.find("language").asString();
     if (result.value.language.empty()) {
@@ -496,6 +515,37 @@ ConfigStore::deserializeConfig(const std::string& text) {
         auto& config = result.value.activation;
         config.startWithWindows = activation.find("startWithWindows").asBool(false);
         config.screenEdgeEnabled = activation.find("screenEdgeEnabled").asBool(false);
+
+        // 跟随启动：缺键 = 空表（v2 及更老的配置都走这里）。
+        // 只收有 target 的条目，并夹到上限 —— 手改配置写坏了不至于每次
+        // 启动都去拉几十个进程。
+        const JsonValue& follow = activation.find("followLaunch");
+        if (follow.isArray()) {
+            config.followLaunch.clear();
+            for (std::size_t i = 0; i < follow.size(); ++i) {
+                if (config.followLaunch.size() >=
+                    core::kMaximumFollowLaunchItems) {
+                    break;
+                }
+                const JsonValue& node = follow.at(i);
+                if (!node.isObject()) {
+                    continue;
+                }
+                core::FollowLaunchEntry entry;
+                entry.name = node.find("name").asString();
+                entry.target = node.find("target").asString();
+                if (entry.target.empty()) {
+                    continue;  // 没目标的行没有意义，别带进内存
+                }
+                if (entry.name.size() > core::kMaximumNameLength) {
+                    entry.name.resize(core::kMaximumNameLength);
+                }
+                if (entry.target.size() > core::kMaximumTargetLength) {
+                    entry.target.resize(core::kMaximumTargetLength);
+                }
+                config.followLaunch.push_back(std::move(entry));
+            }
+        }
 
         const JsonValue& hotkey = activation.find("hotkey");
         if (hotkey.isObject()) {

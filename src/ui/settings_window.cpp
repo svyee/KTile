@@ -3,6 +3,8 @@
 #include "base/text_convert.h"
 #include "core/data_model.h"
 #include "infrastructure/i18n.h"
+#include "platform/win32/icon_loader.h"
+#include "platform/win32/unique_handles.h"
 #include "ui/color_picker.h"
 #include "ui/dialog_style.h"
 #include "ui/radial_editor_dialog.h"
@@ -12,6 +14,7 @@
 #include <commdlg.h>
 
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -70,7 +73,8 @@ constexpr int kComboWidth = 260;     // 下拉框宽度（单列下不铺满，�
 constexpr int kCardInset = 10;       // 卡片相对内容边界的左右外扩
 constexpr int kCardTop = 8;
 constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
-constexpr int kCardHeightBehavior = 262;    // 语言+窗口+启动与唤醒
+// 语言 + 窗口 + 启动，其中「启动」含跟随启动列表（88px 的列表 + 标签行）。
+constexpr int kCardHeightBehavior = 400;
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
 // 轮盘插件页：说明 + 列表 + 按钮 + 脚注（结构与磁贴插件页一致）。
 // 比磁贴插件页矮一些：它的脚注只有三行，按四行给高会在白卡下沿留一条
@@ -307,6 +311,17 @@ constexpr int kSectionHeaderIdEnd = 1210;
 // 「灰色小标题」处理。
 constexpr int kLanguageComboId = 1211;
 
+// ---- 跟随启动 ----
+//
+// 一个「图标 + 名称 + 路径」的小列表加两个按钮。放列表而不是一行一个
+// 复选框：条目里要显示图标（用户一眼认出是哪个程序），复选框做不出这个。
+constexpr int kFollowListId = 1212;
+constexpr int kFollowAddId = 1213;
+constexpr int kFollowRemoveId = 1214;
+// 列表图标尺寸与列表高度（逻辑像素）
+constexpr int kFollowIconSize = 18;
+constexpr int kFollowListHeight = 88;
+
 // 控件 ID 到「窗口属性名」的映射：把控件句柄挂在对话框上，
 // 避免到处 GetDlgItem（虽然也能用，但属性查找更直白）。
 constexpr const wchar_t* kPropColumnsEdit = L"KTileSetColumnsEdit";
@@ -356,6 +371,13 @@ struct SettingsDialogState {
 
     // 界面语言（配置里的原值："auto" 或具体语言代码）
     std::string initialLanguage;
+
+    // 跟随启动：初值（判断是否改动过）与草稿（界面上的当前内容）。
+    // 「添加 / 移除」只改草稿，点确定才随 SettingsResult 交回应用层。
+    std::vector<core::FollowLaunchEntry> initialFollowLaunch;
+    std::vector<core::FollowLaunchEntry> followLaunch;
+    // 列表图标表（LVSIL_SMALL）。随对话框销毁。
+    HIMAGELIST followIcons = nullptr;
 
     // 皮肤与背景图
     std::wstring initialThemeName;      // 当前皮肤显示名（空 = 默认）
@@ -1173,6 +1195,169 @@ void paintSettingsTab(const HDC dc, const RECT& rect, const wchar_t* text,
 
 // ---------------------------------------------------------------- 消息处理
 
+// ---------------------------------------------------------------- 跟随启动
+//
+// 一张「图标 + 名称 + 路径」的表 + 两个按钮。为什么是列表而不是若干复选框：
+// 用户要一眼认出「加进去的是哪个程序」，靠名字容易看错（Chrome / Chrome
+// Beta、各种 updater），图标是唯一可靠的辨识物；复选框做不出图标列。
+//
+// 数据只存在草稿里（state->followLaunch），点「确定」才随 SettingsResult
+// 交回应用层 —— 与这一页其它控件同一套约定：取消 = 整份丢弃。
+
+// 两份清单是否一致（决定要不要把结果交回应用层）。
+// FollowLaunchEntry 没有 operator==：给它加一个只为这里服务，反而让
+// 「两个条目什么算相等」变成 core 的公共语义，不值当。
+bool sameFollowLaunch(const std::vector<core::FollowLaunchEntry>& left,
+                      const std::vector<core::FollowLaunchEntry>& right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (left[i].target != right[i].target ||
+            left[i].name != right[i].name) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 列表里显示的名字：配置里有就用，空则从路径推（去目录、去扩展名）。
+std::wstring followDisplayName(const core::FollowLaunchEntry& entry) {
+    if (!entry.name.empty()) {
+        return base::utf8ToWideLossy(entry.name);
+    }
+    const std::wstring target = base::utf8ToWideLossy(entry.target);
+    const std::size_t slash = target.find_last_of(L"\\/");
+    std::wstring name =
+        (slash == std::wstring::npos) ? target : target.substr(slash + 1);
+    const std::size_t dot = name.find_last_of(L'.');
+    if (dot != std::wstring::npos && dot > 0) {
+        name.resize(dot);
+    }
+    return name;
+}
+
+// 重建整张列表（含图标）。
+//
+// 每次都全量重建：条目最多 32 条，重建的开销远小于维护「增量更新 + 索引
+// 对齐」的正确性成本（删一行之后所有 iItem 都会错位）。
+void refreshFollowList(HWND dialog, SettingsDialogState* state) {
+    HWND list = GetDlgItem(dialog, kFollowListId);
+    if (list == nullptr || state == nullptr) {
+        return;
+    }
+    ListView_DeleteAllItems(list);
+    if (state->followIcons != nullptr) {
+        ImageList_RemoveAll(state->followIcons);
+    }
+
+    for (std::size_t i = 0; i < state->followLaunch.size(); ++i) {
+        const core::FollowLaunchEntry& entry = state->followLaunch[i];
+        const std::wstring name = followDisplayName(entry);
+        const std::wstring target = base::utf8ToWideLossy(entry.target);
+
+        int imageIndex = -1;
+        if (state->followIcons != nullptr) {
+            // Small（32px）而不是 Large：清单要在 18px 高的小图里显示，
+            // 从 32 缩到 18 比从 256 缩过去干净得多。
+            platform::win32::UniqueHIcon icon = platform::win32::loadItemIcon(
+                entry.target, std::string(), false, false,
+                platform::win32::IconSizeHint::Small);
+            if (icon.valid()) {
+                imageIndex = ImageList_AddIcon(state->followIcons, icon.get());
+            }
+        }
+
+        LVITEMW item{};
+        item.mask = LVIF_TEXT | (imageIndex >= 0 ? LVIF_IMAGE : 0U);
+        item.iItem = static_cast<int>(i);
+        item.iImage = imageIndex >= 0 ? imageIndex : 0;
+        item.pszText = const_cast<LPWSTR>(name.c_str());
+        const int row = ListView_InsertItem(list, &item);
+        if (row >= 0) {
+            ListView_SetItemText(list, row, 1,
+                                 const_cast<LPWSTR>(target.c_str()));
+        }
+    }
+}
+
+// 选一个程序并加进草稿。返回 true 表示列表需要刷新。
+bool addFollowEntry(HWND dialog, SettingsDialogState* state) {
+    if (state == nullptr) {
+        return false;
+    }
+
+    wchar_t file[4096] = {};
+    // 过滤器里 NUL 是分隔符，文案来自语言文件，只能运行时拼
+    std::wstring filter;
+    filter += infrastructure::i18n::trw("filter.program");
+    filter.push_back(L'\0');
+    filter += L"*.exe;*.lnk;*.bat;*.cmd;*.com";
+    filter.push_back(L'\0');
+    filter += infrastructure::i18n::trw("filter.allFiles");
+    filter.push_back(L'\0');
+    filter += L"*.*";
+    filter.push_back(L'\0');
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = dialog;
+    ofn.lpstrFilter = filter.c_str();
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = static_cast<DWORD>(std::size(file));
+    ofn.lpstrTitle = T("settings.followLaunch.pickTitle");
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    if (GetOpenFileNameW(&ofn) == FALSE) {
+        return false;  // 用户取消
+    }
+
+    const std::wstring picked(file);
+    core::FollowLaunchEntry entry;
+    entry.target = base::wideToUtf8Lossy(picked);
+    entry.name = base::wideToUtf8Lossy(followDisplayName(entry));
+
+    // 同一条目重复添加没有意义：选中已有那行，让用户看见它在清单里。
+    HWND list = GetDlgItem(dialog, kFollowListId);
+    for (std::size_t i = 0; i < state->followLaunch.size(); ++i) {
+        if (state->followLaunch[i].target == entry.target) {
+            if (list != nullptr) {
+                ListView_SetItemState(
+                    list, static_cast<int>(i),
+                    LVIS_SELECTED | LVIS_FOCUSED,
+                    LVIS_SELECTED | LVIS_FOCUSED);
+            }
+            return false;
+        }
+    }
+
+    if (state->followLaunch.size() >= core::kMaximumFollowLaunchItems) {
+        const std::wstring message = infrastructure::i18n::formatW(
+            "settings.followLaunch.full",
+            {std::to_wstring(core::kMaximumFollowLaunchItems)});
+        MessageBoxW(dialog, message.c_str(), T("settings.windowTitle"),
+                    MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+
+    state->followLaunch.push_back(std::move(entry));
+    return true;
+}
+
+// 删掉当前选中的一行。返回 true 表示列表需要刷新。
+bool removeFollowEntry(HWND dialog, SettingsDialogState* state) {
+    HWND list = GetDlgItem(dialog, kFollowListId);
+    if (list == nullptr || state == nullptr) {
+        return false;
+    }
+    const int selected = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (selected < 0 ||
+        static_cast<std::size_t>(selected) >= state->followLaunch.size()) {
+        return false;
+    }
+    state->followLaunch.erase(state->followLaunch.begin() + selected);
+    return true;
+}
+
 LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                     WPARAM wParam, LPARAM lParam) {
     auto* state = reinterpret_cast<SettingsDialogState*>(
@@ -1844,6 +2029,89 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRight += 26;
 
+            // ---- 跟随启动 ----
+            //
+            // 与「开机自动启动」是一件事的两半：前者决定 KTile 自己起不起来，
+            // 后者决定起来之后顺手把哪些程序带起来。所以紧挨着放。
+            //
+            // 用列表而不是一堆复选框：一眼要认出「加进去的是哪个程序」，
+            // 靠名字容易看错（Chrome / Chrome Beta、各种 updater），
+            // 图标才是可靠的辨识物。
+            {
+                HWND followLabel = makeLabel(
+                    T("settings.followLaunch"), kColumnRightX + 8, yRight + 4,
+                    formLabelW - 8, 18);
+                addTooltip(hwnd, followLabel, T("settings.followLaunch.tip"));
+
+                // 按钮贴右边界，宽度按实测文字定（"Remove" 比「移除」宽，
+                // 写死 72 会把英文裁掉）。从右往左推，右边缘永远是齐的。
+                int buttonRight = kColumnRightX + kColumnWidth - 8;
+                const int removeWidth =
+                    fitWidth(T("settings.followLaunch.remove"), 72);
+                buttonRight -= removeWidth;
+                makeControl(L"BUTTON", T("settings.followLaunch.remove"),
+                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                            0, buttonRight, yRight, removeWidth, kButtonHeight,
+                            kFollowRemoveId);
+                buttonRight -= 8;
+                const int addWidth =
+                    fitWidth(T("settings.followLaunch.add"), 72);
+                buttonRight -= addWidth;
+                makeControl(L"BUTTON", T("settings.followLaunch.add"),
+                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                            0, buttonRight, yRight, addWidth, kButtonHeight,
+                            kFollowAddId);
+            }
+            yRight += 30;
+
+            {
+                HWND followList = makeControl(
+                    WC_LISTVIEWW, L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT |
+                        LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                    WS_EX_CLIENTEDGE, kColumnRightX + 8, yRight,
+                    kColumnWidth - 8, kFollowListHeight, kFollowListId);
+                if (followList != nullptr) {
+                    ListView_SetExtendedListViewStyle(
+                        followList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+
+                    // 图标表与列表同生命周期：列表持有它，销毁时一起回收
+                    // （WM_DESTROY 里 Destroy）。
+                    state->followIcons = ImageList_Create(
+                        scaleFor(hwnd, kFollowIconSize),
+                        scaleFor(hwnd, kFollowIconSize), ILC_COLOR32 | ILC_MASK,
+                        1, static_cast<int>(core::kMaximumFollowLaunchItems));
+                    if (state->followIcons != nullptr) {
+                        ListView_SetImageList(followList, state->followIcons,
+                                              LVSIL_SMALL);
+                    }
+
+                    // 名称列宽实测（英文 "Name" 与中文「名称」差不了几像素，
+                    // 但留出的余量要跟着字体走），路径列吃掉剩下的宽度。
+                    const int nameWidth =
+                        (std::max)(140, measureText(T("common.name")) + 40);
+                    LVCOLUMNW nameColumn{};
+                    nameColumn.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                    nameColumn.pszText = const_cast<LPWSTR>(T("common.name"));
+                    nameColumn.cx = scaleFor(hwnd, nameWidth);
+                    nameColumn.fmt = LVCFMT_LEFT;
+                    ListView_InsertColumn(followList, 0, &nameColumn);
+
+                    LVCOLUMNW pathColumn{};
+                    pathColumn.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                    pathColumn.pszText =
+                        const_cast<LPWSTR>(T("settings.followLaunch.col.path"));
+                    pathColumn.cx = scaleFor(
+                        hwnd, kColumnWidth - 8 - nameWidth - 3);
+                    pathColumn.fmt = LVCFMT_LEFT;
+                    ListView_InsertColumn(followList, 1, &pathColumn);
+
+                    addTooltip(hwnd, followList,
+                               T("settings.followLaunch.tip"));
+                }
+                yRight += kFollowListHeight + 10;
+            }
+
             // 唤醒快捷键（2x2 单选）：
             // 前两项是系统级注册热键（零开销），后两项是手势，需要装
             // 低级键盘钩子（RegisterHotKey 表达不了双击/单键）。
@@ -2304,6 +2572,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             refreshHint(hwnd, state);
             refreshRadialSummary(hwnd, state);
+            refreshFollowList(hwnd, state);
 
             if (columnsEdit != nullptr) {
                 SetFocus(columnsEdit);
@@ -2542,6 +2811,34 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             if (controlId == kRadialModifierComboId &&
                 notification == CBN_SELCHANGE) {
                 refreshRadialSuppressEnabled(hwnd);
+                return 0;
+            }
+
+            // ---- 跟随启动：添加 / 移除 ----
+            //
+            // 只改草稿，点确定才落盘（与这一页其它控件一致）。
+            if (controlId == kFollowAddId && notification == BN_CLICKED) {
+                if (state != nullptr && addFollowEntry(hwnd, state)) {
+                    refreshFollowList(hwnd, state);
+                    // 把刚加的那条选中并滚进视野：否则用户加完看不到反馈，
+                    // 会以为按钮没生效（列表超过四行时新的那条正好在下面）。
+                    HWND list = GetDlgItem(hwnd, kFollowListId);
+                    if (list != nullptr && !state->followLaunch.empty()) {
+                        const int last =
+                            static_cast<int>(state->followLaunch.size()) - 1;
+                        ListView_SetItemState(
+                            list, last, LVIS_SELECTED | LVIS_FOCUSED,
+                            LVIS_SELECTED | LVIS_FOCUSED);
+                        ListView_EnsureVisible(list, last, FALSE);
+                        SetFocus(list);
+                    }
+                }
+                return 0;
+            }
+            if (controlId == kFollowRemoveId && notification == BN_CLICKED) {
+                if (state != nullptr && removeFollowEntry(hwnd, state)) {
+                    refreshFollowList(hwnd, state);
+                }
                 return 0;
             }
 
@@ -2886,6 +3183,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         if (checked != state->initialStartup) {
                             state->result.startWithWindows = checked;
                         }
+                    }
+
+                    // 跟随启动：整份交回（顺序也算改动 —— 用户可能就想要
+                    // 这个先后顺序）。
+                    if (!sameFollowLaunch(state->followLaunch,
+                                          state->initialFollowLaunch)) {
+                        state->result.followLaunch = state->followLaunch;
                     }
 
                     // ---- 唤醒快捷键（单选组，找出被选中的那个）----
@@ -3233,6 +3537,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             RemovePropW(hwnd, kPropHint);
             RemovePropW(hwnd, kPropPluginList);
 
+            // 跟随启动的图标表：列表控件只是「用了它」，销毁列表不会回收
+            // 图标句柄，必须在这里显式清掉，否则每开一次设置漏一批 HICON。
+            if (state != nullptr && state->followIcons != nullptr) {
+                ImageList_Destroy(state->followIcons);
+                state->followIcons = nullptr;
+            }
+
             // 通知模态循环「本对话框已关闭」。
             //
             // 为什么不用 PostQuitMessage：
@@ -3384,6 +3695,8 @@ bool showSettingsWindow(HWND owner,
                         const std::string& currentThemeName,
                         const std::string& currentLanguage,
                         const bool currentStartup,
+                        const std::vector<core::FollowLaunchEntry>&
+                            currentFollowLaunch,
                         const core::HotkeyPreset currentHotkeyPreset,
                         const int currentWindowOpacity,
                         const int currentTileOpacity,
@@ -3423,6 +3736,8 @@ bool showSettingsWindow(HWND owner,
     state.initialThemeName = base::utf8ToWide(currentThemeName);
     state.initialLanguage.assign(currentLanguage);
     state.initialStartup = currentStartup;
+    state.initialFollowLaunch = currentFollowLaunch;
+    state.followLaunch = currentFollowLaunch;
     state.initialHotkeyPreset = currentHotkeyPreset;
     state.initialWindowOpacity = currentWindowOpacity;
     state.initialTileOpacity = currentTileOpacity;

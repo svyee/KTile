@@ -209,6 +209,13 @@ private:
     const core::RadialMenu& debugRadialPluginMenu(const std::string& id);
     // 首次运行或数据缺失时植入示例磁贴（便于用户直观看到界面）
     void seedSampleDocument();
+
+    // 跟随启动：把 config_.activation.followLaunch 里的程序逐个拉起。
+    //
+    // 已经在运行（按完整映像路径判定）的跳过 —— 开机时这些程序往往
+    // 已经被系统或用户自己启动过，再拉一次就是两个实例。
+    // 逐条写日志：这是「为什么我的程序没起来」唯一的线索。
+    void launchFollowStartupItems();
     // 把当前状态写回磁盘
     void persistItems();
     void persistConfig();

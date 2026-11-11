@@ -5,6 +5,7 @@
 #include "infrastructure/i18n.h"
 #include "platform/win32/icon_loader.h"
 #include "platform/win32/icon_store.h"
+#include "platform/win32/program_paths.h"
 #include "platform/win32/unique_handles.h"
 #include "ui/builtin_item_dialog.h"
 #include "ui/color_picker.h"
@@ -138,6 +139,8 @@ constexpr int kTileColorClearId = 1023;  // 「默认」恢复跟随全局
 // 普通标签与提示都传 0 的话，只能一律用正文色。
 constexpr int kWorkingDirectoryHintId = 1030;
 constexpr int kFooterHintId = 1031;
+// 目标输入框下面的「相对路径」说明（1032 起是这一段的新号位）
+constexpr int kTargetHintId = 1032;
 // 保存/取消直接用 IDOK / IDCANCEL：IsDialogMessageW 处理回车/Esc 时
 // 对普通窗口发送的就是这两个 ID，按钮点击也发同 ID，一套处理两处来源。
 
@@ -271,7 +274,12 @@ std::optional<core::ItemType> inferItemTypeImpl(const std::wstring& target) {
         return core::ItemType::Url;
     }
 
-    const DWORD attributes = GetFileAttributesW(path.c_str());
+    // 相对 exe 目录的写法（"tools\app.exe"）要先解析，否则这里按
+    // 当前工作目录去找，永远找不到 —— 用户明明填了存在的路径，
+    // 类型却被推断成「文件」或推断不出来。
+    const std::wstring resolved =
+        platform::win32::resolveProgramRelativePath(path);
+    const DWORD attributes = GetFileAttributesW(resolved.c_str());
     if (attributes != INVALID_FILE_ATTRIBUTES) {
         if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) {
             return core::ItemType::Folder;
@@ -685,6 +693,11 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
                kFieldX, 51, kFieldWidth, kFieldHeight, kTargetId, font);
+    // 相对路径说明紧贴输入框下方：写在这儿才有人看见。塞进页脚那两句
+    // 长提示里，用户要改完路径、发现没生效才会去读（那时已经改错了）。
+    addControl(dialog, L"STATIC",
+               infrastructure::i18n::trw("editor.targetHint").c_str(),
+               0, kFieldX, 108, kFieldWidth, 18, kTargetHintId, font);
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.browseFile").c_str(), WS_TABSTOP,
                kBrowseFileX, 80, kBrowseWidth, kBrowseHeight,
                kBrowseTargetFileId, font);
@@ -1292,7 +1305,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
             const int controlId =
                 GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
             const bool isHint = controlId == kWorkingDirectoryHintId ||
-                                controlId == kFooterHintId;
+                                controlId == kFooterHintId ||
+                                controlId == kTargetHintId;
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, isHint ? dialog_style::secondaryText()
                                     : dialog_style::text());

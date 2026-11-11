@@ -350,6 +350,14 @@ void testConfigRoundTrip() {
     original.appearance.accentColor = 0xFF00AAFFu;
     original.activation.startWithWindows = true;
     original.activation.screenEdgeEnabled = true;
+    // 跟随启动：绝对路径与相对路径各一条（相对写法是这次新增的语义，
+    // 存盘 / 读回时不能被悄悄改成绝对路径 —— 那样「整个目录搬走」就废了）
+    core::FollowLaunchEntry absoluteEntry;
+    absoluteEntry.name = "微信";
+    absoluteEntry.target = "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe";
+    core::FollowLaunchEntry relativeEntry;
+    relativeEntry.target = "tools\\sync.exe";
+    original.activation.followLaunch = {absoluteEntry, relativeEntry};
     original.activation.hotkey.enabled = true;
     original.activation.hotkey.modifiers = {core::HotkeyModifier::Control,
                                             core::HotkeyModifier::Shift};
@@ -379,6 +387,14 @@ void testConfigRoundTrip() {
     CHECK_EQ(static_cast<long long>(*config.appearance.accentColor), 0xFF00AAFFLL);
     CHECK(config.activation.startWithWindows);
     CHECK(config.activation.screenEdgeEnabled);
+    CHECK_EQ(static_cast<long long>(config.activation.followLaunch.size()), 2);
+    if (config.activation.followLaunch.size() == 2) {
+        CHECK_STREQ(config.activation.followLaunch[0].name, "微信");
+        CHECK_STREQ(config.activation.followLaunch[0].target,
+                    "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe");
+        CHECK_STREQ(config.activation.followLaunch[1].target,
+                    "tools\\sync.exe");
+    }
     CHECK(config.activation.hotkey.enabled);
     CHECK_EQ(static_cast<long long>(config.activation.hotkey.modifiers.size()), 2);
     CHECK(config.activation.hotkey.modifiers[0] == core::HotkeyModifier::Control);
@@ -410,6 +426,27 @@ void testMissingFieldsUseDefaults() {
     CHECK(result.value.appearance.alwaysShowTileLabels);
     CHECK(result.value.activation.hotkey.enabled);
     CHECK_STREQ(result.value.activation.hotkey.key, "Space");
+    // 老配置里没有 followLaunch —— 空表，不能凭空冒出几条
+    CHECK(result.value.activation.followLaunch.empty());
+}
+
+// 跟随启动清单的容错：没 target 的行丢掉、超过上限截断。
+//
+// 这两条都不是假想：清单是用户手改 config.json 时最容易改坏的一块
+// （粘一长串路径、删掉 target 只留 name），而它的消费方是「启动时拉起
+// 一批进程」—— 不设上限的话，配置写坏一次就是一开机几十个窗口。
+void testFollowLaunchSanitized() {
+    std::string text = "{\"activation\": {\"followLaunch\": [";
+    for (int i = 0; i < 40; ++i) {
+        text += "{\"name\": \"n" + std::to_string(i) + "\", \"target\": \"t" +
+                std::to_string(i) + ".exe\"},";
+    }
+    text += "{\"name\": \"no-target\"}, 123]}}";
+
+    const auto result = ConfigStore::deserializeConfig(text);
+    CHECK(result.ok);
+    CHECK_EQ(static_cast<long long>(result.value.activation.followLaunch.size()),
+             static_cast<long long>(core::kMaximumFollowLaunchItems));
 }
 
 void testOutOfRangeValuesClamped() {
@@ -997,6 +1034,7 @@ int wmain() {
 
     testCorruptJsonIsRejected();
     testMissingFieldsUseDefaults();
+    testFollowLaunchSanitized();
     testOutOfRangeValuesClamped();
     testItemsWithGarbageEntriesSkipped();
     testEmptyDocumentGetsDefaultTab();
