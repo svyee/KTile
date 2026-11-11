@@ -1,4 +1,4 @@
-#include "app/plugin_controller.h"
+﻿#include "app/plugin_controller.h"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -10,6 +10,7 @@
 
 #include "base/text_convert.h"
 #include "core/plugin_binding.h"
+#include "infrastructure/i18n.h"
 #include "infrastructure/json/json_writer.h"
 #include "infrastructure/log/app_log.h"
 #include "platform/win32/plugin_http.h"
@@ -123,39 +124,41 @@ bool PluginController::installPlugin(const std::wstring& manifestPath,
     };
 
     if (pluginDirectory_.empty()) {
-        return fail("插件目录未初始化");
+        return fail(infrastructure::i18n::tr("error.pluginDirNotReady"));
     }
     const std::filesystem::path manifest(manifestPath);
     const std::filesystem::path source = manifest.parent_path();
     std::error_code ec;
     if (!std::filesystem::is_regular_file(manifest, ec) ||
         !std::filesystem::is_directory(source, ec)) {
-        return fail("选择的文件不是有效的 plugin.json");
+        return fail(infrastructure::i18n::tr("error.pluginManifestInvalid"));
     }
 
     std::string text;
     if (!readUtf8File(manifest, &text)) {
-        return fail("无法读取 plugin.json");
+        return fail(infrastructure::i18n::tr("error.pluginManifestUnreadable"));
     }
     core::PluginManifest parsed;
     std::string parseError;
     if (!infrastructure::parsePluginManifest(text, source.wstring(), &parsed,
                                              &parseError)) {
-        return fail("清单无效：" + parseError);
+        return fail(
+            infrastructure::i18n::formatU("error.pluginManifestParse",
+                                          {parseError}));
     }
     if (!isSafePluginId(parsed.id)) {
-        return fail("插件 id 只能包含字母、数字、- _ .");
+        return fail(infrastructure::i18n::tr("error.pluginIdCharset"));
     }
 
     const std::filesystem::path destination =
         std::filesystem::path(pluginDirectory_) / base::utf8ToWide(parsed.id);
     if (std::filesystem::exists(destination, ec)) {
-        return fail("同名插件已存在，请先删除旧版本");
+        return fail(infrastructure::i18n::tr("error.pluginIdExists"));
     }
 
     std::filesystem::create_directories(pluginDirectory_, ec);
     if (ec) {
-        return fail("无法创建插件目录");
+        return fail(infrastructure::i18n::tr("error.pluginDirCreate"));
     }
     std::filesystem::copy(source, destination,
                           std::filesystem::copy_options::recursive |
@@ -163,7 +166,7 @@ bool PluginController::installPlugin(const std::wstring& manifestPath,
                           ec);
     if (ec) {
         std::filesystem::remove_all(destination, ec);
-        return fail("复制插件文件失败");
+        return fail(infrastructure::i18n::tr("error.pluginCopyFailed"));
     }
 
     discoverPlugins();
@@ -184,7 +187,7 @@ bool PluginController::removePlugin(const std::string& id,
 
     const core::PluginManifest* manifest = store_.find(id);
     if (manifest == nullptr) {
-        return fail("找不到插件: " + id);
+        return fail(infrastructure::i18n::formatU("error.pluginNotFound", {id}));
     }
 
     // 只允许删 pluginsDirectory 的直接子目录：防止清单里写出的绝对路径
@@ -192,13 +195,15 @@ bool PluginController::removePlugin(const std::string& id,
     const std::filesystem::path directory(base::utf8ToWide(manifest->directory));
     const std::filesystem::path root(pluginDirectory_);
     if (directory.parent_path() != root) {
-        return fail("插件目录不在受管目录内，已拒绝删除");
+        return fail(infrastructure::i18n::tr("error.pluginDirOutside"));
     }
 
     std::error_code ec;
     std::filesystem::remove_all(directory, ec);
     if (ec) {
-        return fail("删除插件目录失败：" + ec.message());
+        return fail(
+            infrastructure::i18n::formatU("error.pluginDirRemove",
+                                          {ec.message()}));
     }
 
     discoverPlugins();
@@ -236,7 +241,7 @@ std::string PluginController::entryKey(
 core::PluginView PluginController::viewFor(const core::LaunchItem& item) const {
     core::PluginView view;
     if (!item.pluginId.has_value()) {
-        view.error = "插件磁贴缺少 pluginId";
+        view.error = infrastructure::i18n::tr("error.pluginTileNoId");
         return view;
     }
 
@@ -249,7 +254,8 @@ core::PluginView PluginController::viewFor(const core::LaunchItem& item) const {
         if (const core::PluginManifest* manifest = store_.find(*item.pluginId)) {
             view.manifest = std::make_shared<const core::PluginManifest>(*manifest);
         } else {
-            view.error = "找不到插件: " + *item.pluginId;
+            view.error = infrastructure::i18n::formatU(
+                "error.pluginNotFound", {*item.pluginId});
         }
         return view;
     }
@@ -262,7 +268,8 @@ core::PluginView PluginController::viewFor(const core::LaunchItem& item) const {
         view.error = view.snapshot->error;
     }
     if (!view.manifest) {
-        view.error = "找不到插件: " + *item.pluginId;
+        view.error = infrastructure::i18n::formatU("error.pluginNotFound",
+                                                   {*item.pluginId});
     }
     return view;
 }
@@ -468,13 +475,16 @@ void PluginController::executeJob(const Job& job) {
 
     std::string error;
     if (!raw.ok) {
-        error = raw.error.empty() ? "插件数据源执行失败" : raw.error;
+        error = raw.error.empty()
+                    ? infrastructure::i18n::tr("error.pluginDataProviderFailed")
+                    : raw.error;
         infrastructure::applog::warn("插件 " + manifest.id + " 刷新失败: " +
                                      error);
     } else {
         core::PluginValue value;
         if (!infrastructure::parsePluginJsonValue(raw.body, &value, &error)) {
-            error = "返回内容不是合法 JSON：" + error;
+            error = infrastructure::i18n::formatU("error.pluginJsonInvalid",
+                                                  {error});
             infrastructure::applog::warn("插件 " + manifest.id + " 数据解析失败: " +
                                          error);
         } else {

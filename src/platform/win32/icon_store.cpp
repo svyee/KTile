@@ -1,5 +1,7 @@
-// KTile - Win32 平台层：自定义图标仓库实现
+﻿// KTile - Win32 平台层：自定义图标仓库实现
 #include "platform/win32/icon_store.h"
+
+#include "infrastructure/i18n.h"
 
 #include <Shlwapi.h>
 #include <wincodec.h>
@@ -390,43 +392,44 @@ std::vector<std::uint32_t> premultiplyBgra(const ImagePixels& pixels) {
 
 std::wstring importCustomIcon(const std::wstring& sourcePath,
                               std::wstring* error) {
-    const auto fail = [error](const wchar_t* message) {
+    // 参数是 key 而不是文案：文案在语言文件里，这里只负责取词。
+    const auto fail = [error](const char* key) {
         if (error != nullptr) {
-            *error = message;
+            *error = infrastructure::i18n::trw(key);
         }
         return std::wstring();
     };
 
     if (sourcePath.empty()) {
-        return fail(L"没有选择图片文件。");
+        return fail("error.noImageSelected");
     }
     if (g_iconStoreRoot.empty()) {
-        return fail(L"数据目录尚未初始化，无法保存图标。");
+        return fail("error.noDataDirectory");
     }
     if (!isDecodableImageFile(sourcePath)) {
-        return fail(L"仅支持 ico / png / jpg / bmp 图片。");
+        return fail("error.imageFormatUnsupported");
     }
 
     const std::wstring directory = iconStoreDirectory();
     if (!createDirectoryIfMissing(directory)) {
-        return fail(L"无法创建 data\\res 目录（可能被写保护）。");
+        return fail("error.createResDirectory");
     }
 
     ComPtr<IWICImagingFactory> factory;
     if (!createWicFactory(&factory)) {
-        return fail(L"图像解码组件不可用（WIC 初始化失败）。");
+        return fail("error.wicUnavailable");
     }
 
     ComPtr<IWICBitmapDecoder> decoder;
     if (FAILED(factory->CreateDecoderFromFilename(
             sourcePath.c_str(), nullptr, GENERIC_READ,
             WICDecodeMetadataCacheOnDemand, decoder.put()))) {
-        return fail(L"无法打开该图片（格式不支持或文件被占用）。");
+        return fail("error.openImageFailed");
     }
 
     ComPtr<IWICBitmapFrameDecode> frame;
     if (!selectLargestFrame(decoder.get(), frame.put())) {
-        return fail(L"图片里没有可用的图像帧。");
+        return fail("error.imageNoFrame");
     }
 
     // ① 统一转成 32bppPBGRA：Fant 插值只支持 32bpp 输入，
@@ -436,14 +439,14 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
         FAILED(toBgra->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA,
                                   WICBitmapDitherTypeNone, nullptr, 0.0,
                                   WICBitmapPaletteTypeCustom))) {
-        return fail(L"图片像素格式无法转换。");
+        return fail("error.imagePixelFormat");
     }
 
     UINT sourceWidth = 0;
     UINT sourceHeight = 0;
     if (FAILED(toBgra->GetSize(&sourceWidth, &sourceHeight)) ||
         sourceWidth == 0 || sourceHeight == 0) {
-        return fail(L"无法读取图片尺寸。");
+        return fail("error.imageSizeUnreadable");
     }
 
     // ② 按原图比例缩放到「长边 = 128」——**不裁剪**。
@@ -475,7 +478,7 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
     if (FAILED(factory->CreateBitmapScaler(scaler.put())) ||
         FAILED(scaler->Initialize(toBgra.get(), targetWidth, targetHeight,
                                   WICBitmapInterpolationModeFant))) {
-        return fail(L"图片缩放失败。");
+        return fail("error.imageScaleFailed");
     }
 
     // ④ PNG 编码器按 BGRA 写入：PBGRA → BGRA 再交回去，
@@ -485,7 +488,7 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
         FAILED(toStraight->Initialize(scaler.get(), GUID_WICPixelFormat32bppBGRA,
                                       WICBitmapDitherTypeNone, nullptr, 0.0,
                                       WICBitmapPaletteTypeCustom))) {
-        return fail(L"图标编码准备失败。");
+        return fail("error.iconEncodePrepare");
     }
 
     // ⑤ 落到 data\res\<hash>.png
@@ -510,33 +513,33 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
     if (FAILED(factory->CreateStream(stream.put())) ||
         FAILED(stream->InitializeFromFilename(targetPath.c_str(),
                                               GENERIC_WRITE))) {
-        return fail(L"无法写入 data\\res（文件可能被占用）。");
+        return fail("error.writeResFailed");
     }
 
     ComPtr<IWICBitmapEncoder> encoder;
     if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr,
                                       encoder.put())) ||
         FAILED(encoder->Initialize(stream.get(), WICBitmapEncoderNoCache))) {
-        return fail(L"PNG 编码器初始化失败。");
+        return fail("error.pngEncoderInit");
     }
 
     ComPtr<IWICBitmapFrameEncode> frameEncode;
     ComPtr<IPropertyBag2> properties;
     if (FAILED(encoder->CreateNewFrame(frameEncode.put(), properties.put())) ||
         FAILED(frameEncode->Initialize(properties.get()))) {
-        return fail(L"无法创建 PNG 帧。");
+        return fail("error.pngFrameCreate");
     }
 
     if (FAILED(frameEncode->SetSize(targetWidth, targetHeight))) {
-        return fail(L"无法设置图标尺寸。");
+        return fail("error.iconSizeSet");
     }
     WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
     if (FAILED(frameEncode->SetPixelFormat(&pixelFormat))) {
-        return fail(L"PNG 像素格式不被支持。");
+        return fail("error.pngPixelFormat");
     }
     if (FAILED(frameEncode->WriteSource(toStraight.get(), nullptr)) ||
         FAILED(frameEncode->Commit()) || FAILED(encoder->Commit())) {
-        return fail(L"写入图标文件失败。");
+        return fail("error.writeIconFile");
     }
 
     if (error != nullptr) {

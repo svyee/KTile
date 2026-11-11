@@ -1,5 +1,7 @@
-// KTile - UI 层：单行文本输入对话框实现
+﻿// KTile - UI 层：单行文本输入对话框实现
 #include "ui/text_input_dialog.h"
+
+#include "infrastructure/i18n.h"
 
 #include <algorithm>
 #include <string>
@@ -145,14 +147,14 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             const int okX = cancelX - gap - buttonWidth;
 
             const HWND ok = CreateWindowExW(
-                0, L"BUTTON", L"确定",
+                0, L"BUTTON", infrastructure::i18n::trw("common.ok").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                 okX, buttonY, buttonWidth, buttonHeight, dialog,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDOK)),
                 instance, nullptr);
 
             const HWND cancel = CreateWindowExW(
-                0, L"BUTTON", L"取消",
+                0, L"BUTTON", infrastructure::i18n::trw("common.cancel").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 cancelX, buttonY, buttonWidth, buttonHeight, dialog,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDCANCEL)),
@@ -190,7 +192,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                     if (trimmed.empty()) {
                         // 空名字必须挡在这里：标签条上一片点不中的空白
                         // 比「多按一次确定」糟糕得多。
-                        MessageBoxW(dialog, L"名字不能为空。", L"KTile",
+                        MessageBoxW(dialog, infrastructure::i18n::trw("launcher.nameEmpty").c_str(), L"KTile",
                                     MB_OK | MB_ICONINFORMATION);
                         SetFocus(GetDlgItem(dialog, kEditId));
                         return 0;

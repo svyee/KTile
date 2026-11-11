@@ -1,9 +1,11 @@
-// KTile - UI 层：启动器窗口 —— 布局、命中测试、显示控制
+﻿// KTile - UI 层：启动器窗口 —— 布局、命中测试、显示控制
 //
 // 本文件与 launcher_window.cpp 共同构成 LauncherWindow 实现。
 // 拆分目的：渲染逻辑与窗口管理逻辑分离，便于各自维护。
 //
 #include "ui/launcher_window.h"
+
+#include "infrastructure/i18n.h"
 
 #include "base/text_convert.h"
 #include "core/item_operations.h"
@@ -505,7 +507,8 @@ void LauncherWindow::cycleActiveTab(const int delta) {
 }
 
 std::size_t LauncherWindow::createTab(const std::string& rawName) {
-    const std::size_t index = core::addTab(document_, rawName);
+    const std::size_t index = core::addTab(
+        document_, rawName, infrastructure::i18n::tr("tab.defaultNamePrefix"));
     invalidateTabLabelWidths();
     // 新建的页立刻切过去：用户刚建它就是为了往里面放东西，
     // 建完还停在旧页会让他以为「没建成」。
@@ -580,7 +583,7 @@ bool LauncherWindow::moveTab(const std::size_t from, const std::size_t to) {
 
 void LauncherWindow::promptCreateTab() {
     std::wstring name;
-    if (!showTextInputDialog(hwnd_, L"新建标签页", L"页面名称：",
+    if (!showTextInputDialog(hwnd_, infrastructure::i18n::trw("launcher.newTabTitle").c_str(), infrastructure::i18n::trw("launcher.pageNameLabel").c_str(),
                              std::wstring(), &name)) {
         return;  // 用户取消
     }
@@ -594,7 +597,7 @@ void LauncherWindow::promptRenameTab(const std::size_t tabIndex) {
     const std::wstring current =
         base::utf8ToWideLossy(document_.tabs[tabIndex].name);
     std::wstring name;
-    if (!showTextInputDialog(hwnd_, L"重命名标签页", L"页面名称：", current,
+    if (!showTextInputDialog(hwnd_, infrastructure::i18n::trw("launcher.renameTabTitle").c_str(), infrastructure::i18n::trw("launcher.pageNameLabel").c_str(), current,
                              &name)) {
         return;
     }
@@ -615,30 +618,32 @@ void LauncherWindow::showTabContextMenu(const std::size_t tabIndex,
 
     std::vector<platform::win32::PopupMenuEntry> entries;
     entries.push_back(platform::win32::PopupMenuEntry::action(
-        kTabMenuNew, L"新建标签页..."));
+        kTabMenuNew, infrastructure::i18n::trw("launcher.tabMenu.new").c_str()));
     entries.push_back(platform::win32::PopupMenuEntry::action(
-        kTabMenuRename, L"重命名此页..."));
+        kTabMenuRename, infrastructure::i18n::trw("launcher.tabMenu.rename").c_str()));
     entries.push_back(platform::win32::PopupMenuEntry::separator());
 
     // 只剩一页时不允许删：删除按钮灰掉并说明原因（比点了没反应清楚）
     const bool canRemove = count > 1;
-    std::wstring removeText = L"删除此页";
+    std::wstring removeText = infrastructure::i18n::trw("launcher.tabMenu.remove");
     if (canRemove) {
         const std::size_t itemCount = document_.tabs[tabIndex].items.size();
         if (itemCount > 0) {
-            removeText += L"（含 " + std::to_wstring(itemCount) + L" 个项目）";
+            removeText += infrastructure::i18n::formatW(
+                "launcher.tabMenu.removeWithCount",
+                {std::to_wstring(itemCount)});
         }
     } else {
-        removeText = L"删除此页（至少要保留一页）";
+        removeText = infrastructure::i18n::trw("launcher.tabMenu.removeLast").c_str();
     }
     entries.push_back(platform::win32::PopupMenuEntry::action(
         kTabMenuRemove, removeText, canRemove));
 
     entries.push_back(platform::win32::PopupMenuEntry::separator());
     entries.push_back(platform::win32::PopupMenuEntry::action(
-        kTabMenuMoveLeft, L"左移", tabIndex > 0));
+        kTabMenuMoveLeft, infrastructure::i18n::trw("launcher.tabMenu.moveLeft").c_str(), tabIndex > 0));
     entries.push_back(platform::win32::PopupMenuEntry::action(
-        kTabMenuMoveRight, L"右移", tabIndex + 1 < count));
+        kTabMenuMoveRight, infrastructure::i18n::trw("launcher.tabMenu.moveRight").c_str(), tabIndex + 1 < count));
 
     const UINT command = platform::win32::showPopupMenu(hwnd_, entries,
                                                        screenPoint);
@@ -657,13 +662,14 @@ void LauncherWindow::showTabContextMenu(const std::size_t tabIndex,
             // 页名与项目数，用户才知道自己在删什么。
             const std::wstring pageName =
                 base::utf8ToWideLossy(document_.tabs[tabIndex].name);
-            std::wstring message = L"确定删除标签页「" + pageName + L"」吗？";
+            std::wstring message = infrastructure::i18n::formatW(
+                "launcher.tabRemoveConfirm", {pageName});
             const std::size_t itemCount = document_.tabs[tabIndex].items.size();
             if (itemCount > 0) {
-                message += L"\n\n该页里的 " + std::to_wstring(itemCount) +
-                           L" 个项目也会一并删除。";
+                message += infrastructure::i18n::formatW(
+                    "launcher.tabRemoveItems", {std::to_wstring(itemCount)});
             } else {
-                message += L"\n\n该页是空的。";
+                message += infrastructure::i18n::trw("launcher.tabRemoveEmpty");
             }
             if (MessageBoxW(hwnd_, message.c_str(), L"KTile",
                             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) ==

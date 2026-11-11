@@ -1,6 +1,7 @@
-#include "platform/win32/system_actions.h"
+﻿#include "platform/win32/system_actions.h"
 
 #include "base/text_convert.h"
+#include "infrastructure/i18n.h"
 
 #include <shellapi.h>
 #include <winuser.h>
@@ -11,6 +12,14 @@ namespace ktile {
 namespace platform {
 namespace win32 {
 namespace {
+
+// 取词（宽字符拷贝）。
+//
+// 语言表里的值存在字典里，指针在下次切换语言前一直有效；但这边的
+// 结果会被 return 出去，所以立刻拷成 std::wstring，不留指针。
+std::wstring W(const char* key) {
+    return std::wstring(infrastructure::i18n::trw(key));
+}
 
 // ExitWindowsEx 的 EWX_SHUTDOWN / EWX_REBOOT 需要 SE_SHUTDOWN_NAME 特权。
 // 普通用户进程默认没有，必须先自己打开 token 把它启用 —— 不启用时
@@ -38,8 +47,11 @@ bool enableShutdownPrivilege() {
     return ok;
 }
 
-// 把系统错误码转成可读描述（与 item_launcher 的报告风格一致）
-std::wstring lastErrorText(const wchar_t* action) {
+// 把系统错误码转成「动作 + 详情」的可读描述（与 item_launcher 风格一致）。
+//
+// actionKey 是动作名（"action.lock" 这种），不带「失败」二字 —— 失败
+// 由 error.actionFailed 统一补，避免拼出「锁定失败失败（错误码 5）」。
+std::wstring lastErrorText(const char* actionKey) {
     const DWORD code = GetLastError();
     wchar_t* buffer = nullptr;
     std::wstring detail;
@@ -57,14 +69,13 @@ std::wstring lastErrorText(const wchar_t* action) {
             detail.pop_back();
         }
     }
-    std::wstring message(action);
+    const std::wstring action = infrastructure::i18n::trw(actionKey);
     if (!detail.empty()) {
-        message += L"：";
-        message += detail;
-    } else {
-        message += L"失败（错误码 " + std::to_wstring(code) + L"）。";
+        return infrastructure::i18n::formatW("error.actionDetail",
+                                             {action, detail});
     }
-    return message;
+    return infrastructure::i18n::formatW(
+        "error.actionFailed", {action, std::to_wstring(code)});
 }
 
 // 注入一个多媒体/音量虚拟键。 这些键的语义由系统与前台媒体程序解释，
@@ -80,7 +91,7 @@ LaunchResult sendVirtualKey(const WORD virtualKey, const int repeats = 1) {
         if (SendInput(2, inputs, sizeof(INPUT)) != 2) {
             LaunchResult result;
             result.ok = false;
-            result.error = L"按键注入失败。";
+            result.error = W("error.keyInjectFailed");
             return result;
         }
     }
@@ -97,7 +108,7 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
 
     if (id == L"lock") {
         if (LockWorkStation() == FALSE) {
-            result.error = lastErrorText(L"锁定失败");
+            result.error = lastErrorText("action.lock");
             return result;
         }
         result.ok = true;
@@ -108,7 +119,7 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
         if (!enableShutdownPrivilege()) {
             // 注销不需要特权也能成功 —— 权限启用失败只影响关机/重启，
             // 但统一先报出来，比「点了没反应」强。
-            result.error = L"未能取得关机特权（当前账户可能受限）。";
+            result.error = W("error.shutdownPrivilege");
             if (id == L"logoff") {
                 result.error.clear();
             } else {
@@ -126,7 +137,7 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
         if (ExitWindowsEx(flags, SHTDN_REASON_MAJOR_APPLICATION |
                                     SHTDN_REASON_MINOR_MAINTENANCE |
                                     SHTDN_REASON_FLAG_PLANNED) == FALSE) {
-            result.error = lastErrorText(L"系统操作失败");
+            result.error = lastErrorText("action.systemAction");
             return result;
         }
         result.ok = true;
@@ -164,7 +175,7 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
         wchar_t systemDirectory[MAX_PATH] = {};
         UINT length = GetSystemDirectoryW(systemDirectory, MAX_PATH);
         if (length == 0 || length >= MAX_PATH) {
-            result.error = L"无法定位系统目录。";
+            result.error = W("error.systemDirNotFound");
             return result;
         }
         const std::wstring hostsPath =
@@ -174,14 +185,15 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
             nullptr, L"open", L"notepad.exe", hostsPath.c_str(), nullptr,
             SW_SHOWNORMAL);
         if (reinterpret_cast<INT_PTR>(instance) <= 32) {
-            result.error = L"无法启动记事本。";
+            result.error = W("error.startNotepad");
             return result;
         }
         result.ok = true;
         return result;
     }
 
-    result.error = L"未知的内置命令：" + id;
+    result.error = infrastructure::i18n::formatW(
+        "error.unknownBuiltinCommand", {id});
     return result;
 }
 

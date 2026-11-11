@@ -1,7 +1,8 @@
-#include "ui/item_editor_dialog.h"
+﻿#include "ui/item_editor_dialog.h"
 
 #include "base/text_convert.h"
 #include "core/builtin_items.h"
+#include "infrastructure/i18n.h"
 #include "platform/win32/icon_loader.h"
 #include "platform/win32/icon_store.h"
 #include "platform/win32/unique_handles.h"
@@ -429,7 +430,7 @@ struct EditorDialogState {
     // 新建还是修改：只影响标题与确认按钮文案
     ItemEditorMode mode = ItemEditorMode::Edit;
     // 对话框标题（WM_CREATE 里建控件、出错弹框都要用，存一份免得两处硬编码）
-    const wchar_t* title = L"修改项目";
+    const wchar_t* title = infrastructure::i18n::trw("editor.edit").c_str();
 
     // ---- 预览状态 ----
     // 当前选中的自定义图标（存的是相对 data 的路径，空 = 用目标图标）
@@ -491,6 +492,31 @@ std::vector<std::wstring> splitArguments(const std::wstring& text) {
         lines.push_back(current);
     }
     return lines;
+}
+
+// ---------------------------------------------------------------- 取词与过滤器
+
+const wchar_t* T(const char* key) {
+    return infrastructure::i18n::trw(key).c_str();
+}
+
+// 合成 OPENFILENAMEW 的过滤器串：描述\0模式\0…\0。
+//
+// 不能写成一条字符串字面量：描述来自语言文件（运行时才知道），
+// 而分隔符是 NUL，只能 push_back。末尾多留一个 NUL 是 Win32 的约定
+// （双 NUL 结尾），少一个就会把后面的内存当过滤器继续读。
+std::wstring buildFilter(const char* descriptionKey,
+                         const wchar_t* patterns) {
+    std::wstring filter;
+    filter += infrastructure::i18n::trw(descriptionKey);
+    filter.push_back(L'\0');
+    filter += patterns;
+    filter.push_back(L'\0');
+    filter += infrastructure::i18n::trw("filter.allFiles");
+    filter.push_back(L'\0');
+    filter += L"*.*";
+    filter.push_back(L'\0');
+    return filter;
 }
 
 // ---------------------------------------------------------------- 文件夹/文件浏览
@@ -584,7 +610,7 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kPreviewX, kPreviewY, kPreviewWidth, kPreviewHeight,
                kPreviewId, font);
 
-    label(L"磁贴大小：", kPreviewX, kSizeLabelY, 68);
+    label(infrastructure::i18n::trw("editor.tileSize").c_str(), kPreviewX, kSizeLabelY, 68);
     HWND sizeCombo = addControl(dialog, L"COMBOBOX", L"",
                                 CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
                                 kSizeComboX, kSizeComboY, kSizeComboWidth,
@@ -592,30 +618,35 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     for (int index = 0; index < 4; ++index) {
         SendMessageW(sizeCombo, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(
-                         core::tileSizeName(core::tileSizeFromInt(index))));
+                         infrastructure::i18n::trw(
+                             core::tileSizeLabelKey(
+                                 core::tileSizeFromInt(index)))
+                             .c_str()));
     }
 
-    addControl(dialog, L"BUTTON", L"重置图标", WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.resetIcon").c_str(), WS_TABSTOP,
                kResetIconX, kResetIconY, kResetIconWidth, kResetIconHeight,
                kResetIconId, font);
 
     // ---- 左列：标题显示方式（每块磁贴单独控制）----
-    label(L"标题显示：", kPreviewX, kLabelModeLabelY, 68);
+    label(infrastructure::i18n::trw("editor.labelMode").c_str(), kPreviewX, kLabelModeLabelY, 68);
     HWND labelCombo = addControl(dialog, L"COMBOBOX", L"",
                                  CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
                                  kLabelModeComboX, kLabelModeComboY,
                                  kLabelModeComboWidth, 150, kLabelModeId, font);
     for (int index = 0; index < 3; ++index) {
         SendMessageW(labelCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(core::tileLabelModeName(
-                         core::tileLabelModeFromIndex(index))));
+                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw(
+                         core::tileLabelModeLabelKey(
+                             core::tileLabelModeFromIndex(index)))
+                                                  .c_str()));
     }
 
     // ---- 左列：图标大小（每块磁贴单独覆盖全局设置）----
-    addControl(dialog, L"BUTTON", L"按统一设置", BS_AUTOCHECKBOX | WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.followGlobal").c_str(), BS_AUTOCHECKBOX | WS_TABSTOP,
                kPreviewX, kIconScaleCheckY, kResetIconWidth, 20,
                kIconScaleCheckId, font);
-    addControl(dialog, L"STATIC", L"图标大小：", 0, kPreviewX,
+    addControl(dialog, L"STATIC", infrastructure::i18n::trw("editor.iconSize").c_str(), 0, kPreviewX,
                kIconScaleSliderY + 3, 68, kLabelHeight, 0, font);
     HWND scaleSlider = addControl(dialog, L"msctls_trackbar32", L"",
                                   WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
@@ -634,30 +665,30 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     // 色块（点击弹出内置色表）+「默认」清回全局默认。
     // SS_NOTIFY 是让 STATIC 把点击通知（STN_CLICKED）发给父窗口的开关，
     // 少了它色块只能看不能点。
-    label(L"背景色：", kPreviewX, kTileColorLabelY, 56);
+    label(infrastructure::i18n::trw("editor.backgroundColor").c_str(), kPreviewX, kTileColorLabelY, 56);
     addControl(dialog, L"STATIC", L"", SS_OWNERDRAW | SS_NOTIFY,
                kTileColorSwatchX, kTileColorSwatchY,
                kTileColorSwatchWidth, kTileColorSwatchHeight,
                kTileColorSwatchId, font);
-    addControl(dialog, L"BUTTON", L"默认", WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.defaultColor").c_str(), WS_TABSTOP,
                kTileColorClearX, kTileColorSwatchY, kTileColorClearWidth,
                kTileColorSwatchHeight, kTileColorClearId, font);
 
     // ---- 右列：名称 ----
-    label(L"名称：", kLabelX, 20, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.name").c_str(), kLabelX, 20, kLabelWidth);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
                kFieldX, 18, kFieldWidth, kFieldHeight, kNameId, font);
 
     // ---- 右列：目标 ----
-    label(L"目标：", kLabelX, 53, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.target").c_str(), kLabelX, 53, kLabelWidth);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
                kFieldX, 51, kFieldWidth, kFieldHeight, kTargetId, font);
-    addControl(dialog, L"BUTTON", L"浏览文件...", WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.browseFile").c_str(), WS_TABSTOP,
                kBrowseFileX, 80, kBrowseWidth, kBrowseHeight,
                kBrowseTargetFileId, font);
-    addControl(dialog, L"BUTTON", L"浏览目录...", WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.browseFolder").c_str(), WS_TABSTOP,
                kBrowseDirX, 80, kBrowseWidth, kBrowseHeight,
                kBrowseTargetDirectoryId, font);
     // 「系统项…」只在新建时出现：内置命令是没法从文件系统浏览出来的，
@@ -665,13 +696,13 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     // 位置在两个浏览按钮右边 —— 曾与「浏览文件」同坐标叠放，按钮被盖住
     // 找不到，教训：同排控件坐标必须互斥。
     if (state->mode == ItemEditorMode::Create) {
-        addControl(dialog, L"BUTTON", L"系统项...", WS_TABSTOP,
+        addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.systemItems").c_str(), WS_TABSTOP,
                    kBuiltinPickX, 80, kBrowseWidth, kBrowseHeight,
                    kBuiltinPickId, font);
     }
 
     // ---- 右列：参数（每行一个）----
-    label(L"参数：", kLabelX, 130, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.arguments").c_str(), kLabelX, 130, kLabelWidth);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL |
                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
@@ -679,20 +710,20 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kFieldX, 128, kFieldWidth, 78, kArgumentsId, font);
 
     // ---- 右列：工作目录 ----
-    label(L"工作目录：", kLabelX, 214, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.workDir").c_str(), kLabelX, 214, kLabelWidth);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
                kFieldX, 212, 210, kFieldHeight, kWorkingDirectoryId, font);
-    addControl(dialog, L"BUTTON", L"浏览...", WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("common.browse").c_str(), WS_TABSTOP,
                kFieldX + 220, 210, 86, kBrowseHeight,
                kBrowseWorkingDirectoryId, font);
     addControl(dialog, L"STATIC",
-               L"程序运行时使用的起始文件夹；通常留空即可。",
+               infrastructure::i18n::trw("editor.workDirHint").c_str(),
                0, kFieldX, 239, kFieldWidth, 18, kWorkingDirectoryHintId,
                font);
 
     // ---- 右列：所属页面 ----
-    label(L"所属页面：", kLabelX, 264, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.page").c_str(), kLabelX, 264, kLabelWidth);
     HWND tabCombo = addControl(dialog, L"COMBOBOX", L"",
                                CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
                                kFieldX, 262, 210, 160, kTabId, font);
@@ -702,23 +733,22 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     }
 
     // ---- 右列：管理员 ----
-    addControl(dialog, L"BUTTON", L"以管理员身份运行",
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.admin").c_str(),
                BS_AUTOCHECKBOX | WS_TABSTOP,
                kFieldX, 292, 220, 25, kAdministratorId, font);
 
     addControl(dialog, L"STATIC",
-               L"名称留空时自动使用目标名称；参数每行一个。\n"
-               L"文件夹磁贴可直接把路径粘贴到目标里。",
+               T("editor.hint"),
                0, kFieldX, 336, kFieldWidth, 34, kFooterHintId, font);
 
     // ---- 保存 / 取消 ----
     // 新建时说「添加」而不是「保存」：用户心里做的是「加一个」，
     // 按钮跟他想做的事对齐，比通用词更少一分犹豫。
     const bool creating = state->mode == ItemEditorMode::Create;
-    addControl(dialog, L"BUTTON", creating ? L"添加" : L"保存",
+    addControl(dialog, L"BUTTON", creating ? infrastructure::i18n::trw("common.add").c_str() : infrastructure::i18n::trw("common.save").c_str(),
                WS_TABSTOP | BS_DEFPUSHBUTTON,
                420, kClientHeight - 48, 80, 28, IDOK, font);
-    addControl(dialog, L"BUTTON", L"取消", WS_TABSTOP,
+    addControl(dialog, L"BUTTON", infrastructure::i18n::trw("common.cancel").c_str(), WS_TABSTOP,
                510, kClientHeight - 48, 80, 28, IDCANCEL, font);
 
     // 输入长度上限（与 core 层校验一致，防极端输入）
@@ -975,7 +1005,7 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         }
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, kPreviewPlaceholder);
-        DrawTextW(dc, L"插件预览不可用", -1, &tile,
+        DrawTextW(dc, infrastructure::i18n::trw("editor.pluginPreviewUnavailable").c_str(), -1, &tile,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
@@ -987,7 +1017,7 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         RECT placeholder = layout.icon;  // DrawTextW 需要可写矩形（会做 DT_CALCRECT 之类）
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, kPreviewPlaceholder);
-        DrawTextW(dc, L"无图标", -1, &placeholder,
+        DrawTextW(dc, infrastructure::i18n::trw("editor.noIcon").c_str(), -1, &placeholder,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
@@ -1092,11 +1122,10 @@ void syncIconScaleControls(HWND dialog, EditorDialogState* state) {
 
 
 void pickCustomIcon(HWND dialog, EditorDialogState* state) {
+    const std::wstring iconFilter = buildFilter(
+        "filter.iconImages", L"*.ico;*.png;*.jpg;*.jpeg;*.bmp;*.gif");
     const std::wstring selected = browseForFile(
-        dialog, L"选择图标图片",
-        L"图片文件\0*.ico;*.png;*.jpg;*.jpeg;*.bmp;*.gif\0"
-        L"所有文件\0*.*\0",
-        nullptr);
+        dialog, T("editor.chooseIconTitle"), iconFilter.c_str(), nullptr);
     if (selected.empty()) {
         return;  // 用户取消
     }
@@ -1105,8 +1134,10 @@ void pickCustomIcon(HWND dialog, EditorDialogState* state) {
     const std::wstring stored =
         platform::win32::importCustomIcon(selected, &error);
     if (stored.empty()) {
-        MessageBoxW(dialog, (L"无法使用该图片：\n" + error).c_str(),
-                    L"更换图标", MB_OK | MB_ICONWARNING);
+        MessageBoxW(dialog,
+                    (infrastructure::i18n::trw("editor.iconFailedPrefix") +
+                     error).c_str(),
+                    infrastructure::i18n::trw("editor.changeIconTitle").c_str(), MB_OK | MB_ICONWARNING);
         return;
     }
 
@@ -1175,8 +1206,8 @@ bool saveDialog(HWND dialog, EditorDialogState* state) {
     if (target.empty()) {
         MessageBoxW(dialog,
                     state->mode == ItemEditorMode::Create
-                        ? L"请先填写目标（程序、文件、文件夹或网址）。"
-                        : L"目标不能为空。",
+                        ? infrastructure::i18n::trw("editor.needTargetFirst").c_str()
+                        : infrastructure::i18n::trw("editor.targetEmpty").c_str(),
                     state->title, MB_OK | MB_ICONWARNING);
         SetFocus(GetDlgItem(dialog, kTargetId));
         return false;
@@ -1381,11 +1412,11 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     }
                     return 0;
                 case kBrowseTargetFileId: {
+                    const std::wstring programFilter = buildFilter(
+                        "filter.program", L"*.exe;*.com;*.bat;*.cmd;*.lnk");
                     const std::wstring selected = browseForFile(
-                        hwnd, L"选择文件或程序",
-                        L"程序\0*.exe;*.com;*.bat;*.cmd;*.lnk\0"
-                        L"所有文件\0*.*\0",
-                        nullptr);
+                        hwnd, T("editor.chooseProgramTitle"),
+                        programFilter.c_str(), nullptr);
                     if (!selected.empty()) {
                         SetDlgItemTextW(hwnd, kTargetId, selected.c_str());
                         // 浏览回来后必须主动刷预览：焦点此刻还在浏览按钮上，
@@ -1399,7 +1430,7 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                 }
                 case kBrowseTargetDirectoryId: {
                     const std::wstring selected = browseForFolder(
-                        hwnd, L"选择文件夹");
+                        hwnd, infrastructure::i18n::trw("editor.chooseFolderTitle").c_str());
                     if (!selected.empty()) {
                         SetDlgItemTextW(hwnd, kTargetId, selected.c_str());
                         refreshPreview(hwnd, state);  // 同上
@@ -1408,7 +1439,7 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                 }
                 case kBrowseWorkingDirectoryId: {
                     const std::wstring selected =
-                        browseForFolder(hwnd, L"选择工作目录");
+                        browseForFolder(hwnd, infrastructure::i18n::trw("editor.chooseWorkDirTitle").c_str());
                     if (!selected.empty()) {
                         SetDlgItemTextW(hwnd, kWorkingDirectoryId,
                                         selected.c_str());
@@ -1579,13 +1610,13 @@ std::optional<core::ItemType> inferItemType(const std::wstring& target) {
 
 const wchar_t* itemTypeDisplayName(const core::ItemType type) {
     switch (type) {
-        case core::ItemType::Application: return L"应用";
-        case core::ItemType::File:        return L"文件";
-        case core::ItemType::Folder:      return L"文件夹";
-        case core::ItemType::Url:         return L"网址";
-        case core::ItemType::Plugin:      return L"插件";
+        case core::ItemType::Application: return T("editor.type.application");
+        case core::ItemType::File:        return T("editor.type.file");
+        case core::ItemType::Folder:      return T("editor.type.folder");
+        case core::ItemType::Url:         return T("editor.type.url");
+        case core::ItemType::Plugin:      return T("editor.type.plugin");
     }
-    return L"应用";
+    return T("editor.type.application");
 }
 
 bool showItemEditorDialog(HWND owner,
@@ -1617,7 +1648,7 @@ bool showItemEditorDialog(HWND owner,
     state.globalIconScale = std::clamp(globalIconScale, 50, 100);
     state.globalTileColor = globalTileColor;
     state.mode = mode;
-    state.title = (mode == ItemEditorMode::Create) ? L"添加项目" : L"修改项目";
+    state.title = (mode == ItemEditorMode::Create) ? infrastructure::i18n::trw("editor.create").c_str() : infrastructure::i18n::trw("editor.edit").c_str();
 
     // 对话框居中于主窗口
     RECT ownerRect{};

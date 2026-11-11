@@ -1,4 +1,6 @@
-#include "ui/builtin_item_dialog.h"
+﻿#include "ui/builtin_item_dialog.h"
+
+#include "ui/builtin_labels.h"
 
 #include "core/builtin_items.h"
 #include "platform/win32/builtin_icon.h"
@@ -78,7 +80,7 @@ HWND addControl(const HWND parent, const wchar_t* className,
 // 算法：建控件和算窗口尺寸都从这里取，条目增减自动跟上。
 struct CellEntry {
     const core::BuiltinItem* item = nullptr;  // nullptr = 分组标题
-    const wchar_t* text = nullptr;            // 标题文字（item 为空时用）
+    std::wstring text;                        // 标题文字（item 为空时用）
     int x = 0;
     int y = 0;
 };
@@ -111,7 +113,9 @@ DialogLayout computeLayout() {
             }
             currentCategory = item.category;
             CellEntry header;
-            header.text = item.category;
+            // 分组标题显示译文；比较用的仍是规范名（currentCategory），
+            // 译文换了也不影响分组判定。
+            header.text = builtinCategoryDisplayName(item.category);
             header.x = kMargin + 2;
             header.y = y;
             layout.entries.push_back(header);
@@ -220,17 +224,18 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
 
             for (const CellEntry& entry : computeLayout().entries) {
                 if (entry.item == nullptr) {
-                    addControl(hwnd, L"STATIC", entry.text, 0, entry.x,
-                               entry.y, 200, 18, 0, state->font);
+                    addControl(hwnd, L"STATIC", entry.text.c_str(), 0,
+                               entry.x, entry.y, 200, 18, 0, state->font);
                     continue;
                 }
                 const core::BuiltinItem& item = *entry.item;
 
                 // owner-draw 按钮：WM_DRAWITEM 里画图标与名字
-                HWND button = addControl(hwnd, L"BUTTON", item.name,
-                                         BS_OWNERDRAW, entry.x, entry.y,
-                                         kCellWidth, kCellHeight, nextId,
-                                         state->font);
+                // 按钮文字 = 显示名，WM_DRAWITEM 直接读回它来画
+                HWND button = addControl(
+                    hwnd, L"BUTTON", builtinItemDisplayName(item).c_str(),
+                    BS_OWNERDRAW, entry.x, entry.y, kCellWidth, kCellHeight,
+                    nextId, state->font);
                 if (button == nullptr) {
                     ++nextId;
                     continue;
@@ -246,9 +251,6 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
                 // 的条目与进程同生命周期，没有悬垂问题。
                 SetPropW(button, L"KTileBuiltinId",
                          reinterpret_cast<HANDLE>(const_cast<wchar_t*>(item.id)));
-                SetPropW(button, L"KTileBuiltinName",
-                         reinterpret_cast<HANDLE>(
-                             const_cast<wchar_t*>(item.name)));
                 SetPropW(button, L"KTileBuiltinTarget",
                          reinterpret_cast<HANDLE>(
                              const_cast<wchar_t*>(item.target)));
@@ -328,16 +330,25 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             const wchar_t* id = reinterpret_cast<const wchar_t*>(
                 GetPropW(control, L"KTileBuiltinId"));
-            const wchar_t* name = reinterpret_cast<const wchar_t*>(
-                GetPropW(control, L"KTileBuiltinName"));
             const wchar_t* target = reinterpret_cast<const wchar_t*>(
                 GetPropW(control, L"KTileBuiltinTarget"));
-            if (id == nullptr || name == nullptr || target == nullptr) {
+            if (id == nullptr || target == nullptr) {
                 break;
             }
             if (state->out != nullptr) {
                 state->out->id = id;
-                state->out->name = name;
+                // 存「用户此刻看到的那个名字」：磁贴标签是纯数据，
+                // 存规范名的话切到英文后标签仍是中文。
+                const core::BuiltinItem* picked = nullptr;
+                for (const core::BuiltinItem& item : core::builtinItems()) {
+                    if (wcscmp(item.id, id) == 0) {
+                        picked = &item;
+                        break;
+                    }
+                }
+                state->out->name = picked != nullptr
+                                       ? builtinItemDisplayName(*picked)
+                                       : std::wstring(id);
                 state->out->target = target;
                 state->out->icon = core::builtinIconFileName(state->out->id);
             }
@@ -363,7 +374,6 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
                     DeleteObject(bitmap);
                 }
                 RemovePropW(child, L"KTileBuiltinId");
-                RemovePropW(child, L"KTileBuiltinName");
                 RemovePropW(child, L"KTileBuiltinTarget");
                 child = GetWindow(child, GW_HWNDNEXT);
             }
@@ -420,7 +430,8 @@ bool showBuiltinItemDialog(HWND owner, BuiltinPickResult* out) {
     AdjustWindowRectEx(&desired, style, FALSE, WS_EX_DLGMODALFRAME);
 
     HWND dialog = CreateWindowExW(
-        WS_EX_DLGMODALFRAME, kDialogClass, L"添加系统项目", style,
+        WS_EX_DLGMODALFRAME, kDialogClass,
+        infrastructure::i18n::trw("builtin.addTitle").c_str(), style,
         0, 0, desired.right - desired.left, desired.bottom - desired.top,
         owner, nullptr, instance, &state);
     if (dialog == nullptr) {

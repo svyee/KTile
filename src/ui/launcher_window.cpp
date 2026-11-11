@@ -1,4 +1,4 @@
-// KTile - UI 层：启动器主窗口实现
+﻿// KTile - UI 层：启动器主窗口实现
 #include "ui/launcher_window.h"
 
 #include "base/text_convert.h"
@@ -8,6 +8,7 @@
 #include "platform/win32/icon_store.h"
 #include "platform/win32/popup_menu.h"
 #include "platform/win32/svg_path.h"
+#include "infrastructure/i18n.h"
 #include "platform/win32/tray_icon.h"  // kApplicationIconResourceId（应用图标）
 
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
@@ -165,8 +166,10 @@ constexpr float kSearchBoxRadius = 3.0F;    // 轻微圆角，柔和但仍是直
 constexpr float kSearchBoxRightGap = 10.0F; // 搜索框右边缘与钉子左边缘的间距
 // 搜索框颜色改由 ThemeColors 派生（paintSearchBox / WM_CTLCOLOREDIT）。
 constexpr float kSearchBoxStrokeWidth = 1.0F;
-// 无查询时的占位提示
-constexpr const wchar_t* kSearchPlaceholder = L"搜索…";
+// 无查询时的占位提示。文案在语言文件里，所以只能运行时取。
+const wchar_t* searchPlaceholder() {
+    return infrastructure::i18n::trw("launcher.searchPlaceholder").c_str();
+}
 
 // 搜索框左端的应用图标（品牌位）。
 //
@@ -921,18 +924,18 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
 
                 std::vector<platform::win32::PopupMenuEntry> entries;
                 entries.push_back(platform::win32::PopupMenuEntry::action(
-                    kBlankMenuAddItemId, L"添加新项目..."));
+                    kBlankMenuAddItemId, infrastructure::i18n::trw("launcher.blank.add").c_str()));
                 if (!pluginEntries.empty()) {
                     entries.push_back(platform::win32::PopupMenuEntry::parent(
-                        L"添加插件磁贴", std::move(pluginEntries)));
+                        infrastructure::i18n::trw("launcher.blank.addPlugin").c_str(), std::move(pluginEntries)));
                 }
                 entries.push_back(platform::win32::PopupMenuEntry::action(
-                    kBlankMenuNewTabId, L"新建标签页..."));
+                    kBlankMenuNewTabId, infrastructure::i18n::trw("launcher.blank.newTab").c_str()));
                 entries.push_back(platform::win32::PopupMenuEntry::separator());
                 entries.push_back(platform::win32::PopupMenuEntry::action(
-                    kBlankMenuSettingsId, L"设置..."));
+                    kBlankMenuSettingsId, infrastructure::i18n::trw("launcher.blank.settings").c_str()));
                 entries.push_back(platform::win32::PopupMenuEntry::action(
-                    kBlankMenuAboutId, L"关于 KTile..."));
+                    kBlankMenuAboutId, infrastructure::i18n::trw("launcher.blank.about").c_str()));
 
                 const UINT command = platform::win32::showPopupMenu(
                     hwnd_, entries, screenPoint);
@@ -2780,9 +2783,10 @@ void LauncherWindow::paintSearchBox() {
         const float textRight = rect.right - 6.0F;
         if (textRight > textLeft) {
             textBrush_->SetColor(colorFromArgb(theme_.searchPlaceholder()));
+            const wchar_t* placeholder = searchPlaceholder();
             renderTarget_->DrawTextW(
-                kSearchPlaceholder,
-                static_cast<UINT32>(wcslen(kSearchPlaceholder)),
+                placeholder,
+                static_cast<UINT32>(wcslen(placeholder)),
                 searchFormat_.get(),
                 D2D1::RectF(textLeft, rect.top, textRight, rect.bottom),
                 textBrush_.get(),
@@ -3534,15 +3538,15 @@ void LauncherWindow::paintPluginPlaceholder(const core::PluginView& view,
     std::string label;
     std::uint32_t labelColor = withAlpha(theme_.text, 0x99);
     if (!view.manifest) {
-        label = "插件未找到";
+        label = infrastructure::i18n::tr("launcher.pluginNotFound");
         labelColor = withAlpha(theme_.text, 0x99);
     } else if (view.loading) {
-        label = "加载中...";
+        label = infrastructure::i18n::tr("launcher.loading");
     } else if (!view.error.empty()) {
-        label = "数据不可用";
+        label = infrastructure::i18n::tr("launcher.dataUnavailable");
         labelColor = withAlpha(theme_.text, 0x99);
     } else {
-        label = "暂无数据";
+        label = infrastructure::i18n::tr("launcher.noData");
     }
 
     drawPluginIcon(iconId, std::string(),
@@ -3648,13 +3652,13 @@ bool LauncherWindow::renderPluginPreview(HDC dc, const RECT& target,
         const float iconTop = (height - blockHeight) * 0.5F;
         const float iconLeft = (width - iconSize) * 0.5F;
 
-        std::string label = "暂无数据";
+        std::string label = infrastructure::i18n::tr("launcher.noData");
         if (!view.manifest) {
-            label = "插件未找到";
+            label = infrastructure::i18n::tr("launcher.pluginNotFound");
         } else if (view.loading) {
-            label = "加载中...";
+            label = infrastructure::i18n::tr("launcher.loading");
         } else if (!view.error.empty()) {
-            label = "数据不可用";
+            label = infrastructure::i18n::tr("launcher.dataUnavailable");
         }
 
         drawPluginIcon(iconId, std::string(),

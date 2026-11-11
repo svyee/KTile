@@ -1,5 +1,7 @@
-// KTile - UI 层：「关于」对话框实现
+﻿// KTile - UI 层：「关于」对话框实现
 #include "ui/about_dialog.h"
+
+#include "infrastructure/i18n.h"
 #include "ui/dialog_style.h"
 
 #include <Shellapi.h>
@@ -293,7 +295,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
 
             // 版本行先拼成具名 wstring：数组里只能存 c_str()，
             // 直接内联临时对象会在表达式结束时就析构（悬垂）。
-            const std::wstring versionLine = L"版本 " + state->version;
+            const std::wstring versionLine = infrastructure::i18n::trw("about.version").c_str() + state->version;
 
             struct LineSpec {
                 int id;
@@ -302,10 +304,10 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             };
             const LineSpec lines[] = {
                 {kVersionId, kVersionY, versionLine.c_str()},
-                {kDescId, kDescY, L"轻量 Windows 磁贴式应用启动器"},
+                {kDescId, kDescY, infrastructure::i18n::trw("about.description").c_str()},
                 {kCopyrightId, kCopyrightY, L"© 2026 svyee · 奇竹科技"},
-                {kEmailId, kEmailY, L"邮箱：svyee@163.com"},
-                {kWechatId, kWechatY, L"微信：svyeee"},
+                {kEmailId, kEmailY, infrastructure::i18n::trw("about.email").c_str()},
+                {kWechatId, kWechatY, infrastructure::i18n::trw("about.wechat").c_str()},
             };
 
             std::vector<HWND> children;
@@ -352,7 +354,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             children.push_back(github);
 
             const HWND panDownload = CreateWindowExW(
-                0, L"BUTTON", L"网盘下载",
+                0, L"BUTTON", infrastructure::i18n::trw("about.download").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 textX + buttonWidth + scaled(scale, kButtonGap), linkButtonY,
                 buttonWidth, buttonHeight, dialog,
@@ -361,7 +363,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             children.push_back(panDownload);
 
             const HWND ok = CreateWindowExW(
-                0, L"BUTTON", L"确定",
+                0, L"BUTTON", infrastructure::i18n::trw("common.ok").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 clientWidth - margin - buttonWidth,
                 clientHeight - margin - buttonHeight, buttonWidth,
@@ -484,7 +486,7 @@ void showAboutDialog(const HWND owner, const std::wstring& productName,
     AdjustWindowRectEx(&desired, style, FALSE, exStyle);
 
     const HWND dialog = CreateWindowExW(
-        exStyle, L"KTile.AboutDialog", (L"关于 " + productName).c_str(), style,
+        exStyle, L"KTile.AboutDialog", (infrastructure::i18n::trw("about.titlePrefix") + productName).c_str(), style,
         x, y, desired.right - desired.left, desired.bottom - desired.top,
         owner, nullptr, instance, &state);
 

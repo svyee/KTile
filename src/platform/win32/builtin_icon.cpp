@@ -1,6 +1,7 @@
-#include "platform/win32/builtin_icon.h"
+﻿#include "platform/win32/builtin_icon.h"
 
 #include "core/lucide_icons.h"
+#include "infrastructure/i18n.h"
 #include "platform/win32/icon_store.h"
 #include "platform/win32/svg_path.h"
 #include "platform/win32/unique_handles.h"
@@ -406,16 +407,17 @@ bool renderLucideIcon(const std::wstring& id,
 
 std::wstring ensureBuiltinIcon(const core::BuiltinItem& item,
                                std::wstring* error) {
-    const auto fail = [error](const wchar_t* message) {
+    // 参数是 key 而不是文案：文案在语言文件里，这里只负责取词。
+    const auto fail = [error](const char* key) {
         if (error != nullptr) {
-            *error = message;
+            *error = infrastructure::i18n::trw(key);
         }
         return std::wstring();
     };
 
     const std::wstring root = iconStoreRoot();
     if (root.empty()) {
-        return fail(L"数据目录尚未初始化，无法保存图标。");
+        return fail("error.noDataDirectory");
     }
     const std::wstring directory = iconStoreDirectory();
 
@@ -434,7 +436,7 @@ std::wstring ensureBuiltinIcon(const core::BuiltinItem& item,
     // 目录不存在时建一下（icon_store 里同名函数是私有的，
     // 这里保持同语义的本地副本）
     if (!createDirectoryIfMissing(directory)) {
-        return fail(L"无法创建 data\\res 目录（可能被写保护）。");
+        return fail("error.createResDirectory");
     }
 
     std::vector<std::uint32_t> pixels;
@@ -443,15 +445,15 @@ std::wstring ensureBuiltinIcon(const core::BuiltinItem& item,
     const bool shellIcon = item.iconSource != nullptr &&
                            renderShellIcon(item, &pixels);
     if (!shellIcon && !renderLucideIcon(item.id, &pixels)) {
-        return fail(L"内置图标渲染失败。");
+        return fail("error.builtinIconRender");
     }
 
     ComPtr<IWICImagingFactory> factory;
     if (!createWicFactory(factory.put())) {
-        return fail(L"图像组件不可用（WIC 初始化失败）。");
+        return fail("error.wicUnavailable");
     }
     if (!writePng(factory.get(), pixels, kIconSize, kIconSize, targetPath)) {
-        return fail(L"写入图标文件失败。");
+        return fail("error.writeIconFile");
     }
 
     if (error != nullptr) {

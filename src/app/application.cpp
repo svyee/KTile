@@ -1,10 +1,11 @@
-// KTile - 应用层：主控制器实现
+﻿// KTile - 应用层：主控制器实现
 #include "app/application.h"
 
 #include "base/text_convert.h"
 #include "core/builtin_items.h"
 #include "core/item_operations.h"
 #include "core/tab_operations.h"
+#include "infrastructure/i18n.h"
 #include "infrastructure/json/config_store.h"
 #include "infrastructure/log/app_log.h"
 #include "ui/launcher_window.h"
@@ -34,7 +35,24 @@
 
 namespace ktile {
 namespace app {
+
+// 主窗口标题：走语言文件，切语言后新创建的窗口/对话框即用新名字。
+// 定义放在匿名 namespace 之外 —— 否则会和头里的声明构成两个不同实体，
+// 在匿名 namespace 内部调用时出现重载歧义。
+const wchar_t* applicationWindowTitle() {
+    return infrastructure::i18n::trw("app.windowTitle").c_str();
+}
+
 namespace {
+
+// 取词助手：T = 宽字符（Win32 控件），U = UTF-8（数据/日志）。
+// 语言表里的值存在字典里，指针在下次切语言前一直有效。
+const wchar_t* T(const char* key) {
+    return infrastructure::i18n::trw(key).c_str();
+}
+const std::string& U(const char* key) {
+    return infrastructure::i18n::tr(key);
+}
 
 // 消息窗口类名（用于接收热键与托盘消息的隐藏窗口）
 constexpr const wchar_t* kMessageWindowClassName = L"KTile.MessageWindow";
@@ -437,13 +455,13 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         //
         // 走消息窗口那条通路（消息内容与热键完全相同），不是直接
         // ShowWindow —— 后者会让窗口「露」出来却仍以为自己隐藏着。
-        // 匹配标题必须用 kApplicationWindowTitle（主窗口真实标题），
+        // 匹配标题必须用 applicationWindowTitle()（主窗口真实标题），
         // 不能拿 kApplicationName（"KTile"）凑数 —— FindWindowW 是
         // 精确匹配。这条通道在热键被别的程序占用时是唯一的救命
         // 通道，必须真的能用。
         platform::win32::SingleInstance::activateExistingInstance(
             std::wstring(kMessageWindowClassName),
-            std::wstring(kApplicationWindowTitle), WM_HOTKEY,
+            std::wstring(applicationWindowTitle()), WM_HOTKEY,
             static_cast<WPARAM>(kToggleHotkeyId));
         return 0;
     }
@@ -451,7 +469,7 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     if (!initializeConfig()) {
         if (!debug.shot) {
             MessageBoxW(nullptr,
-                        L"初始化配置失败。",
+                        T("app.error.initConfig"),
                         kApplicationName,
                         MB_OK | MB_ICONERROR);
         }
@@ -471,7 +489,7 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     if (!initializeWindow()) {
         if (!debug.shot) {
             MessageBoxW(nullptr,
-                        L"创建窗口失败。",
+                        T("app.error.createWindow"),
                         kApplicationName,
                         MB_OK | MB_ICONERROR);
         }
@@ -631,7 +649,7 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     if (!initializeTray()) {
         // 托盘失败不致命，仅提示
         MessageBoxW(nullptr,
-                    L"创建托盘图标失败，程序仍会运行。",
+                    T("app.error.trayIcon"),
                     kApplicationName,
                     MB_OK | MB_ICONWARNING);
     }
@@ -671,16 +689,14 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         // 把「具体是哪个键、被谁占了、去哪儿改」说清楚。
         // 以前只说「可能被其他程序占用」，用户根本不知道该动哪里 ——
         // 本机 Alt+Space 常年被 CLaunch 占着，这条提示是唯一线索。
-        std::wstring message =
-            L"唤醒快捷键 " +
-            platform::win32::formatHotkey(config_.activation.hotkey) +
-            L" 注册失败。\n";
+        // 具体错误（被谁占了）放在正文里，处置建议在语言文件里：
+        // 两段分开，翻译时不用把动态内容塞进句子里。
+        std::wstring message = infrastructure::i18n::formatW(
+            "app.error.hotkeyRegister",
+            {platform::win32::formatHotkey(config_.activation.hotkey)});
         if (!hotkeyErrorText_.empty()) {
-            message += hotkeyErrorText_ + L"\n";
+            message = hotkeyErrorText_ + L"\n\n" + message;
         }
-        message +=
-            L"\n可以直接在「托盘菜单 → 设置 → 唤醒快捷键」里换一个，"
-            L"例如「双击 Ctrl」不占用任何组合键。";
         MessageBoxW(nullptr, message.c_str(),
                     kApplicationName,
                     MB_OK | MB_ICONWARNING);
@@ -751,6 +767,16 @@ void Application::initializeLogging(const bool automation) {
     summary += config_.activation.startWithWindows ? " | 开机自启: 开"
                                                    : " | 开机自启: 关";
     infrastructure::applog::info(summary);
+
+    // 语言单独一行：排查「界面怎么是英文/中文」时第一个要看的就是这里。
+    if (effectiveLanguage_.empty()) {
+        infrastructure::applog::warn(
+            "界面语言：lang 目录下没有可用语言文件，界面将显示 key");
+    } else {
+        infrastructure::applog::info(
+            "界面语言: " + effectiveLanguage_ + "（配置值 " +
+            config_.language + "）");
+    }
 }
 
 void Application::onMessageTimer(const UINT_PTR timerId) {
@@ -957,6 +983,14 @@ bool Application::initializeConfig() {
         store_.loadConfig(paths_.configFilePath());
     config_ = configResult.value;
 
+    // 界面语言：必须赶在「第一个窗口 / 第一段文案」之前定下来。
+    // 窗口标题、托盘菜单、示例磁贴的默认名字都是创建时取词的，
+    // 晚一步就会留下一半中文一半英文。
+    // 日志此时还没初始化（initializeLogging 在 run 里更晚），
+    // 所以这里只落「生效语言」这个状态，日志在 initializeLogging 里补。
+    effectiveLanguage_ = infrastructure::i18n::initialize(
+        paths_.langDirectory(), config_.language);
+
     // 加载磁贴数据
     const auto itemsResult =
         store_.loadItems(paths_.itemsFilePath());
@@ -987,7 +1021,7 @@ void Application::seedSampleDocument() {
     core::ItemsDocument document;
     auto& tab = document.ensureDefaultTab();
     tab.id = "default";
-    tab.name = "常用";
+    tab.name = U("app.firstRun.tabFavorites");
 
     // 示例磁贴：覆盖四种尺寸，用于验证混排效果
     struct SampleItem {
@@ -998,25 +1032,25 @@ void Application::seedSampleDocument() {
         core::TileSize size;
     };
     const SampleItem samples[] = {
-        {"1",  "记事本",   "C:\\Windows\\System32\\notepad.exe",
+        {"1",  U("app.firstRun.notepad").c_str(),   "C:\\Windows\\System32\\notepad.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"2",  "计算器",   "C:\\Windows\\System32\\calc.exe",
+        {"2",  U("app.firstRun.calculator").c_str(),   "C:\\Windows\\System32\\calc.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"3",  "浏览器",   "C:\\Program Files\\Internet Explorer\\iexplore.exe",
+        {"3",  U("app.firstRun.browser").c_str(),   "C:\\Program Files\\Internet Explorer\\iexplore.exe",
          core::ItemType::Application, core::TileSize::Large},
-        {"4",  "资源管理器", "C:\\Windows\\explorer.exe",
+        {"4",  U("app.firstRun.explorer").c_str(), "C:\\Windows\\explorer.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"5",  "命令提示符", "C:\\Windows\\System32\\cmd.exe",
+        {"5",  U("app.firstRun.cmd").c_str(), "C:\\Windows\\System32\\cmd.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"6",  "用户文档", "C:\\Users",
+        {"6",  U("app.firstRun.documents").c_str(), "C:\\Users",
          core::ItemType::Folder, core::TileSize::Tall},
-        {"7",  "控制面板", "C:\\Windows\\System32\\control.exe",
+        {"7",  U("app.firstRun.controlPanel").c_str(), "C:\\Windows\\System32\\control.exe",
          core::ItemType::Application, core::TileSize::Wide},
-        {"8",  "画图",     "C:\\Windows\\System32\\mspaint.exe",
+        {"8",  U("app.firstRun.paint").c_str(),     "C:\\Windows\\System32\\mspaint.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"9",  "截图工具", "C:\\Windows\\System32\\SnippingTool.exe",
+        {"9",  U("app.firstRun.snipping").c_str(), "C:\\Windows\\System32\\SnippingTool.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"10", "任务管理器", "C:\\Windows\\System32\\Taskmgr.exe",
+        {"10", U("app.firstRun.taskManager").c_str(), "C:\\Windows\\System32\\Taskmgr.exe",
          core::ItemType::Application, core::TileSize::Wide},
     };
 
@@ -1029,15 +1063,15 @@ void Application::seedSampleDocument() {
     // 第二个示例页：让「多标签页」这件事在首次运行时就被看见 ——
     // 只给一页的话，用户不会知道面板支持分标。
     // 注意 id 必须全文档唯一（core::addItem 的规则），所以这里另起一组。
-    const std::size_t toolsIndex = core::addTab(document, "工具");
+    const std::size_t toolsIndex = core::addTab(document, U("app.firstRun.tabTools"));
     const SampleItem toolSamples[] = {
-        {"t1", "注册表编辑器", "C:\\Windows\\regedit.exe",
+        {"t1", U("app.firstRun.regedit").c_str(), "C:\\Windows\\regedit.exe",
          core::ItemType::Application, core::TileSize::Small},
-        {"t2", "服务", "C:\\Windows\\System32\\services.msc",
+        {"t2", U("app.firstRun.services").c_str(), "C:\\Windows\\System32\\services.msc",
          core::ItemType::File, core::TileSize::Small},
-        {"t3", "系统信息", "C:\\Windows\\System32\\msinfo32.exe",
+        {"t3", U("app.firstRun.systemInfo").c_str(), "C:\\Windows\\System32\\msinfo32.exe",
          core::ItemType::Application, core::TileSize::Wide},
-        {"t4", "磁盘清理", "C:\\Windows\\System32\\cleanmgr.exe",
+        {"t4", U("app.firstRun.diskCleanup").c_str(), "C:\\Windows\\System32\\cleanmgr.exe",
          core::ItemType::Application, core::TileSize::Small},
     };
     for (const auto& sample : toolSamples) {
@@ -1297,7 +1331,7 @@ bool Application::initializeWindow() {
     launcherWindow_.reset(new ui::LauncherWindow());
 
     if (!launcherWindow_->create(instance_,
-                                 std::wstring(kApplicationWindowTitle),
+                                 std::wstring(applicationWindowTitle()),
                                  document_)) {
         return false;
     }
@@ -1859,7 +1893,7 @@ void Application::applyItemAdd(const HWND owner,
         tabNames.push_back(base::utf8ToWideLossy(tab.name));
     }
     if (tabNames.empty()) {
-        tabNames.push_back(L"常用");
+        tabNames.push_back(infrastructure::i18n::trw("app.firstRun.tabFavorites").c_str());
     }
 
     // ---- 复用「修改项目」那套对话框（新建模式）----
@@ -1907,7 +1941,7 @@ void Application::applyItemAdd(const HWND owner,
     if (!core::addItem(updated, tabIndex, std::move(item), &newIndex)) {
         // 对话框已经挡住了空目标，这里剩下的可能只有「id 撞车」这类
         // 几乎不可能的事故 —— 仍要如实报告，不能静默吞掉。
-        MessageBoxW(owner, L"添加失败：目标为空或标识冲突。", kApplicationName,
+        MessageBoxW(owner, T("app.error.addItem"), kApplicationName,
                     MB_OK | MB_ICONWARNING);
         return;
     }
@@ -2065,8 +2099,8 @@ void Application::addDroppedSources(
         // 什么都没加进去 —— 必须说清楚为什么，否则用户只会觉得
         // 「拖了半天没反应，这功能是坏的」。
         const wchar_t* reason = (duplicates > 0)
-                                    ? L"这些项目已经在面板里了。"
-                                    : L"无法添加：不是可识别的文件、文件夹或链接。";
+                                    ? T("app.info.alreadyAdded")
+                                    : T("app.error.dropUnknown");
         MessageBoxW(launcherWindow_->hwnd(), reason, kApplicationName,
                     MB_OK | MB_ICONINFORMATION);
         return;
@@ -2076,7 +2110,7 @@ void Application::addDroppedSources(
     // 规则）。这一步在 UI 层完成 —— 只有它知道网格几何，也只有它能顺带
     // 播让位动画、把排布立刻落盘。
     if (!launcherWindow_->insertNewItemsAt(std::move(fresh), dropPoint)) {
-        MessageBoxW(launcherWindow_->hwnd(), L"添加失败：目标为空或标识冲突。",
+        MessageBoxW(launcherWindow_->hwnd(), T("app.error.addItem"),
                     kApplicationName, MB_OK | MB_ICONWARNING);
         return;
     }
@@ -2240,13 +2274,13 @@ void Application::openSettings() {
             info.name = manifest.name;
             switch (manifest.source.kind) {
                 case core::PluginSourceKind::Builtin:
-                    info.sourceLabel = "本地";
+                    info.sourceLabel = U("plugin.source.local");
                     break;
                 case core::PluginSourceKind::Http:
-                    info.sourceLabel = "网络";
+                    info.sourceLabel = U("plugin.source.network");
                     break;
                 case core::PluginSourceKind::Command:
-                    info.sourceLabel = "命令行";
+                    info.sourceLabel = U("plugin.source.command");
                     break;
             }
             info.refreshSeconds = manifest.refreshSeconds;
@@ -2305,7 +2339,7 @@ void Application::openSettings() {
             platform::win32::openPathWithDefaultProgram(manifest);
         if (!result.ok) {
             MessageBoxW(launcherWindow_->hwnd(), result.error.c_str(),
-                        L"轮盘插件", MB_OK | MB_ICONERROR);
+                        T("app.radialPluginTitle"), MB_OK | MB_ICONERROR);
         }
     };
     radialPluginHooks.openFolder = [this](const std::string& id) {
@@ -2317,7 +2351,7 @@ void Application::openSettings() {
             platform::win32::openFolderInExplorer(directory);
         if (!result.ok) {
             MessageBoxW(launcherWindow_->hwnd(), result.error.c_str(),
-                        L"轮盘插件", MB_OK | MB_ICONERROR);
+                        T("app.radialPluginTitle"), MB_OK | MB_ICONERROR);
         }
     };
     radialPluginHooks.rootDirectory = [this]() {
@@ -2334,6 +2368,7 @@ void Application::openSettings() {
         config_.appearance.tabBarAtBottom,
         config_.appearance.windowPlacement,
         config_.appearance.themeName,
+        config_.language,
         config_.activation.startWithWindows,
         core::hotkeyPresetOf(config_.activation.hotkey),
         // 不透明度传「当前实际生效值」：磁贴背景若是「跟随皮肤」（-1），
@@ -2431,6 +2466,30 @@ void Application::openSettings() {
         configChanged = true;
     }
 
+    // ---- 界面语言 ----
+    //
+    // 放在 applySettings 的最前面：后面的提示框（自启失败、热键没生效…）
+    // 都是当场弹的，语言先切过去它们才能用新文案。
+    //
+    // 已经画好的窗口不会自己改字：设置对话框点确定就关了，下次打开是新
+    // 语言；托盘菜单每次右键都重建，立刻生效；面板上的空状态提示在下次
+    // 重绘时取词，所以这里补一次 refresh。窗口标题是 SetWindowTextW 设的，
+    // 也得补一次，否则任务栏上还留着旧语言的名字。
+    if (result.language.has_value()) {
+        config_.language = *result.language;
+        const std::string effective =
+            infrastructure::i18n::resolveLanguage(*result.language);
+        if (infrastructure::i18n::setLanguage(effective)) {
+            effectiveLanguage_ = infrastructure::i18n::languageCode();
+        }
+        configChanged = true;
+        updateTrayTooltip();
+        if (launcherWindow_ && launcherWindow_->hwnd() != nullptr) {
+            SetWindowTextW(launcherWindow_->hwnd(), applicationWindowTitle());
+        }
+        launcherWindow_->refresh();
+    }
+
     // ---- 皮肤 ----
     if (result.themeName.has_value()) {
         config_.appearance.themeName = *result.themeName;
@@ -2454,9 +2513,9 @@ void Application::openSettings() {
                     base::wideToUtf8(stored);
             } else {
                 const std::wstring wideMessage =
-                    error.empty() ? L"未知原因" : error;
+                    error.empty() ? T("app.unknownReason") : error;
                 MessageBoxW(launcherWindow_->hwnd(),
-                            (L"导入背景图失败：\n" + wideMessage).c_str(),
+                            (T("app.error.importBackground") + wideMessage).c_str(),
                             kApplicationName,
                             MB_OK | MB_ICONWARNING);
                 // 导入失败不清旧图：保持现状，用户可重试
@@ -2477,7 +2536,7 @@ void Application::openSettings() {
             const std::wstring wideMessage =
                 base::utf8ToWide(status.error().format());
             MessageBoxW(launcherWindow_->hwnd(),
-                        (L"设置开机自启失败：\n" + wideMessage).c_str(),
+                        (T("app.error.startup") + wideMessage).c_str(),
                         kApplicationName,
                         MB_OK | MB_ICONWARNING);
         }
@@ -2501,11 +2560,10 @@ void Application::openSettings() {
             base::wideToUtf8Lossy(
                 platform::win32::formatHotkey(config_.activation.hotkey)));
         if (!initializeHotkey()) {
-            const std::wstring message =
-                L"唤醒快捷键 " +
-                platform::win32::formatHotkey(config_.activation.hotkey) +
-                L" 没能生效。\n\n" + hotkeyErrorText_ +
-                L"\n\n已保留原来的唤醒方式。";
+            const std::wstring message = infrastructure::i18n::formatW(
+                "app.error.hotkeyApply",
+                {platform::win32::formatHotkey(config_.activation.hotkey),
+                 hotkeyErrorText_});
             MessageBoxW(launcherWindow_->hwnd(), message.c_str(),
                         kApplicationName, MB_OK | MB_ICONWARNING);
             // 装不上就把旧的装回去，避免「一个都不能用」——
@@ -2602,12 +2660,8 @@ void Application::openSettings() {
     // 届时在 restartPending 里累积，最后统一提示，而不是每项弹一次框。
     if (restartPending) {
         MessageBoxW(launcherWindow_->hwnd(),
-                    L"部分设置需要重启 KTile 后生效。\n\n"
-                    L"重启后：\n"
-                    L"  · 全局热键按新设置注册\n"
-                    L"  · 托盘菜单按新设置重建\n\n"
-                    L"当前设置已保存，可继续使用。",
-                    L"需要重启",
+                    T("app.restart.message"),
+                    T("app.restart.title"),
                     MB_OK | MB_ICONINFORMATION);
     }
 }
@@ -2656,7 +2710,7 @@ bool Application::initializeTray() {
 
     // 提示文字必须跟随配置：选 Win 键 / 双击 Ctrl 时不能再写死 Alt+Space。
     const std::wstring tooltip = L"KTile - " +
-        platform::win32::formatHotkey(config_.activation.hotkey) + L" 打开";
+        platform::win32::formatHotkey(config_.activation.hotkey) + infrastructure::i18n::trw("app.tray.tooltipSuffix");
 
     const auto status = tray_.create(
         messageWindow_,
@@ -2678,7 +2732,7 @@ bool Application::initializeTray() {
 void Application::updateTrayTooltip() {
     // 与启动时同一套文案：唤醒方式变化后立即刷新，避免提示与实际不符。
     const std::wstring tooltip = L"KTile - " +
-        platform::win32::formatHotkey(config_.activation.hotkey) + L" 打开";
+        platform::win32::formatHotkey(config_.activation.hotkey) + infrastructure::i18n::trw("app.tray.tooltipSuffix");
     tray_.setTooltip(tooltip);
 }
 
@@ -2782,7 +2836,7 @@ void Application::openAbout() {
     // owner 给主窗口：About 对话框是它的 owned 弹窗，点对话框内部
     // 不会被「点外面收起」误判（belongsToTarget 走 owner 链）。
     HWND owner = launcherWindow_ ? launcherWindow_->hwnd() : nullptr;
-    ui::showAboutDialog(owner, std::wstring(kApplicationWindowTitle),
+    ui::showAboutDialog(owner, std::wstring(applicationWindowTitle()),
                         std::wstring(kApplicationVersion));
 }
 
@@ -2792,21 +2846,21 @@ void Application::showTrayMenu() {
     platform::win32::TrayMenuItem showItem;
     showItem.commandId = kTrayMenuShowHide;
     showItem.text = (launcherWindow_ && launcherWindow_->isVisible())
-        ? L"隐藏启动器" : L"显示启动器";
+        ? T("app.tray.hideLauncher") : T("app.tray.showLauncher");
     menuItems.push_back(showItem);
 
     menuItems.push_back(platform::win32::TrayMenuItem::separator());
 
     platform::win32::TrayMenuItem settingsItem;
     settingsItem.commandId = kTrayMenuSettings;
-    settingsItem.text = L"设置...";
+    settingsItem.text = T("app.tray.settings");
     menuItems.push_back(settingsItem);
 
     menuItems.push_back(platform::win32::TrayMenuItem::separator());
 
     platform::win32::TrayMenuItem startupItem;
     startupItem.commandId = kTrayMenuStartup;
-    startupItem.text = L"开机自动启动";
+    startupItem.text = T("app.tray.startup");
     startupItem.isChecked = platform::win32::StartupRegistration::isEnabled(
         std::wstring(kStartupRegistryValueName));
     menuItems.push_back(startupItem);
@@ -2815,14 +2869,14 @@ void Application::showTrayMenu() {
 
     platform::win32::TrayMenuItem aboutItem;
     aboutItem.commandId = kTrayMenuAbout;
-    aboutItem.text = L"关于 KTile...";
+    aboutItem.text = T("app.tray.about");
     menuItems.push_back(aboutItem);
 
     menuItems.push_back(platform::win32::TrayMenuItem::separator());
 
     platform::win32::TrayMenuItem exitItem;
     exitItem.commandId = kTrayMenuExit;
-    exitItem.text = L"退出";
+    exitItem.text = T("app.tray.exit");
     menuItems.push_back(exitItem);
 
     POINT cursor{};
@@ -2861,7 +2915,7 @@ void Application::handleTrayCommand(const UINT commandId) {
                 const std::string message = status.error().format();
                 const std::wstring wideMessage = base::utf8ToWide(message);
                 MessageBoxW(nullptr,
-                            (L"设置开机自启失败：\n" + wideMessage).c_str(),
+                            (T("app.error.startup") + wideMessage).c_str(),
                             kApplicationName,
                             MB_OK | MB_ICONWARNING);
             }

@@ -40,6 +40,8 @@ public:
     std::wstring configFilePath() const;
     std::wstring iconsDirectory() const;
     std::wstring logFilePath() const;
+    // 语言文件目录（exe 同级 lang/，每份一个 <code>.json）
+    std::wstring langDirectory() const;
 
     // 确保目录存在（递归创建）。成功返回 true。
     bool ensureDirectoryExists(const std::wstring& path) const;

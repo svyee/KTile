@@ -1,7 +1,8 @@
-// KTile - 轮盘插件（slugin）清单发现与解析实现
+﻿// KTile - 轮盘插件（slugin）清单发现与解析实现
 #include "infrastructure/radial_plugin_store.h"
 
 #include "base/text_convert.h"
+#include "infrastructure/i18n.h"
 #include "infrastructure/json/json_parser.h"
 #include "infrastructure/json/radial_store.h"  // parseRadialMenuJson
 
@@ -58,13 +59,13 @@ void loadOne(const fs::path& directory, const std::string& id,
     const fs::path manifest = directory / L"radial.json";
     std::string text;
     if (!readTextFile(manifest, text)) {
-        plugin->error = "radial.json 读不出来";
+        plugin->error = i18n::tr("error.radialManifestRead");
         return;
     }
 
     const auto parsed = json::parseJson(text);
     if (!parsed.ok || !parsed.root.isObject()) {
-        plugin->error = "radial.json 不是合法的 JSON 对象";
+        plugin->error = i18n::tr("error.radialManifestNotObject");
         return;
     }
     const json::JsonValue& root = parsed.root;
@@ -74,8 +75,8 @@ void loadOne(const fs::path& directory, const std::string& id,
     const std::uint32_t schema = root.find("schemaVersion").asUint32(
         core::kRadialPluginSchemaVersion);
     if (schema > core::kRadialPluginSchemaVersion) {
-        plugin->error = "插件版本（schemaVersion " + std::to_string(schema) +
-                        "）比本程序新，请升级 KTile";
+        plugin->error = i18n::formatU("error.radialManifestTooNew",
+                                      {std::to_string(schema)});
         return;
     }
 
@@ -108,9 +109,9 @@ void loadOne(const fs::path& directory, const std::string& id,
     plugin->valid = core::validateRadialPlugin(*plugin);
     if (!plugin->valid && plugin->error.empty()) {
         if (plugin->processes.empty()) {
-            plugin->error = "processes 为空，无法匹配任何应用";
+            plugin->error = i18n::tr("error.radialProcessesEmpty");
         } else {
-            plugin->error = "menu 的扇区数或动作数量不合法";
+            plugin->error = i18n::tr("error.radialMenuInvalid");
         }
     }
 }

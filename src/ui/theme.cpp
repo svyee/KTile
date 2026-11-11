@@ -1,7 +1,8 @@
-// KTile - 皮肤（配色主题）实现
+﻿// KTile - 皮肤（配色主题）实现
 #include "ui/theme.h"
 
 #include "base/text_convert.h"
+#include "infrastructure/i18n.h"
 #include "infrastructure/json/json_parser.h"
 #include "infrastructure/json/json_writer.h"
 
@@ -364,6 +365,41 @@ bool loadThemeByName(const std::wstring& displayName, ThemeColors* out) {
     return false;
 }
 
+// ---------------------------------------------------------------- 皮肤显示名
+
+// 规范名 → 语言 key。表里没有的名字（用户自定义皮肤）原样显示。
+struct ThemeNameKey {
+    const wchar_t* canonical;
+    const char* key;
+};
+
+const ThemeNameKey kThemeNameKeys[] = {
+    {L"经典深空", "theme.classicDeep"},
+    {L"石墨青", "theme.graphiteTeal"},
+    {L"琥珀暮色", "theme.amberDusk"},
+    {L"幽夜紫", "theme.nightPurple"},
+    {L"晨光", "theme.morningLight"},
+};
+
+std::wstring themeDisplayName(const std::wstring& canonicalName) {
+    for (const auto& entry : kThemeNameKeys) {
+        if (canonicalName == entry.canonical) {
+            return infrastructure::i18n::trw(entry.key);
+        }
+    }
+    return canonicalName;
+}
+
+std::wstring canonicalThemeName(const std::wstring& displayName) {
+    for (const auto& entry : kThemeNameKeys) {
+        if (displayName == entry.canonical ||
+            displayName == infrastructure::i18n::trw(entry.key)) {
+            return entry.canonical;
+        }
+    }
+    return displayName;
+}
+
 // ================================================================ 背景图
 
 std::wstring importBackgroundImage(const std::wstring& sourcePath,
@@ -371,7 +407,7 @@ std::wstring importBackgroundImage(const std::wstring& sourcePath,
     const std::wstring dir = backgroundsDirectory();
     if (dir.empty() || !ensureDirectory(dir)) {
         if (error != nullptr) {
-            *error = L"无法创建背景图目录";
+            *error = infrastructure::i18n::trw("theme.error.backgroundDir").c_str();
         }
         return std::wstring();
     }
@@ -407,7 +443,7 @@ std::wstring importBackgroundImage(const std::wstring& sourcePath,
     }
     if (CopyFileW(sourcePath.c_str(), target.c_str(), TRUE) == FALSE) {
         if (error != nullptr) {
-            *error = L"复制背景图失败（文件可能被占用）";
+            *error = infrastructure::i18n::trw("theme.error.copyBackground").c_str();
         }
         return std::wstring();
     }

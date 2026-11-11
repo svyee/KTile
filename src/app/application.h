@@ -1,4 +1,4 @@
-// KTile - 应用层：主控制器
+﻿// KTile - 应用层：主控制器
 //
 // 职责：把各层组装成可运行的程序，管理生命周期。
 // 不包含具体业务细节（那些在 core / ui 里）。
@@ -36,7 +36,10 @@ namespace app {
 
 // 应用标识
 inline constexpr const wchar_t* kApplicationName = L"KTile";
-inline constexpr const wchar_t* kApplicationWindowTitle = L"KTile 磁贴快启";
+
+// 主窗口标题（任务栏 / Alt-Tab / 关于对话框标题栏显示的名字）。
+// 语言可切换，所以是函数而不是常量 —— 常量会固化成编译期的那一种语言。
+const wchar_t* applicationWindowTitle();
 
 // 版本号。
 //   0.9.0 = 功能开发完成、待打包与 Win7 真机验证（M6）；
@@ -306,6 +309,11 @@ private:
 
     core::ApplicationConfig config_;
     core::ItemsDocument document_;
+
+    // 本次启动实际生效的界面语言（"zh-Hans" / "en"）。
+    // config_.language 可能是 "auto"，这里是解析后的结果 —— 日志要记的是
+    // 真正用了哪个语言，不是配置值。
+    std::string effectiveLanguage_;
 
     // ---- 轮盘菜单 ----
     core::RadialConfig radialConfig_;

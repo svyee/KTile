@@ -1,4 +1,4 @@
-// KTile - 核心层：标签页操作实现
+﻿// KTile - 核心层：标签页操作实现
 #include "core/tab_operations.h"
 
 #include "core/text_normalize.h"
@@ -32,9 +32,12 @@ std::string makeUniqueTabId(const ItemsDocument& document) {
 //
 // 之所以不直接用「页数 + 1」：删掉中间某页后再新建会出现重名，
 // 用户看着两个「页面 3」会分不清哪个是新的。
-std::string automaticTabName(const ItemsDocument& document) {
+std::string automaticTabName(const ItemsDocument& document,
+                             const std::string& prefix) {
     for (std::size_t suffix = document.tabs.size() + 1;; ++suffix) {
-        const std::string candidate = "页面 " + std::to_string(suffix);
+        // 前后语言都是「前缀 + 空格 + 序号」，空格统一在这里补，
+        // 语言文件里就不必留一个容易被删掉的尾随空格。
+        const std::string candidate = prefix + " " + std::to_string(suffix);
         const bool taken = std::any_of(
             document.tabs.begin(), document.tabs.end(),
             [&candidate](const Tab& tab) { return tab.name == candidate; });
@@ -54,12 +57,14 @@ bool isUsableTabName(const std::string& rawName) {
     return !normalizeTabName(rawName).empty();
 }
 
-std::size_t addTab(ItemsDocument& document, const std::string& rawName) {
+std::size_t addTab(ItemsDocument& document, const std::string& rawName,
+                   const std::string& namePrefix) {
     Tab tab;
     tab.id = makeUniqueTabId(document);
 
     const std::string normalized = normalizeTabName(rawName);
-    tab.name = normalized.empty() ? automaticTabName(document) : normalized;
+    tab.name =
+        normalized.empty() ? automaticTabName(document, namePrefix) : normalized;
 
     document.tabs.push_back(std::move(tab));
     return document.tabs.size() - 1;

@@ -1,5 +1,7 @@
-// KTile - Win32 平台层：托盘图标实现
+﻿// KTile - Win32 平台层：托盘图标实现
 #include "platform/win32/tray_icon.h"
+
+#include "infrastructure/i18n.h"
 
 namespace ktile {
 namespace platform {
@@ -54,7 +56,8 @@ Win32Status TrayIcon::create(HWND window,
 
     if (window == nullptr) {
         return base::makeUnexpected(
-            Win32Error(ERROR_INVALID_WINDOW_HANDLE, "托盘图标需要有效窗口"));
+            Win32Error(ERROR_INVALID_WINDOW_HANDLE,
+                       infrastructure::i18n::tr("error.trayNoWindow")));
     }
 
     window_ = window;
@@ -65,7 +68,8 @@ Win32Status TrayIcon::create(HWND window,
     NOTIFYICONDATAW data = makeIconData();
     if (Shell_NotifyIconW(NIM_ADD, &data) == FALSE) {
         window_ = nullptr;
-        return base::makeUnexpected(lastError("托盘图标添加失败"));
+        return base::makeUnexpected(
+            lastError(infrastructure::i18n::tr("error.trayAdd")));
     }
 
     // 设置版本以启用较新的交互行为（如气泡通知）
@@ -84,7 +88,8 @@ Win32Status TrayIcon::setTooltip(const std::wstring& tooltip) {
     NOTIFYICONDATAW data = makeIconData();
     data.uFlags = NIF_TIP;
     if (Shell_NotifyIconW(NIM_MODIFY, &data) == FALSE) {
-        return base::makeUnexpected(lastError("托盘提示更新失败"));
+        return base::makeUnexpected(
+            lastError(infrastructure::i18n::tr("error.trayTooltip")));
     }
     return {};
 }
@@ -97,7 +102,8 @@ Win32Status TrayIcon::setIcon(HICON icon) {
     NOTIFYICONDATAW data = makeIconData();
     data.uFlags = NIF_ICON;
     if (Shell_NotifyIconW(NIM_MODIFY, &data) == FALSE) {
-        return base::makeUnexpected(lastError("托盘图标更新失败"));
+        return base::makeUnexpected(
+            lastError(infrastructure::i18n::tr("error.trayUpdate")));
     }
     return {};
 }

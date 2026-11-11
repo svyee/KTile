@@ -34,6 +34,9 @@ $PluginSrc  = Join-Path $Root "plugin"
 # 轮盘插件同理，但目录名必须是 slugin —— plugin/ 已经被磁贴插件占用，
 # 两者格式与加载器都不同，混在一起会互相误读。
 $SluginSrc  = Join-Path $Root "slugin"
+# 语言文件同理：lang\<code>.json，exe 同级。加一门语言 = 加一个文件，
+# 不改代码、不重新编译（加载器扫描目录，见 infrastructure/i18n.cpp）。
+$LangSrc    = Join-Path $Root "lang"
 
 # ---------------------------------------------------------------- 工具链
 # VS2022 BuildTools + MSVC 14.44 + Windows SDK 10.0.26100.0
@@ -178,6 +181,9 @@ function Get-PersistenceSources {
         (Join-Path $SrcDir "core\radial_plugin.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_writer.cpp")
         (Join-Path $SrcDir "infrastructure\json\json_parser.cpp")
+        # radial_store / radial_plugin_store 的错误文案与默认菜单名走 i18n，
+        # 所以持久化测试也要带上 i18n.cpp（它只依赖 json_parser + text_convert）。
+        (Join-Path $SrcDir "infrastructure\i18n.cpp")
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
         (Join-Path $SrcDir "infrastructure\json\radial_store.cpp")
         (Join-Path $SrcDir "infrastructure\filesystem\portable_paths.cpp")
@@ -209,6 +215,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "infrastructure\json\config_store.cpp")
         (Join-Path $SrcDir "infrastructure\json\radial_store.cpp")
         (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
+        (Join-Path $SrcDir "infrastructure\i18n.cpp")
         (Join-Path $SrcDir "infrastructure\plugin\plugin_store.cpp")
         (Join-Path $SrcDir "infrastructure\radial_plugin_store.cpp")
         # platform/win32
@@ -288,9 +295,15 @@ if ($Tests) {
             $extra = $extra | Select-Object -Unique
         }
 
-        # 图标仓库测试（WIC 解码/裁剪/编码落盘）需要带上 icon_store.cpp
+        # 图标仓库测试（WIC 解码/裁剪/编码落盘）需要带上 icon_store.cpp。
+        # 它的错误文案走 i18n，所以要一并带上 i18n.cpp 及其依赖。
         if ($content -match "icon_store\.h") {
-            $extra = @($extra) + (Join-Path $SrcDir "platform\win32\icon_store.cpp")
+            $extra = @($extra) + @(
+                (Join-Path $SrcDir "platform\win32\icon_store.cpp"),
+                (Join-Path $SrcDir "infrastructure\i18n.cpp"),
+                (Join-Path $SrcDir "infrastructure\json\json_parser.cpp"),
+                (Join-Path $SrcDir "base\text_convert.cpp")
+            )
             $extra = $extra | Select-Object -Unique
         }
 
@@ -303,6 +316,16 @@ if ($Tests) {
         # 运行日志测试需要带上 app_log.cpp
         if ($content -match "app_log\.h") {
             $extra = @($extra) + (Join-Path $SrcDir "infrastructure\log\app_log.cpp")
+            $extra = $extra | Select-Object -Unique
+        }
+
+        # 多语言测试需要 i18n.cpp（依赖 JSON 解析与编码转换）
+        if ($content -match "i18n\.h") {
+            $extra = @($extra) + @(
+                (Join-Path $SrcDir "infrastructure\i18n.cpp"),
+                (Join-Path $SrcDir "infrastructure\json\json_parser.cpp"),
+                (Join-Path $SrcDir "base\text_convert.cpp")
+            )
             $extra = $extra | Select-Object -Unique
         }
 
@@ -383,5 +406,25 @@ if (Invoke-Compile -Source $mainApp -OutputExe $exeOut -ExtraSources $appSources
         $sluginOut = Join-Path $BuildDir "slugin"
         Copy-Item -Path (Join-Path $SluginSrc "*") -Destination $sluginOut -Recurse -Force
         Write-Host "轮盘插件: $sluginOut" -ForegroundColor Green
+    }
+
+    # 语言文件：拷到 exe 同级 lang/。
+    #
+    # 缺了它界面会显示 settings.title 这种 key —— 属于「必须一起发布」的
+    # 资源，所以这里不给静默降级，直接报出来。
+    #
+    # 目标必须先是目录：早期一次「只有一个语言文件」的构建把 build\lang
+    # 变成了同名文件，之后 Copy-Item 一直往文件里塞内容也不报错，直到
+    # 测试读不到 lang\ 才发现。这里显式纠正。
+    if (Test-Path $LangSrc) {
+        $langOut = Join-Path $BuildDir "lang"
+        if (Test-Path $langOut -PathType Leaf) {
+            Remove-Item -Force $langOut
+        }
+        New-Item -ItemType Directory -Force -Path $langOut | Out-Null
+        Copy-Item -Path (Join-Path $LangSrc "*.json") -Destination $langOut -Force
+        Write-Host "语言: $langOut" -ForegroundColor Green
+    } else {
+        Write-Host "[警告] 缺少 lang 目录，界面将显示 key" -ForegroundColor Yellow
     }
 }

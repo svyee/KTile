@@ -52,6 +52,11 @@ struct SettingsResult {
     std::optional<core::WindowPlacement> windowPlacement;
     // 皮肤显示名（<data>\themes\<名称>.json）。未改动则留空
     std::optional<std::string> themeName;
+    // 界面语言代码（"auto" = 跟随系统）。未改动则留空。
+    //
+    // 与其它字段一样走 optional：应用层据此判断「是否要落盘 + 是否要
+    // 重新取词」，避免每次确定都把语言重设一遍（会丢掉界面上的临时状态）。
+    std::optional<std::string> language;
     // 背景图：非空 = 新选的图片绝对路径（由调用方复制进 themes\backgrounds）；
     // 空串 = 用户点了「清除」。未改动则留空
     std::optional<std::string> backgroundImage;
@@ -207,6 +212,7 @@ bool showSettingsWindow(HWND owner,
                         bool currentTabBarAtBottom,
                         core::WindowPlacement currentWindowPlacement,
                         const std::string& currentThemeName,
+                        const std::string& currentLanguage,
                         bool currentStartup,
                         core::HotkeyPreset currentHotkeyPreset,
                         int currentWindowOpacity,

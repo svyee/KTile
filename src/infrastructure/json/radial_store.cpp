@@ -1,6 +1,7 @@
-// KTile - 轮盘菜单配置持久化实现
+﻿// KTile - 轮盘菜单配置持久化实现
 #include "infrastructure/json/radial_store.h"
 
+#include "infrastructure/i18n.h"
 #include "infrastructure/json/json_writer.h"
 
 #include <Windows.h>
@@ -42,26 +43,29 @@ core::HotkeyModifier hotkeyModifierFromKey(const std::string& key,
 // 生成默认的 8 扇区全局轮盘（首次运行用）
 core::RadialConfig makeDefaultConfig() {
     core::RadialConfig config;
-    core::RadialMenu global("default", "全局默认", 8);
+    // 默认菜单名与预置动作名取自语言文件：英文环境首次生成的配置
+    // 就是英文。用户后来改过的名字属于用户数据，不跟着语言切换变。
+    core::RadialMenu global(
+        "default", infrastructure::i18n::tr("radial.defaultMenuName"), 8);
 
     // 预置几个常用动作，其余留空
     global.actions[0].type = core::RadialActionType::Shortcut;
-    global.actions[0].name = "复制";
+    global.actions[0].name = infrastructure::i18n::tr("action.copy");
     global.actions[0].modifiers = {core::HotkeyModifier::Control};
     global.actions[0].key = "C";
 
     global.actions[2].type = core::RadialActionType::Shortcut;
-    global.actions[2].name = "粘贴";
+    global.actions[2].name = infrastructure::i18n::tr("action.paste");
     global.actions[2].modifiers = {core::HotkeyModifier::Control};
     global.actions[2].key = "V";
 
     global.actions[4].type = core::RadialActionType::Shortcut;
-    global.actions[4].name = "剪切";
+    global.actions[4].name = infrastructure::i18n::tr("action.cut");
     global.actions[4].modifiers = {core::HotkeyModifier::Control};
     global.actions[4].key = "X";
 
     global.actions[6].type = core::RadialActionType::Shortcut;
-    global.actions[6].name = "撤销";
+    global.actions[6].name = infrastructure::i18n::tr("action.undo");
     global.actions[6].modifiers = {core::HotkeyModifier::Control};
     global.actions[6].key = "Z";
 

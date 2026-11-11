@@ -1,4 +1,6 @@
-#include "platform/win32/plugin_providers.h"
+﻿#include "platform/win32/plugin_providers.h"
+
+#include "infrastructure/i18n.h"
 
 #include <windows.h>
 
@@ -136,10 +138,11 @@ bool queryBattery(double* percent, bool* charging, bool* present) {
 std::string buildSystemJson() {
     SYSTEMTIME now{};
     GetLocalTime(&now);
-    static const char* kWeekdays[] = {
-        "星期日", "星期一", "星期二", "星期三",
-        "星期四", "星期五", "星期六",
-    };
+    // 星期名来自语言文件（provider.system.weekday.N）—— 不硬编中文。
+    char weekdayKey[40];
+    std::snprintf(weekdayKey, sizeof(weekdayKey), "provider.system.weekday.%u",
+                  static_cast<unsigned>(now.wDayOfWeek));
+    const std::string weekday = infrastructure::i18n::tr(weekdayKey);
 
     char timeText[16];
     std::snprintf(timeText, sizeof(timeText), "%02u:%02u",
@@ -196,7 +199,7 @@ std::string buildSystemJson() {
 
     json += "\"time\":{\"hm\":\"" + std::string(timeText) + "\",";
     json += "\"date\":\"" + std::string(dateText) + "\",";
-    json += "\"weekday\":\"" + std::string(kWeekdays[now.wDayOfWeek]) + "\"},";
+    json += "\"weekday\":\"" + weekday + "\"},";
 
     // metrics 数组：供 large 布局用 repeat 动态展开，顺序固定。
     json += "\"metrics\":[";
@@ -205,14 +208,17 @@ std::string buildSystemJson() {
     json += "{\"name\":\"CPU\",\"value\":\"" + jsonNumber(cpuPercent) +
             "%\",\"percent\":" + jsonNumber(cpuPercent) +
             ",\"icon\":\"icons/cpu\"}";
-    json += ",{\"name\":\"内存\",\"value\":\"" + jsonNumber(memoryPercent) +
+    json += ",{\"name\":\"" + infrastructure::i18n::tr("provider.system.memory") +
+            "\",\"value\":\"" + jsonNumber(memoryPercent) +
             "%\",\"percent\":" + jsonNumber(memoryPercent) +
             ",\"icon\":\"icons/memory-stick\"}";
-    json += ",{\"name\":\"磁盘\",\"value\":\"" + jsonNumber(diskPercent) +
+    json += ",{\"name\":\"" + infrastructure::i18n::tr("provider.system.disk") +
+            "\",\"value\":\"" + jsonNumber(diskPercent) +
             "%\",\"percent\":" + jsonNumber(diskPercent) +
             ",\"icon\":\"icons/hard-drive\"}";
     if (batteryPresent) {
-        json += ",{\"name\":\"电池\",\"value\":\"" + jsonNumber(batteryPercent) +
+        json += ",{\"name\":\"" + infrastructure::i18n::tr("provider.system.battery") +
+                "\",\"value\":\"" + jsonNumber(batteryPercent) +
                 "%\",\"percent\":" + jsonNumber(batteryPercent) +
                 ",\"icon\":\"icons/battery\"}";
     }
@@ -233,7 +239,7 @@ PluginRawResult runBuiltinPluginProvider(const std::string& provider) {
         return result;
     }
 
-    result.error = "未知的内置数据源: " + provider;
+    result.error = infrastructure::i18n::formatU("provider.system.unknown", {provider});
     return result;
 }
 

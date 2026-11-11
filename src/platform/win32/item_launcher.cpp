@@ -1,7 +1,8 @@
-#include "platform/win32/item_launcher.h"
+﻿#include "platform/win32/item_launcher.h"
 
 #include "base/text_convert.h"
 #include "core/builtin_items.h"
+#include "infrastructure/i18n.h"
 #include "platform/win32/system_actions.h"
 
 #include <shellapi.h>
@@ -10,6 +11,14 @@ namespace ktile {
 namespace platform {
 namespace win32 {
 namespace {
+
+// 取词（宽字符拷贝）。
+//
+// 语言表里的值存在字典里，指针在下次切换语言前一直有效；但这边的
+// 结果会被 return 出去，所以立刻拷成 std::wstring，不留指针。
+std::wstring W(const char* key) {
+    return std::wstring(infrastructure::i18n::trw(key));
+}
 
 // 把一条参数包成可追加到命令行的形式。
 //
@@ -70,7 +79,9 @@ std::wstring lastErrorMessage(const HRESULT hr) {
         message.pop_back();
     }
     if (message.empty()) {
-        message = L"未知错误 (0x" + std::to_wstring(static_cast<unsigned long>(hr)) + L")";
+        message = infrastructure::i18n::formatW(
+            "error.unknownError",
+            {std::to_wstring(static_cast<unsigned long>(hr))});
     }
     return message;
 }
@@ -81,7 +92,7 @@ LaunchResult launchItem(const core::LaunchItem& item,
                         const bool forceAdministrator) {
     const std::wstring target = base::utf8ToWideLossy(item.target);
     if (target.empty()) {
-        return {false, L"启动目标为空。"};
+        return {false, W("error.launchEmptyTarget")};
     }
 
     // 内置命令（"ktile:<id>"）没有文件或协议可执行，在 ShellExecute
@@ -120,11 +131,11 @@ LaunchResult launchItem(const core::LaunchItem& item,
         return {true, std::wstring()};
     }
 
-    std::wstring error = L"无法启动「" + target + L"」";
+    std::wstring error = infrastructure::i18n::formatW("error.launchFailed", {target});
     if (elevate && code == SE_ERR_ACCESSDENIED) {
-        error += L"：\n用户在 UAC 提示中取消了提权。";
+        error += W("error.uacCancelled");
     } else {
-        error += L"：\n" + lastErrorMessage(static_cast<HRESULT>(code));
+        error += lastErrorMessage(static_cast<HRESULT>(code));
     }
     return {false, std::move(error)};
 }
@@ -134,12 +145,12 @@ LaunchResult revealItemInExplorer(const core::LaunchItem& item) {
     // 菜单项，这里再兜底一次，防止误调用。
     if (item.type == core::ItemType::Url ||
         !core::builtinIdFromTarget(base::utf8ToWideLossy(item.target)).empty()) {
-        return {false, L"该项目没有文件位置。"};
+        return {false, W("error.noFileLocation")};
     }
 
     const std::wstring target = base::utf8ToWideLossy(item.target);
     if (target.empty()) {
-        return {false, L"启动目标为空。"};
+        return {false, W("error.launchEmptyTarget")};
     }
 
     // explorer /select,"路径" —— 打开所在文件夹并高亮该项；
@@ -156,13 +167,13 @@ LaunchResult revealItemInExplorer(const core::LaunchItem& item) {
     if (code > 32) {
         return {true, std::wstring()};
     }
-    return {false, L"无法打开文件位置：\n" +
+    return {false, W("error.openLocationFailed") +
                        lastErrorMessage(static_cast<HRESULT>(code))};
 }
 
 LaunchResult openPathWithDefaultProgram(const std::wstring& path) {
     if (path.empty()) {
-        return {false, L"路径为空。"};
+        return {false, W("error.pathEmpty")};
     }
 
     HINSTANCE instance = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
@@ -188,13 +199,13 @@ LaunchResult openPathWithDefaultProgram(const std::wstring& path) {
             return {true, std::wstring()};
         }
     }
-    return {false, L"无法打开文件：\n" +
+    return {false, W("error.openFileFailed") +
                        lastErrorMessage(static_cast<HRESULT>(code))};
 }
 
 LaunchResult openFolderInExplorer(const std::wstring& path) {
     if (path.empty()) {
-        return {false, L"路径为空。"};
+        return {false, W("error.pathEmpty")};
     }
     const HINSTANCE instance = ShellExecuteW(nullptr, L"open", path.c_str(),
                                              nullptr, nullptr, SW_SHOWNORMAL);
@@ -202,7 +213,7 @@ LaunchResult openFolderInExplorer(const std::wstring& path) {
     if (code > 32) {
         return {true, std::wstring()};
     }
-    return {false, L"无法打开目录：\n" +
+    return {false, W("error.openFolderFailed") +
                        lastErrorMessage(static_cast<HRESULT>(code))};
 }
 

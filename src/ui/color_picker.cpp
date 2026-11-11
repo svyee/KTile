@@ -1,4 +1,6 @@
-#include "ui/color_picker.h"
+﻿#include "ui/color_picker.h"
+
+#include "infrastructure/i18n.h"
 
 #include <windowsx.h>
 
@@ -174,7 +176,7 @@ void paintPalette(const HWND hwnd, const PaletteContext& ctx) {
     SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
     HGDIOBJ oldFont =
         SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
-    DrawTextW(dc, L"点选即生效，点击其他位置关闭", -1, &hint,
+    DrawTextW(dc, infrastructure::i18n::trw("colorpicker.hint").c_str(), -1, &hint,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, oldFont);
 

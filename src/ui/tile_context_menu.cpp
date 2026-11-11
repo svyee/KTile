@@ -1,6 +1,7 @@
-#include "ui/tile_context_menu.h"
+﻿#include "ui/tile_context_menu.h"
 
 #include "base/text_convert.h"
+#include "infrastructure/i18n.h"
 #include "platform/win32/popup_menu.h"
 
 #include <algorithm>
@@ -13,6 +14,11 @@ namespace {
 
 using platform::win32::PopupMenuEntry;
 using platform::win32::showPopupMenu;
+
+// 取词助手：只在本文件用，省掉一长串命名空间前缀。
+const wchar_t* T(const char* key) {
+    return infrastructure::i18n::trw(key).c_str();
+}
 
 // 「移动到其他页面」子菜单最多列多少页。
 // 子菜单长到要滚动就不好用了 —— 页数超过这个数时，用户更适合用
@@ -59,9 +65,9 @@ TileMenuCommand showTileContextMenu(HWND owner,
     // ---- 启动类 ----
     // 网址用「打开」、文件夹用「打开」、其余「运行」——文字贴合语义。
     const wchar_t* runText =
-        item.type == core::ItemType::Url ? L"打开网址"
-        : item.type == core::ItemType::Folder ? L"打开文件夹"
-                                              : L"运行/打开";
+        item.type == core::ItemType::Url ? T("tilemenu.openUrl")
+        : item.type == core::ItemType::Folder ? T("tilemenu.openFolder")
+                                              : T("tilemenu.run");
     entries.push_back(PopupMenuEntry::action(
         static_cast<UINT>(TileMenuCommand::Run), runText));
 
@@ -69,13 +75,13 @@ TileMenuCommand showTileContextMenu(HWND owner,
     // 文档/文件夹/网址提权没有意义（UAC 也会拒绝）。
     entries.push_back(PopupMenuEntry::action(
         static_cast<UINT>(TileMenuCommand::RunAsAdministrator),
-        L"以管理员身份运行",
+        T("tilemenu.runAsAdmin"),
         item.type == core::ItemType::Application));
 
     // 网址没有「文件位置」
     entries.push_back(PopupMenuEntry::action(
         static_cast<UINT>(TileMenuCommand::OpenFileLocation),
-        L"打开文件所在位置",
+        T("tilemenu.openLocation"),
         item.type != core::ItemType::Url));
 
     entries.push_back(PopupMenuEntry::separator());
@@ -88,18 +94,22 @@ TileMenuCommand showTileContextMenu(HWND owner,
     std::vector<PopupMenuEntry> sizeEntries;
     sizeEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::ResizeSmall),
-        core::tileSizeName(core::TileSize::Small), checkFor(core::TileSize::Small)));
+        infrastructure::i18n::trw(core::tileSizeLabelKey(core::TileSize::Small)),
+        checkFor(core::TileSize::Small)));
     sizeEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::ResizeWide),
-        core::tileSizeName(core::TileSize::Wide), checkFor(core::TileSize::Wide)));
+        infrastructure::i18n::trw(core::tileSizeLabelKey(core::TileSize::Wide)),
+        checkFor(core::TileSize::Wide)));
     sizeEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::ResizeTall),
-        core::tileSizeName(core::TileSize::Tall), checkFor(core::TileSize::Tall)));
+        infrastructure::i18n::trw(core::tileSizeLabelKey(core::TileSize::Tall)),
+        checkFor(core::TileSize::Tall)));
     sizeEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::ResizeLarge),
-        core::tileSizeName(core::TileSize::Large), checkFor(core::TileSize::Large)));
+        infrastructure::i18n::trw(core::tileSizeLabelKey(core::TileSize::Large)),
+        checkFor(core::TileSize::Large)));
 
-    entries.push_back(PopupMenuEntry::parent(L"磁贴大小", std::move(sizeEntries)));
+    entries.push_back(PopupMenuEntry::parent(T("tilemenu.tileSize"), std::move(sizeEntries)));
 
     // ---- 标题显示子菜单（当前方式打勾） ----
     //
@@ -108,19 +118,22 @@ TileMenuCommand showTileContextMenu(HWND owner,
     std::vector<PopupMenuEntry> labelEntries;
     labelEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::LabelFollowGlobal),
-        core::tileLabelModeName(core::TileLabelMode::FollowGlobal),
+        infrastructure::i18n::trw(
+            core::tileLabelModeLabelKey(core::TileLabelMode::FollowGlobal)),
         item.labelMode == core::TileLabelMode::FollowGlobal));
     labelEntries.push_back(PopupMenuEntry::separator());
     labelEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::LabelAlways),
-        core::tileLabelModeName(core::TileLabelMode::Always),
+        infrastructure::i18n::trw(
+            core::tileLabelModeLabelKey(core::TileLabelMode::Always)),
         item.labelMode == core::TileLabelMode::Always));
     labelEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::LabelOnHover),
-        core::tileLabelModeName(core::TileLabelMode::OnHover),
+        infrastructure::i18n::trw(
+            core::tileLabelModeLabelKey(core::TileLabelMode::OnHover)),
         item.labelMode == core::TileLabelMode::OnHover));
 
-    entries.push_back(PopupMenuEntry::parent(L"标题显示", std::move(labelEntries)));
+    entries.push_back(PopupMenuEntry::parent(T("tilemenu.labelMode"), std::move(labelEntries)));
 
     // ---- 移动到其他页面子菜单 ----
     //
@@ -142,7 +155,7 @@ TileMenuCommand showTileContextMenu(HWND owner,
                 std::move(label)));
         }
         if (!tabEntries.empty()) {
-            entries.push_back(PopupMenuEntry::parent(L"移动到其他页面",
+            entries.push_back(PopupMenuEntry::parent(T("tilemenu.moveToTab"),
                                                      std::move(tabEntries)));
         }
     }
@@ -168,7 +181,7 @@ TileMenuCommand showTileContextMenu(HWND owner,
                 std::move(label)));
         }
         if (!copyEntries.empty()) {
-            entries.push_back(PopupMenuEntry::parent(L"复制到其他页面",
+            entries.push_back(PopupMenuEntry::parent(T("tilemenu.copyToTab"),
                                                      std::move(copyEntries)));
         }
     }
@@ -176,12 +189,12 @@ TileMenuCommand showTileContextMenu(HWND owner,
     entries.push_back(PopupMenuEntry::separator());
 
     entries.push_back(PopupMenuEntry::action(
-        static_cast<UINT>(TileMenuCommand::Edit), L"修改项目..."));
+        static_cast<UINT>(TileMenuCommand::Edit), T("tilemenu.edit")));
 
     entries.push_back(PopupMenuEntry::separator());
 
     entries.push_back(PopupMenuEntry::action(
-        static_cast<UINT>(TileMenuCommand::Remove), L"删除"));
+        static_cast<UINT>(TileMenuCommand::Remove), T("tilemenu.remove")));
 
     const UINT command = showPopupMenu(owner, entries, screenPosition);
 
@@ -217,14 +230,14 @@ TileMenuCommand showTileContextMenu(HWND owner,
 // ---------------------------------------------------------------- 删除确认
 
 bool confirmItemRemoval(HWND owner, const std::wstring& itemName) {
+    // {0} 是磁贴名，语序交给语言文件决定（英文要把名字放句中）。
     const std::wstring message =
-        L"确定要从启动器中删除「" + itemName + L"」吗？\n\n"
-        L"（不会删除磁盘上的原始文件）";
+        infrastructure::i18n::formatW("tilemenu.removeConfirm", {itemName});
 
     const int result = MessageBoxW(
         owner,
         message.c_str(),
-        L"删除磁贴",
+        T("tilemenu.removeTitle"),
         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
 
     return result == IDYES;

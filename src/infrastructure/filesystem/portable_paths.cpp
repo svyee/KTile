@@ -144,6 +144,12 @@ std::wstring PortablePaths::logFilePath() const {
     return dataDirectory_ + L"\\ktile.log";
 }
 
+std::wstring PortablePaths::langDirectory() const {
+    // 语言文件跟着 exe 走（与 plugin/、slugin/ 同级），不放进 data/：
+    // data/ 是用户数据，删掉会重建；语言文件删了就只剩 key 了。
+    return executableDirectory_ + L"\\lang";
+}
+
 bool PortablePaths::ensureDirectoryExists(const std::wstring& path) const {
     return createDirectoryRecursive(path);
 }

@@ -1,5 +1,7 @@
-// KTile - Win32 平台层：全局热键实现
+﻿// KTile - Win32 平台层：全局热键实现
 #include "platform/win32/global_hotkey.h"
+
+#include "infrastructure/i18n.h"
 
 #include <algorithm>
 #include <cctype>
@@ -137,8 +139,10 @@ std::string virtualKeyToKeyName(const UINT virtualKey) {
 std::wstring formatHotkey(const core::HotkeyConfig& config) {
     // 手势优先：选了手势时 modifiers + key 没有意义，显示成手势本身
     switch (config.gesture) {
-        case core::HotkeyGesture::DoubleCtrl: return L"双击 Ctrl";
-        case core::HotkeyGesture::WinKey:     return L"Win 键";
+        case core::HotkeyGesture::DoubleCtrl:
+            return infrastructure::i18n::trw("hotkey.doubleCtrl");
+        case core::HotkeyGesture::WinKey:
+            return infrastructure::i18n::trw("hotkey.winKey");
         case core::HotkeyGesture::None:       break;
     }
 
@@ -172,7 +176,8 @@ Win32Status GlobalHotkey::registerHotkey(HWND window,
 
     if (window == nullptr) {
         return base::makeUnexpected(
-            Win32Error(ERROR_INVALID_WINDOW_HANDLE, "热键注册需要有效窗口"));
+            Win32Error(ERROR_INVALID_WINDOW_HANDLE,
+                       infrastructure::i18n::tr("error.hotkeyNoWindow")));
     }
     if (!config.enabled) {
         return {};
@@ -182,15 +187,17 @@ Win32Status GlobalHotkey::registerHotkey(HWND window,
     const UINT virtualKey = keyNameToVirtualKey(config.key);
     if (virtualKey == 0) {
         return base::makeUnexpected(
-            Win32Error(ERROR_INVALID_PARAMETER, "无法识别的主键: " + config.key));
+            Win32Error(ERROR_INVALID_PARAMETER,
+                       infrastructure::i18n::formatU("error.hotkeyInvalidKey",
+                                                      {config.key})));
     }
 
     if (RegisterHotKey(window, hotkeyId, modifiers, virtualKey) == FALSE) {
         const DWORD code = GetLastError();
         // ERROR_HOTKEY_ALREADY_REGISTERED (1409) 表示被其他程序占用
         std::string message = (code == 1409)
-            ? "热键已被其他程序占用"
-            : "热键注册失败";
+            ? infrastructure::i18n::tr("error.hotkeyOccupied")
+            : infrastructure::i18n::tr("error.hotkeyRegisterFailed");
         return base::makeUnexpected(Win32Error(code, std::move(message)));
     }
 
@@ -275,7 +282,8 @@ Win32Status GestureHotkey::install(const HWND notifyWindow, const int hotkeyId,
     }
     if (notifyWindow == nullptr) {
         return base::makeUnexpected(
-            Win32Error(ERROR_INVALID_WINDOW_HANDLE, "手势唤醒需要有效窗口"));
+            Win32Error(ERROR_INVALID_WINDOW_HANDLE,
+                       infrastructure::i18n::tr("error.gestureNoWindow")));
     }
 
     notifyWindow_ = notifyWindow;
@@ -295,7 +303,7 @@ Win32Status GestureHotkey::install(const HWND notifyWindow, const int hotkeyId,
         hotkeyId_ = 0;
         gesture_ = core::HotkeyGesture::None;
         return base::makeUnexpected(
-            Win32Error(code, "安装键盘钩子失败（可能被安全软件拦截）"));
+            Win32Error(code, infrastructure::i18n::tr("error.keyboardHookFailed")));
     }
     report(gesture == core::HotkeyGesture::WinKey
                ? "手势钩子已安装（单按 Win）"

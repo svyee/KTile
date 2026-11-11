@@ -1,4 +1,4 @@
-// KTile - 核心层：标签页操作（纯逻辑，无平台依赖）
+﻿// KTile - 核心层：标签页操作（纯逻辑，无平台依赖）
 //
 // 与 item_operations 同一套设计：每个函数都是「对 ItemsDocument 的一次
 // 原子修改」，不碰 UI 也不碰磁盘。Application 与 LauncherWindow 只负责
@@ -27,7 +27,11 @@ namespace core {
 //
 // 不做「重名检查」：两页都叫「工具」并不影响任何功能，而强行改名
 // 反而会让用户觉得「我明明起的名字被改了」。
-std::size_t addTab(ItemsDocument& document, const std::string& rawName);
+//
+// namePrefix 是自动取名的前缀（"页面" / "Page"），由调用方按当前语言
+// 传入 —— 核心层不依赖 i18n，留默认值让老调用方与测试不受影响。
+std::size_t addTab(ItemsDocument& document, const std::string& rawName,
+                   const std::string& namePrefix = "页面");
 
 // 重命名标签页。
 //

@@ -1,4 +1,4 @@
-// KTile - 核心数据模型
+﻿// KTile - 核心数据模型
 //
 // 设计原则：
 //  1. 磁贴尺寸是一等公民，从第一天就进入数据模型，避免后期迁移
@@ -73,15 +73,19 @@ inline std::uint16_t tileSpanRows(TileSize size) noexcept {
     return 1;
 }
 
-// 显示名（用于菜单/调试）
-inline const wchar_t* tileSizeName(TileSize size) noexcept {
+// 显示名的 key（菜单/下拉框用）。
+//
+// 为什么不直接返回文案：core 只到 base，不允许依赖 infrastructure，
+// 显示名统一由 UI 层查语言文件。尺寸标注（64x64 这类）也写进语言
+// 文件，换语言时连单位排版都能跟着变。
+inline const char* tileSizeLabelKey(TileSize size) noexcept {
     switch (size) {
-        case TileSize::Small:  return L"小 (64x64)";
-        case TileSize::Wide:   return L"横向 (128x64)";
-        case TileSize::Tall:   return L"纵向 (64x128)";
-        case TileSize::Large:  return L"大 (128x128)";
+        case TileSize::Small:  return "size.small";
+        case TileSize::Wide:   return "size.wide";
+        case TileSize::Tall:   return "size.tall";
+        case TileSize::Large:  return "size.large";
     }
-    return L"小 (64x64)";
+    return "size.small";
 }
 
 // 从整数解析（用于配置读取），非法值回退 Small
@@ -136,14 +140,14 @@ inline TileLabelMode tileLabelModeFromKey(const std::string& key,
     return TileLabelMode::FollowGlobal;
 }
 
-// 下拉框里显示给用户的中文名
-inline const wchar_t* tileLabelModeName(TileLabelMode mode) noexcept {
+// 下拉框里显示给用户的文案 key（由 UI 层查语言文件）
+inline const char* tileLabelModeLabelKey(TileLabelMode mode) noexcept {
     switch (mode) {
-        case TileLabelMode::FollowGlobal: return L"跟随全局设置";
-        case TileLabelMode::Always:       return L"始终显示";
-        case TileLabelMode::OnHover:      return L"移入时显示";
+        case TileLabelMode::FollowGlobal: return "labelmode.follow";
+        case TileLabelMode::Always:       return "labelmode.always";
+        case TileLabelMode::OnHover:      return "labelmode.hover";
     }
-    return L"跟随全局设置";
+    return "labelmode.follow";
 }
 
 // 下拉框第 index 项（0..2）对应的枚举值
@@ -605,6 +609,12 @@ struct ApplicationConfig {
     std::uint32_t schemaVersion = kCurrentSchemaVersion;
     AppearanceConfig appearance;
     ActivationConfig activation;
+
+    // 界面语言代码（"zh-Hans" / "en" / 后续新增的），空串或 "auto" = 跟随系统。
+    //
+    // 默认 auto 而不是直接写死语言：首次运行时按系统语言自动选，
+    // 之后用户在设置里显式选过就记住他的选择。
+    std::string language = "auto";
 
     // 是否启用诊断日志
     bool loggingEnabled = true;

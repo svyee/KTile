@@ -2,6 +2,7 @@
 
 #include "base/text_convert.h"
 #include "core/data_model.h"
+#include "infrastructure/i18n.h"
 #include "ui/color_picker.h"
 #include "ui/dialog_style.h"
 #include "ui/radial_editor_dialog.h"
@@ -17,6 +18,15 @@
 namespace ktile {
 namespace ui {
 namespace {
+
+// ---------------------------------------------------------------- 取词
+//
+// T() 只是个短名字：真正干活的是 infrastructure::i18n::trw（按当前语言查表，缺词回退英语）。
+// 返回的指针指向语言字典里的稳定存储，下次切语言之前一直有效 ——
+// 所以可以直接塞进 Win32 的 LPARAM / SetWindowTextW。
+const wchar_t* T(const char* key) {
+    return infrastructure::i18n::trw(key).c_str();
+}
 
 // ---------------------------------------------------------------- 布局常量
 //
@@ -60,7 +70,7 @@ constexpr int kComboWidth = 260;     // 下拉框宽度（单列下不铺满，�
 constexpr int kCardInset = 10;       // 卡片相对内容边界的左右外扩
 constexpr int kCardTop = 8;
 constexpr int kCardHeightAppearance = 410;  // 背景+磁贴+图标与标签+布局
-constexpr int kCardHeightBehavior = 188;    // 窗口+启动与唤醒
+constexpr int kCardHeightBehavior = 262;    // 语言+窗口+启动与唤醒
 constexpr int kCardHeightPlugins = 366;     // 说明+列表+按钮+脚注
 // 轮盘插件页：说明 + 列表 + 按钮 + 脚注（结构与磁贴插件页一致）。
 // 比磁贴插件页矮一些：它的脚注只有三行，按四行给高会在白卡下沿留一条
@@ -87,19 +97,21 @@ constexpr int kMaxGrid = static_cast<int>(core::kMaximumGridColumns);
 // 与 core::WindowPlacement 的枚举值**刻意不一一对应**：枚举值要保证
 // 已存配置不错位（Center 只能追加在末尾 = 6），但下拉里「屏幕中央」
 // 放在第二位才顺手。所以这里用一张映射表，索引只对下拉负责。
+// 文案不写在这里，只写 key：语言文件是唯一的文案来源，
+// 表本身留 constexpr（key 是编译期常量），取词在创建控件时做。
 struct PlacementOption {
-    const wchar_t* label;
+    const char* key;
     core::WindowPlacement value;
 };
 
 constexpr PlacementOption kPlacementOptions[] = {
-    {L"跟随鼠标", core::WindowPlacement::Mouse},
-    {L"屏幕中央", core::WindowPlacement::Center},
-    {L"左下角", core::WindowPlacement::LeftBottom},
-    {L"右下角", core::WindowPlacement::RightBottom},
-    {L"左上角", core::WindowPlacement::LeftTop},
-    {L"右上角", core::WindowPlacement::RightTop},
-    {L"上一次的位置", core::WindowPlacement::Last},
+    {"settings.placement.mouse", core::WindowPlacement::Mouse},
+    {"settings.placement.center", core::WindowPlacement::Center},
+    {"settings.placement.leftBottom", core::WindowPlacement::LeftBottom},
+    {"settings.placement.rightBottom", core::WindowPlacement::RightBottom},
+    {"settings.placement.leftTop", core::WindowPlacement::LeftTop},
+    {"settings.placement.rightTop", core::WindowPlacement::RightTop},
+    {"settings.placement.last", core::WindowPlacement::Last},
 };
 
 constexpr int kPlacementOptionCount =
@@ -109,15 +121,15 @@ constexpr int kPlacementOptionCount =
 // 与 data_model 的字符串键一一对应，但顺序按「常用程度」排：
 // 右键在最前（保住肌肉记忆），中键次之，侧键放最后。
 struct RadialButtonOption {
-    const wchar_t* label;
+    const char* key;
     core::RadialTriggerButton value;
 };
 
 constexpr RadialButtonOption kRadialButtonOptions[] = {
-    {L"右键拖动", core::RadialTriggerButton::Right},
-    {L"中键拖动", core::RadialTriggerButton::Middle},
-    {L"侧键 1 拖动", core::RadialTriggerButton::Side1},
-    {L"侧键 2 拖动", core::RadialTriggerButton::Side2},
+    {"radial.button.right", core::RadialTriggerButton::Right},
+    {"radial.button.middle", core::RadialTriggerButton::Middle},
+    {"radial.button.side1", core::RadialTriggerButton::Side1},
+    {"radial.button.side2", core::RadialTriggerButton::Side2},
 };
 
 constexpr int kRadialButtonOptionCount = static_cast<int>(
@@ -146,17 +158,17 @@ constexpr int kRadialSuppressOptionCount = static_cast<int>(
     sizeof(kRadialSuppressOptions) / sizeof(kRadialSuppressOptions[0]));
 
 struct RadialModifierOption {
-    const wchar_t* label;
+    const char* key;
     core::RadialTriggerModifier value;
 };
 
 constexpr RadialModifierOption kRadialModifierOptions[] = {
     // 只写「无」：括号里的「独占该键」四个字把下拉撑到 110 宽，
     // 而这一行还要塞抑制键。解释挪到下拉的 tooltip 上。
-    {L"无", core::RadialTriggerModifier::None},
-    {L"Ctrl", core::RadialTriggerModifier::Ctrl},
-    {L"Shift", core::RadialTriggerModifier::Shift},
-    {L"Alt", core::RadialTriggerModifier::Alt},
+    {"common.none", core::RadialTriggerModifier::None},
+    {"key.ctrl", core::RadialTriggerModifier::Ctrl},
+    {"key.shift", core::RadialTriggerModifier::Shift},
+    {"key.alt", core::RadialTriggerModifier::Alt},
 };
 
 constexpr int kRadialModifierOptionCount = static_cast<int>(
@@ -165,21 +177,14 @@ constexpr int kRadialModifierOptionCount = static_cast<int>(
 // 触发方式第一行的三段横排：触发键 / 修饰键 / 抑制键。
 //
 // 三者是一条因果链（按住什么键 + 组合什么修饰键 + 什么情况下让路），拆成两三行
-// 就看不出它们在描述同一件事。三个都是下拉框之后宽度宽裕了不少，列位置仍按
-// 实际文字卡死，右边缘落在内容区右界：
+// 就看不出它们在描述同一件事。
 //
-//   150 标签 44 | 194 下拉 84 | 284 标签 44 | 328 下拉 84 | 420 标签 44 |
-//   464 下拉 178  →  右边缘 642（正好等于内容区右界）
-constexpr int kRadialLabelWidthTight = 44;
-constexpr int kRadialTriggerLabelX = kContentLeft + 8;   // 150
-constexpr int kRadialTriggerComboX = 194;
+// 列位置不再写死：标签宽度按当前语言实测（中文「修饰键」36px 够，英文
+// "Modifier" 要 50 出头），两个下拉框宽度固定，抑制键下拉吃掉剩下的宽度 ——
+// 右边缘始终落在内容区右界，换语言不会把标签裁成「Modifie」。
+constexpr int kRadialLabelWidthTight = 44;  // 标签列的最小宽度
 constexpr int kRadialTriggerComboW = 84;
-constexpr int kRadialModifierLabelX = 284;
-constexpr int kRadialModifierComboX = 328;
 constexpr int kRadialModifierComboW = 84;
-constexpr int kRadialSuppressLabelX = 420;
-constexpr int kRadialSuppressComboX = 464;
-constexpr int kRadialSuppressComboW = 178;
 
 // ---------------------------------------------------------------- 控件 ID
 
@@ -296,7 +301,11 @@ constexpr int kSectionTileId = 1205;        // 磁贴
 constexpr int kSectionIconLabelId = 1206;   // 图标与标签
 constexpr int kSectionRadialTriggerId = 1207;  // 轮盘：触发方式
 constexpr int kSectionRadialSectorId = 1208;   // 轮盘：扇区动作
+constexpr int kSectionLanguageId = 1209;       // 语言
 constexpr int kSectionHeaderIdEnd = 1210;
+// 语言下拉。1211 起在分组标题区间之外，不会被 WM_CTLCOLORSTATIC 当成
+// 「灰色小标题」处理。
+constexpr int kLanguageComboId = 1211;
 
 // 控件 ID 到「窗口属性名」的映射：把控件句柄挂在对话框上，
 // 避免到处 GetDlgItem（虽然也能用，但属性查找更直白）。
@@ -344,6 +353,9 @@ struct SettingsDialogState {
     std::optional<std::uint32_t> initialDefaultTileColor;
     std::optional<std::uint32_t> chosenDefaultTileColor;
     bool defaultTileColorTouched = false;
+
+    // 界面语言（配置里的原值："auto" 或具体语言代码）
+    std::string initialLanguage;
 
     // 皮肤与背景图
     std::wstring initialThemeName;      // 当前皮肤显示名（空 = 默认）
@@ -495,11 +507,70 @@ void refreshHint(HWND dialog, const SettingsDialogState* state) {
     std::wstring text;
     if (columns < static_cast<int>(state->columnsInUse) ||
         rows < static_cast<int>(state->rowsInUse)) {
-        text = L"提示：网格小于当前布局占用，部分磁贴会自动重排。";
+        text = T("settings.gridHintRearrange");
     } else {
-        text = L"网格范围 3 - 16。窗体会随格数自动调整大小。";
+        text = T("settings.gridHintRange");
     }
     SetWindowTextW(hint, text.c_str());
+}
+
+// ---------------------------------------------------------------- 语言下拉
+
+// 第 0 项固定是「跟随系统」，之后按 lang 目录里的语言代码排序。
+//
+// 「跟随系统」这一项要把实际落到的语言写在后面（"跟随系统 · 简体中文"）：
+// 只写「跟随系统」的话，用户没法知道现在到底跟着哪一门 —— 尤其是系统语言
+// 是英文、界面却是中文的时候，会怀疑设置没生效。
+void fillLanguageCombo(HWND combo, const std::string& current) {
+    if (combo == nullptr) {
+        return;
+    }
+    const std::string systemLanguage =
+        infrastructure::i18n::systemLanguageCode();
+    std::wstring autoText =
+        infrastructure::i18n::trw("settings.language.auto");
+    for (const auto& language : infrastructure::i18n::languages()) {
+        if (language.code == systemLanguage) {
+            autoText += L" · " + base::utf8ToWide(language.name);
+            break;
+        }
+    }
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(autoText.c_str()));
+
+    int selection = 0;
+    int index = 1;
+    for (const auto& language : infrastructure::i18n::languages()) {
+        const std::wstring name = base::utf8ToWide(language.name);
+        SendMessageW(combo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(name.c_str()));
+        if (language.code == current) {
+            selection = index;
+        }
+        ++index;
+    }
+    // 配置里写了个已经不存在（语言文件被删）的代码：停在「跟随系统」上，
+    // 比停在一个空项上更接近用户的意思。
+    SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(selection), 0);
+}
+
+// 读回用户选的语言代码；第 0 项 = "auto"。
+std::string selectedLanguageCode(HWND dialog) {
+    HWND combo = GetDlgItem(dialog, kLanguageComboId);
+    if (combo == nullptr) {
+        return std::string(infrastructure::i18n::kAutoLanguage);
+    }
+    const int selection = static_cast<int>(
+        SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    if (selection <= 0) {
+        return std::string(infrastructure::i18n::kAutoLanguage);
+    }
+    const auto& list = infrastructure::i18n::languages();
+    const std::size_t index = static_cast<std::size_t>(selection - 1);
+    if (index >= list.size()) {
+        return std::string(infrastructure::i18n::kAutoLanguage);
+    }
+    return list[index].code;
 }
 
 // ---------------------------------------------------------------- 分页与插件列表
@@ -553,11 +624,11 @@ void refreshPluginList(HWND dialog, SettingsDialogState* state) {
         const std::wstring source = base::utf8ToWide(row.sourceLabel);
         const std::wstring refresh =
             row.refreshSeconds > 0
-                ? std::to_wstring(row.refreshSeconds) + L" 秒"
+                ? std::to_wstring(row.refreshSeconds) + infrastructure::i18n::trw("unit.seconds")
                 : std::wstring(L"—");
         const std::wstring visibleRefresh =
             row.visibleRefreshSeconds > 0
-                ? std::to_wstring(row.visibleRefreshSeconds) + L" 秒"
+                ? std::to_wstring(row.visibleRefreshSeconds) + infrastructure::i18n::trw("unit.seconds")
                 : std::wstring(L"—");
 
         LVITEMW item{};
@@ -622,11 +693,15 @@ void refreshRadialSummary(HWND dialog, const SettingsDialogState* state) {
             ++configured;
         }
     }
-    std::wstring text = L"通用轮盘 · " + std::to_wstring(configured) + L" / " +
-                        std::to_wstring(menu.sectorCount) + L" 个扇区已配置";
+    // 用占位符而不是自己拼句子：英文的「x of y」和中文的「x / y 个」语序不同，
+    // 拼接会把语序写死在代码里。
+    std::wstring text = infrastructure::i18n::formatW(
+        "settings.radial.summary",
+        {std::to_wstring(configured), std::to_wstring(menu.sectorCount)});
     if (!state->radial.blacklist.empty()) {
-        text += L"· " + std::to_wstring(state->radial.blacklist.size()) +
-                L" 个进程已拉黑";
+        text += infrastructure::i18n::formatW(
+            "settings.radial.summaryBlacklist",
+            {std::to_wstring(state->radial.blacklist.size())});
     }
     SetWindowTextW(summary, text.c_str());
 }
@@ -739,7 +814,7 @@ std::wstring suppressSummary(HWND combo) {
         text += kRadialSuppressOptions[i].label;
     }
     if (text.empty()) {
-        text = L"无";
+        text = T("common.none");
     }
     return text;
 }
@@ -954,7 +1029,7 @@ void refreshRadialPluginList(HWND dialog, SettingsDialogState* state) {
 
     for (std::size_t i = 0; i < state->radialPluginRows.size(); ++i) {
         const SettingsRadialPluginInfo& row = state->radialPluginRows[i];
-        const std::wstring status = row.valid ? L"已加载" : L"跳过";
+        const std::wstring status = row.valid ? T("settings.radialPlugins.loaded") : T("settings.radialPlugins.skipped");
         const std::wstring name = base::utf8ToWide(row.name.empty() ? row.id
                                                                    : row.name);
         const std::wstring processes = base::utf8ToWide(row.processes);
@@ -1219,32 +1294,68 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                    0, x, y, w, h, -1);
             };
 
+            // 按当前语言实测文字宽度给按钮定宽。
+            //
+            // 这套布局是按中文四字按钮的像素宽手工排的：换成英文
+            // （"Choose image..." / "Follow theme"）字就会被裁掉一截。
+            // 这里用同一套对话框字体现量一遍，取「不小于原宽度」的结果 ——
+            // 中文一个像素都不动，长语言自动撑开。
+            auto measureText = [&](const wchar_t* text) -> int {
+                if (text == nullptr || text[0] == L'\0' || font == nullptr) {
+                    return 0;
+                }
+                HDC dc = GetDC(hwnd);
+                if (dc == nullptr) {
+                    return 0;
+                }
+                HGDIOBJ previous = SelectObject(dc, font);
+                SIZE size{};
+                const bool measured =
+                    GetTextExtentPoint32W(dc, text, lstrlenW(text), &size) != FALSE;
+                const int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+                SelectObject(dc, previous);
+                ReleaseDC(hwnd, dc);
+                if (!measured || dpi <= 0) {
+                    return 0;
+                }
+                // 量出来的是设备像素，布局写的是 96 DPI 逻辑像素，先换回来
+                return MulDiv(size.cx, 96, dpi);
+            };
+            auto fitWidth = [&](const wchar_t* text, const int minWidth) -> int {
+                // +18 = 按钮左右内边距
+                return (std::max)(minWidth, measureText(text) + 18);
+            };
+            // 标签列宽：左对齐、右边紧跟着下拉框，只留 6px 间隔
+            auto labelWidth = [&](const wchar_t* text) -> int {
+                return (std::max)(kRadialLabelWidthTight, measureText(text) + 6);
+            };
+
             // ---- 左侧竖向标签栏 ----
             //
             // 自绘标签竖排在左栏：选中页画浅强调色胶囊 + 加粗文字，
             // 未选中页灰字。切页只改显隐，勾选态由 activePage 驱动重绘
             // （见 WM_DRAWITEM）。
-            makeControl(L"BUTTON", L"外观",
+            makeControl(L"BUTTON", T("settings.tab.appearance"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                             BS_OWNERDRAW,
                         0, kSidebarLeft, kSidebarTop, kSidebarWidth,
                         kSidebarTabHeight, kAppearanceTabId);
-            makeControl(L"BUTTON", L"行为",
+            makeControl(L"BUTTON", T("settings.tab.behavior"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                         kSidebarLeft,
                         kSidebarTop + kSidebarTabHeight + kSidebarTabGap,
                         kSidebarWidth, kSidebarTabHeight, kBehaviorTabId);
-            makeControl(L"BUTTON", L"插件管理",
+            makeControl(L"BUTTON", T("settings.tab.plugins"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                         kSidebarLeft,
                         kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 2,
                         kSidebarWidth, kSidebarTabHeight, kPluginsTabId);
-            makeControl(L"BUTTON", L"轮盘",
+            makeControl(L"BUTTON", T("settings.tab.radial"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                         kSidebarLeft,
                         kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 3,
                         kSidebarWidth, kSidebarTabHeight, kRadialTabId);
-            makeControl(L"BUTTON", L"轮盘插件",
+            makeControl(L"BUTTON", T("settings.tab.radialPlugins"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                         kSidebarLeft,
                         kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 4,
@@ -1284,14 +1395,14 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //   · 磁贴 = 每块磁贴自己画的底色与浓度。
             // 两者叠起来才是最终画面，所以相邻摆放，方便对照着调。
 
-            makeSection(L"背景", kSectionAppearanceId, kContentLeft, yLeft,
+            makeSection(T("settings.section.background"), kSectionAppearanceId, kContentLeft, yLeft,
                         false);
 
             // 皮肤下拉：选项来自 <data>\themes\*.json（即枚举结果）。
             // 枚举为空（目录被整个删了）时退回内置预置名，保证下拉
             // 永远有得选 —— 选了不存在文件的名字，应用层会回落默认配色。
             // 皮肤决定所有基础配色（含磁贴底），所以归在「背景」里。
-            makeLabel(L"皮肤", kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
+            makeLabel(T("settings.theme"), kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
             HWND themeCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
@@ -1309,9 +1420,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     }
                 }
                 for (std::size_t i = 0; i < entries.size(); ++i) {
+                    // 显示译文、保存规范名：切语言后已选皮肤仍然对得上
+                    const std::wstring shown =
+                        ui::themeDisplayName(entries[i].displayName);
                     SendMessageW(themeCombo, CB_ADDSTRING, 0,
-                                 reinterpret_cast<LPARAM>(
-                                     entries[i].displayName.c_str()));
+                                 reinterpret_cast<LPARAM>(shown.c_str()));
                     if (entries[i].displayName == state->initialThemeName) {
                         selectIndex = static_cast<int>(i);
                     }
@@ -1324,17 +1437,21 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 背景图：选图 / 清除。
             // 不再显示当前文件名 —— 文件名是随机串，对用户没有信息量，
             // 反而把这一行挤得乱七八糟；设置了什么背景，主窗口一眼可见。
-            makeLabel(L"背景图", kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
+            makeLabel(T("settings.backgroundImage"), kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
+            // 宽度按实测文字定：「选择图片...」82px 够用，「Choose image...」
+            // 要 100 出头。后面的「清除」跟着右移，不写死偏移。
+            const int browseWidth = fitWidth(T("settings.chooseImage"), 82);
+            const int clearWidth = fitWidth(T("settings.clear"), 52);
             makeControl(
-                L"BUTTON", L"选择图片...",
+                L"BUTTON", T("settings.chooseImage"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                0, kContentLeft + kLabelWidth, yLeft, 82, 23,
+                0, kContentLeft + kLabelWidth, yLeft, browseWidth, 23,
                 kBackgroundBrowseId);
             makeControl(
-                L"BUTTON", L"清除",
+                L"BUTTON", T("settings.clear"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                0, kContentLeft + kLabelWidth + 88, yLeft, 52, 23,
-                kBackgroundClearId);
+                0, kContentLeft + kLabelWidth + browseWidth + 6, yLeft,
+                clearWidth, 23, kBackgroundClearId);
             yLeft += 27;
 
             // ---- 不透明度（窗口）----
@@ -1346,7 +1463,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //     窗口整体仍然不透明。
             // 用滑块而不是数字框：这两项都是「边拖边看」的观感调整，
             // 输完数字才知道效果就失去意义了。
-            makeLabel(L"不透明度", kContentLeft + 8, yLeft + 5,
+            makeLabel(T("settings.opacity"), kContentLeft + 8, yLeft + 5,
                       kLabelWidth - 8, 18);
             HWND windowOpacitySlider = makeControl(
                 TRACKBAR_CLASSW, L"",
@@ -1371,7 +1488,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // ==================== 磁贴 ====================
 
-            makeSection(L"磁贴", kSectionTileId, kContentLeft, yLeft, true);
+            makeSection(T("settings.section.tile"), kSectionTileId, kContentLeft, yLeft, true);
 
             // ---- 背景色 ----
             //
@@ -1379,19 +1496,20 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 色块本身就是按钮（SS_NOTIFY）：点它弹内置色表，既好点也能
             // 看清当前颜色。「跟随皮肤」按钮 = 清空，回到皮肤自带的 tileFill。
             // 与下面的「不透明度」是一对：一个定色相，一个定浓度。
-            makeLabel(L"背景色", kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
+            makeLabel(T("settings.tileColor"), kContentLeft + 8, yLeft + 5, kLabelWidth - 8, 18);
             makeControl(L"STATIC", L"",
                         WS_CHILD | WS_VISIBLE | SS_OWNERDRAW | SS_NOTIFY, 0,
                         kContentLeft + kLabelWidth, yLeft, 82, 23,
                         kDefaultTileColorSwatchId);
-            makeControl(L"BUTTON", L"跟随皮肤",
+            makeControl(L"BUTTON", T("settings.followTheme"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                        0, kContentLeft + kLabelWidth + 86, yLeft, 70, 23,
+                        0, kContentLeft + kLabelWidth + 86, yLeft,
+                        fitWidth(T("settings.followTheme"), 70), 23,
                         kDefaultTileColorClearId);
             yLeft += 30;
 
             // ---- 不透明度（磁贴）----
-            makeLabel(L"不透明度", kContentLeft + 8, yLeft + 5,
+            makeLabel(T("settings.opacity"), kContentLeft + 8, yLeft + 5,
                       kLabelWidth - 8, 18);
             HWND tileOpacitySlider = makeControl(
                 TRACKBAR_CLASSW, L"",
@@ -1416,7 +1534,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // ==================== 图标与标签 ====================
 
-            makeSection(L"图标与标签", kSectionIconLabelId, kContentLeft,
+            makeSection(T("settings.section.iconLabel"), kSectionIconLabelId, kContentLeft,
                         yLeft, true);
 
             // ---- 图标大小 ----
@@ -1424,7 +1542,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 图标相对磁贴内框的统一缩放（50~100）。格子尺寸完全不变，
             // 只改格子里的图标 —— 喜欢留白多就调小，喜欢图标大就调满。
             // 单个磁贴还可以在「修改项目」里单独覆盖这一值。
-            makeLabel(L"图标大小", kContentLeft + 8, yLeft + 5,
+            makeLabel(T("settings.iconSize"), kContentLeft + 8, yLeft + 5,
                       kLabelWidth - 8, 18);
             HWND iconScaleSlider = makeControl(
                 TRACKBAR_CLASSW, L"",
@@ -1455,21 +1573,21 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //   · 移动时显示 → showTileLabels = true， alwaysShowTileLabels = false
             //   · 始终不显示 → showTileLabels = false
             // 配置字段保持不变（旧配置文件仍可直接读），只是换了呈现方式。
-            makeLabel(L"文字标签", kContentLeft + 8, yLeft + 3,
+            makeLabel(T("settings.textLabel"), kContentLeft + 8, yLeft + 3,
                       kLabelWidth - 8, 18);
             HWND titleAlways = makeControl(
-                L"BUTTON", L"始终显示",
+                L"BUTTON", T("settings.labelAlways"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTORADIOBUTTON,
                 0, kContentLeft + kLabelWidth, yLeft, 68, 20,
                 kTitleAlwaysRadioId);
             HWND titleDynamic = makeControl(
-                L"BUTTON", L"移动时显示",
+                L"BUTTON", T("settings.labelHover"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
                 0, kContentLeft + kLabelWidth + 72, yLeft, 80, 20,
                 kTitleDynamicRadioId);
             HWND titleNever = makeControl(
-                L"BUTTON", L"始终不显示",
+                L"BUTTON", T("settings.labelNever"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
                 0, kContentLeft + kLabelWidth + 158, yLeft, 80, 20,
                 kTitleNeverRadioId);
@@ -1499,12 +1617,12 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // ==================== 外观页：布局 ====================
             //
             // 磁贴格数属于「长什么样」，留在外观页；规则线把两组分开。
-            makeSection(L"布局", kSectionLayoutId, kColumnRightX, yLeft, true);
+            makeSection(T("settings.section.layout"), kSectionLayoutId, kColumnRightX, yLeft, true);
 
             // 列数 / 行数并排：两者一起决定磁贴格数，拆成两行纯属浪费。
             // 上下调节器用 UDS_ALIGNRIGHT 吸附在编辑框右侧内部，
             // 所以编辑框宽度里要给箭头留出约 17px。
-            makeLabel(L"网格", kColumnRightX + 8, yLeft + 3, 30, 18);
+            makeLabel(T("settings.grid"), kColumnRightX + 8, yLeft + 3, 30, 18);
             HWND columnsEdit = makeControl(
                 L"EDIT", std::to_wstring(state->initialColumns).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
@@ -1530,7 +1648,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 }
             }
 
-            makeLabel(L"行数", kColumnRightX + 140, yLeft + 3, 30, 18);
+            makeLabel(T("settings.gridRows"), kColumnRightX + 140, yLeft + 3, 30, 18);
             HWND rowsEdit = makeControl(
                 L"EDIT", std::to_wstring(state->initialRows).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
@@ -1567,10 +1685,10 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // 标签栏位置：单选（顶部 / 底部）。
             // 纯几何平移，不重排磁贴、不改窗口尺寸，切换零风险。
-            makeLabel(L"标签栏位置", kColumnRightX + 8, yLeft + 3,
+            makeLabel(T("settings.tabBarPosition"), kColumnRightX + 8, yLeft + 3,
                       kLabelWidth - 8, 18);
             HWND tabTop = makeControl(
-                L"BUTTON", L"顶部",
+                L"BUTTON", T("settings.tabBarTop"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTORADIOBUTTON,
                 0, kColumnRightX + kLabelWidth, yLeft, 60, 20,
@@ -1582,7 +1700,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                              0);
             }
             HWND tabBottom = makeControl(
-                L"BUTTON", L"底部",
+                L"BUTTON", T("settings.tabBarBottom"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
                 0, kColumnRightX + kLabelWidth + 64, yLeft, 60, 20,
                 kTabBottomRadioId);
@@ -1600,13 +1718,35 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             sink = &state->behaviorControls;
             int yRight = kContentTop;
 
-            makeSection(L"窗口", kSectionWindowId, kColumnRightX, yRight,
+            // ==================== 行为页：语言 ====================
+            //
+            // 语言放行为页最上面：它不改变外观，只决定「这一整套界面用哪套
+            // 文案」，属于应用级行为。切换后立刻落盘并重取词，设置窗口自己
+            // 在下次打开时变（对话框已建好的控件不会自己改字）。
+            makeSection(T("settings.language"), kSectionLanguageId,
+                        kColumnRightX, yRight, false);
+            makeLabel(T("settings.languageLabel"), kColumnRightX + 8,
+                      yRight + 5, kLabelWidth - 8, 18);
+            {
+                HWND languageCombo = makeControl(
+                    L"COMBOBOX", L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                    0, kColumnRightX + kLabelWidth, yRight, kComboWidth, 200,
+                    kLanguageComboId);
+                fillLanguageCombo(languageCombo, state->initialLanguage);
+            }
+            yRight += 26;
+            makeLabel(T("settings.language.hint"), kColumnRightX + 8, yRight,
+                      kColumnWidth - 8, 18);
+            yRight += 24;
+
+            makeSection(T("settings.section.window"), kSectionWindowId, kColumnRightX, yRight,
                         false);
 
             // 出现位置：下拉。展示顺序与 core::WindowPlacement 的枚举值
             // 刻意不同（枚举要保已存配置不错位，Center 只能追加末尾），
             // 取值时经 kPlacementOptions 映射，不拿 CB_GETCURSEL 当枚举用。
-            makeLabel(L"出现位置", kColumnRightX + 8, yRight + 5,
+            makeLabel(T("settings.placement"), kColumnRightX + 8, yRight + 5,
                       kLabelWidth - 8, 18);
             HWND placementCombo = makeControl(
                 L"COMBOBOX", L"",
@@ -1618,7 +1758,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 for (int i = 0; i < kPlacementOptionCount; ++i) {
                     SendMessageW(placementCombo, CB_ADDSTRING, 0,
                                  reinterpret_cast<LPARAM>(
-                                     kPlacementOptions[i].label));
+                                     T(kPlacementOptions[i].key)));
                 }
                 int index = 0;
                 for (int i = 0; i < kPlacementOptionCount; ++i) {
@@ -1635,11 +1775,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // ==================== 启动与唤醒 ====================
 
-            makeSection(L"启动与唤醒", kSectionStartupId, kColumnRightX,
+            makeSection(T("settings.section.startup"), kSectionStartupId, kColumnRightX,
                         yRight, true);
 
             HWND startup = makeControl(
-                L"BUTTON", L"开机自动启动",
+                L"BUTTON", T("settings.startWithWindows"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
                     BS_AUTOCHECKBOX,
                 0, kColumnRightX + 8, yRight, kColumnWidth - 8, 20,
@@ -1656,7 +1796,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 低级键盘钩子（RegisterHotKey 表达不了双击/单键）。
             // 做成预设而不是「录制组合键」：录制要处理修饰键、冲突检测、
             // 反馈文案，收益却很低 —— 这四个已经覆盖绝大多数诉求。
-            makeLabel(L"唤醒方式", kColumnRightX + 8, yRight + 3,
+            makeLabel(T("settings.wakeMethod"), kColumnRightX + 8, yRight + 3,
                       kLabelWidth - 8, 18);
             {
                 struct PresetRadio {
@@ -1673,10 +1813,10 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     {kHotkeyCtrlSpaceRadioId, L"Ctrl+Space",
                      core::HotkeyPreset::CtrlSpace,
                      kColumnRightX + kLabelWidth + 98, yRight},
-                    {kHotkeyDoubleCtrlRadioId, L"双击 Ctrl",
+                    {kHotkeyDoubleCtrlRadioId, T("settings.hotkey.doubleCtrl"),
                      core::HotkeyPreset::DoubleCtrl,
                      kColumnRightX + kLabelWidth, yRight + 22},
-                    {kHotkeyWinKeyRadioId, L"单按 Win 键",
+                    {kHotkeyWinKeyRadioId, T("settings.hotkey.winKey"),
                      core::HotkeyPreset::WinKey,
                      kColumnRightX + kLabelWidth + 98, yRight + 22},
                 };
@@ -1696,7 +1836,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 }
                 // 单按 Win 会被我们接管，所以把「Ctrl+Win 仍开开始菜单」
                 // 这条补偿写在界面上，否则用户会以为开始菜单坏了。
-                makeLabel(L"单按 Win 时，Ctrl+Win 仍打开开始菜单。",
+                makeLabel(T("settings.winKeyNote"),
                           kColumnRightX + 8, yRight + 44,
                           kColumnWidth - 8, 18);
             }
@@ -1713,7 +1853,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // 一句话说明插件目录的位置；具体路径太长，放不下就不硬塞，
             // 用户点「打开目录」能直接看到真实位置。
-            makeLabel(L"每个插件一个子文件夹，内含 plugin.json。",
+            makeLabel(T("settings.plugins.intro"),
                       kContentLeft, kPluginIntroTop, kContentWidth,
                       kPluginIntroHeight);
 
@@ -1735,8 +1875,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     int width;
                 };
                 const ColumnSpec columns[] = {
-                    {L"名称", 130}, {L"ID", 170}, {L"来源", 76},
-                    {L"刷新", 76}, {L"前台", 70},
+                    {T("common.name"), 130}, {L"ID", 170}, {T("settings.plugins.col.source"), 76},
+                    {T("settings.plugins.col.refresh"), 76}, {T("settings.plugins.col.visible"), 70},
                 };
                 const int columnCount =
                     static_cast<int>(sizeof(columns) / sizeof(columns[0]));
@@ -1753,32 +1893,28 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // 操作按钮一行排开（内容区宽度下四个 96px 按钮绰绰有余）
             makeControl(
-                L"BUTTON", L"安装插件...",
+                L"BUTTON", T("settings.plugins.install"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft, kPluginButtonTop, kPluginButtonWidth,
                 kButtonHeight, kPluginInstallId);
             makeControl(
-                L"BUTTON", L"添加磁贴",
+                L"BUTTON", T("settings.plugins.addTile"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft + kPluginButtonWidth + 8, kPluginButtonTop,
                 kPluginButtonWidth, kButtonHeight, kPluginAddTileId);
             makeControl(
-                L"BUTTON", L"打开目录",
+                L"BUTTON", T("settings.plugins.openFolder"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft + (kPluginButtonWidth + 8) * 2, kPluginButtonTop,
                 kPluginButtonWidth, kButtonHeight, kPluginOpenFolderId);
             makeControl(
-                L"BUTTON", L"删除插件",
+                L"BUTTON", T("settings.plugins.remove"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft + (kPluginButtonWidth + 8) * 3, kPluginButtonTop,
                 kPluginButtonWidth, kButtonHeight, kPluginRemoveId);
 
             makeControl(
-                L"STATIC",
-                L"安装：选择 plugin.json，整个文件夹会被复制进来。\r\n"
-                L"删除：连同图标与脚本一起移除，不可恢复。\r\n"
-                L"前台刷新：清单里的 visibleRefreshSeconds（秒），面板显示时按此节奏"
-                L"刷新；0 表示只在唤出时刷新。",
+                L"STATIC", T("settings.plugins.footnote"),
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                 kContentLeft, kPluginHintTop, kContentWidth,
                 kPluginHintHeight, kPluginHintId);
@@ -1794,11 +1930,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             sink = &state->radialControls;
             int yRadial = kContentTop;
 
-            makeSection(L"触发方式", kSectionRadialTriggerId, kContentLeft,
+            makeSection(T("settings.section.trigger"), kSectionRadialTriggerId, kContentLeft,
                         yRadial, false);
 
             HWND radialEnabled = makeControl(
-                L"BUTTON", L"启用轮盘菜单",
+                L"BUTTON", T("settings.radial.enable"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTOCHECKBOX,
                 0, kContentLeft + 8, yRadial, kColumnWidth - 8, 20,
                 kRadialEnabledCheckId);
@@ -1813,21 +1949,24 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // ---- 一行三组：触发键 / 修饰键 / 抑制键 ----
             //
             // 三者描述同一件事（按住什么键、还要按下什么、什么情况下让路），
-            // 拆成两三行就看不出这层关系。列位置见 kRadialTriggerLabelX 一带
-            // 的注释：一行要塞 2 个下拉 + 4 个复选框，宽度按实际文字卡死。
-            makeLabel(L"触发键", kRadialTriggerLabelX, yRadial + 4,
-                      kRadialLabelWidthTight, 18);
+            // 拆成两三行就看不出这层关系。列位置按实测标签宽度依次排下来，
+            // 见 kRadialLabelWidthTight 一带的注释。
+            int triggerX = kContentLeft + 8;
+            const int triggerLabelW = labelWidth(T("settings.radial.triggerKey"));
+            makeLabel(T("settings.radial.triggerKey"), triggerX, yRadial + 4,
+                      triggerLabelW, 18);
+            triggerX += triggerLabelW;
             HWND radialButtonCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-                kRadialTriggerComboX, yRadial, kRadialTriggerComboW, 160,
+                triggerX, yRadial, kRadialTriggerComboW, 160,
                 kRadialButtonComboId);
             if (radialButtonCombo != nullptr) {
                 int index = 0;
                 for (int i = 0; i < kRadialButtonOptionCount; ++i) {
                     SendMessageW(radialButtonCombo, CB_ADDSTRING, 0,
                                  reinterpret_cast<LPARAM>(
-                                     kRadialButtonOptions[i].label));
+                                     T(kRadialButtonOptions[i].key)));
                     if (kRadialButtonOptions[i].value ==
                         state->radial.trigger.button) {
                         index = i;
@@ -1836,20 +1975,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 SendMessageW(radialButtonCombo, CB_SETCURSEL,
                              static_cast<WPARAM>(index), 0);
             }
+            triggerX += kRadialTriggerComboW + 6;
 
-            makeLabel(L"修饰键", kRadialModifierLabelX, yRadial + 4,
-                      kRadialLabelWidthTight, 18);
+            const int modifierLabelW = labelWidth(T("settings.radial.modifier"));
+            makeLabel(T("settings.radial.modifier"), triggerX, yRadial + 4,
+                      modifierLabelW, 18);
+            triggerX += modifierLabelW;
             HWND radialModifierCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-                kRadialModifierComboX, yRadial, kRadialModifierComboW, 160,
+                triggerX, yRadial, kRadialModifierComboW, 160,
                 kRadialModifierComboId);
             if (radialModifierCombo != nullptr) {
                 int index = 0;
                 for (int i = 0; i < kRadialModifierOptionCount; ++i) {
                     SendMessageW(radialModifierCombo, CB_ADDSTRING, 0,
                                  reinterpret_cast<LPARAM>(
-                                     kRadialModifierOptions[i].label));
+                                     T(kRadialModifierOptions[i].key)));
                     if (kRadialModifierOptions[i].value ==
                         state->radial.trigger.modifier) {
                         index = i;
@@ -1858,24 +2000,30 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 SendMessageW(radialModifierCombo, CB_SETCURSEL,
                              static_cast<WPARAM>(index), 0);
             }
+            triggerX += kRadialModifierComboW + 6;
 
             // 抑制键：按住这些键时轮盘一律不弹，鼠标事件原样放行。
             // 一个可勾选的下拉（自绘 + 列表子类化，见 suppressListProc）。
             // 标签带 ID：选修饰键时它要跟着下拉一起变灰。
-            makeControl(L"STATIC", L"抑制键", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
-                        kRadialSuppressLabelX, yRadial + 3,
-                        kRadialLabelWidthTight, 18, kRadialSuppressLabelId);
+            const int suppressLabelW = labelWidth(T("settings.radial.suppress"));
+            makeControl(L"STATIC", T("settings.radial.suppress"), WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                        triggerX, yRadial + 3,
+                        suppressLabelW, 18, kRadialSuppressLabelId);
+            triggerX += suppressLabelW;
+            // 剩下的宽度全给抑制键下拉，右边缘对齐内容区右界
+            const int suppressComboW =
+                (std::max)(120, kContentLeft + kColumnWidth - triggerX);
             HWND suppressCombo = makeControl(
                 L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
                     CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, 0,
-                kRadialSuppressComboX, yRadial, kRadialSuppressComboW, 160,
+                triggerX, yRadial, suppressComboW, 160,
                 kRadialSuppressComboId);
             initSuppressCombo(suppressCombo, state->radial);
             yRadial += 30;
 
             // 拖动阈值：超过这个距离才认为「用户是在做手势」而不是单击。
-            makeLabel(L"拖动启动", kContentLeft + 8, yRadial + 5,
+            makeLabel(T("settings.radial.dragThreshold"), kContentLeft + 8, yRadial + 5,
                       kLabelWidth - 8, 18);
             HWND thresholdSlider = makeControl(
                 TRACKBAR_CLASSW, L"",
@@ -1892,7 +2040,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             {
                 const std::wstring text =
                     std::to_wstring(state->radial.trigger.activationThresholdPx) +
-                    L" 像素";
+                    infrastructure::i18n::trw("unit.pixels");
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                             kContentLeft + kLabelWidth + kSliderValueOffset,
@@ -1901,7 +2049,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             yRadial += 30;
 
             // 外甩取消半径：拖出这个半径再松手 = 取消，不触发任何动作。
-            makeLabel(L"取消半径", kContentLeft + 8, yRadial + 5,
+            makeLabel(T("settings.radial.cancelRadius"), kContentLeft + 8, yRadial + 5,
                       kLabelWidth - 8, 18);
             HWND cancelSlider = makeControl(
                 TRACKBAR_CLASSW, L"",
@@ -1918,7 +2066,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             {
                 const std::wstring text =
                     std::to_wstring(state->radial.trigger.cancelRadiusPx) +
-                    L" 像素";
+                    infrastructure::i18n::trw("unit.pixels");
                 makeControl(L"STATIC", text.c_str(),
                             WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                             kContentLeft + kLabelWidth + kSliderValueOffset,
@@ -1926,7 +2074,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRadial += 28;
 
-            makeSection(L"扇区动作", kSectionRadialSectorId, kContentLeft,
+            makeSection(T("settings.section.sectors"), kSectionRadialSectorId, kContentLeft,
                         yRadial, true);
 
             HWND radialSummary = makeControl(
@@ -1935,7 +2083,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 kRadialSummaryId);
             yRadial += 24;
 
-            makeControl(L"BUTTON", L"编辑扇区动作…",
+            makeControl(L"BUTTON", T("settings.radial.edit"),
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                         kContentLeft + 8, yRadial, 118, 26, kRadialEditButtonId);
 
@@ -1943,33 +2091,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             //
             // 这些正是原先印在页面上的那几段灰字。措辞基本照搬，只是从
             // 「一直占着版面」改成「想知道才看」。
-            addTooltip(hwnd, radialEnabled,
-                       L"按住触发键拖出超过「拖动启动」的距离，就呼出轮盘；"
-                       L"原地单击不算手势，仍会补发原生按键。");
-            addTooltip(hwnd, radialButtonCombo,
-                       L"按住这个键拖动呼出轮盘。");
-            addTooltip(hwnd, radialModifierCombo,
-                       L"带修饰键（Ctrl / Shift / Alt）：只有「修饰键 + 触发键」"
-                       L"同时按下才呼出，单按触发键拖动会放行给 MouseInc 等"
-                       L"鼠标手势软件。\r\n"
-                       L"无：触发键由 KTile 独占 —— 原地单击仍补发原生按键，"
-                       L"拖动不再传给手势软件。\r\n"
-                       L"抑制键只在选「无」时可用：选了修饰键，「不按修饰键」"
-                       L"本身就是不触发，再叠一层抑制规则等于让同一个键既必须按、"
-                       L"又必须不按。");
-            addTooltip(hwnd, thresholdSlider,
-                       L"按下后移动超过这个距离才算手势。太小会被手抖误触，"
-                       L"太大则要拖半天才出轮盘。");
-            addTooltip(hwnd, cancelSlider,
-                       L"拖出这个半径再松手 = 取消，不触发任何动作。"
-                       L"必须大于「拖动启动」。");
-            addTooltip(hwnd, suppressCombo,
-                       L"按住其中任意一个键时，轮盘不弹、鼠标事件原样放行。"
-                       L"下拉可以连续勾选，点列表外面收起。\r\n"
-                       L"仅在修饰键为「无」时可用。");
-            addTooltip(hwnd, radialSummary,
-                       L"扇区动作与进程黑名单都在「编辑扇区动作」里改。\r\n"
-                       L"按应用显示不同轮盘由 slugin 插件目录提供，不在这里设。");
+            addTooltip(hwnd, radialEnabled, T("settings.radial.tip.enable"));
+            addTooltip(hwnd, radialButtonCombo, T("settings.radial.tip.triggerKey"));
+            addTooltip(hwnd, radialModifierCombo, T("settings.radial.tip.modifier"));
+            addTooltip(hwnd, thresholdSlider, T("settings.radial.tip.dragThreshold"));
+            addTooltip(hwnd, cancelSlider, T("settings.radial.tip.cancelRadius"));
+            addTooltip(hwnd, suppressCombo, T("settings.radial.tip.suppress"));
+            addTooltip(hwnd, radialSummary, T("settings.radial.tip.summary"));
 
             // 初始可用性：修饰键若是 Ctrl / Shift / Alt，抑制键一进来就该是灰的
             refreshRadialSuppressEnabled(hwnd);
@@ -1982,7 +2110,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             // 看清加载了哪些、看清某个为什么被跳过、一键打开那份 JSON。
             sink = &state->radialPluginControls;
 
-            makeLabel(L"每个应用一个子文件夹，内含 radial.json 与自己的图标。",
+            makeLabel(T("settings.radialPlugins.intro"),
                       kContentLeft, kPluginIntroTop, kContentWidth,
                       kPluginIntroHeight);
 
@@ -2005,8 +2133,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     int width;
                 };
                 const RadialColumnSpec columns[] = {
-                    {L"状态", 58}, {L"名称", 108}, {L"进程", 140},
-                    {L"扇区", 82}, {L"说明", 150},
+                    {T("settings.radialPlugins.col.status"), 58}, {T("common.name"), 108}, {T("settings.radialPlugins.col.processes"), 140},
+                    {T("settings.radialPlugins.col.sectors"), 82}, {T("settings.radialPlugins.col.note"), 150},
                 };
                 const int columnCount =
                     static_cast<int>(sizeof(columns) / sizeof(columns[0]));
@@ -2022,26 +2150,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
 
             makeControl(
-                L"BUTTON", L"打开 JSON…",
+                L"BUTTON", T("settings.radialPlugins.openJson"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft, kPluginButtonTop, kPluginButtonWidth,
                 kButtonHeight, kRadialPluginOpenJsonId);
             makeControl(
-                L"BUTTON", L"打开目录",
+                L"BUTTON", T("settings.plugins.openFolder"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft + kPluginButtonWidth + 8, kPluginButtonTop,
                 kPluginButtonWidth, kButtonHeight, kRadialPluginOpenFolderId);
             makeControl(
-                L"BUTTON", L"重新扫描",
+                L"BUTTON", T("settings.radialPlugins.rescan"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kContentLeft + (kPluginButtonWidth + 8) * 2, kPluginButtonTop,
                 kPluginButtonWidth, kButtonHeight, kRadialPluginRescanId);
 
             makeControl(
-                L"STATIC",
-                L"「打开 JSON」用系统默认编辑器改清单，改完点「重新扫描」生效。\r\n"
-                L"匹配只比进程名（大小写不敏感）；多个插件命中同一进程时\r\n"
-                L"priority 大的优先。图标放插件自己的 icons 目录，SVG 按 24×24 画布。",
+                L"STATIC", T("settings.radialPlugins.footnote"),
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                 kContentLeft, kPluginHintTop, kContentWidth,
                 kRadialPluginHintHeight, -1);
@@ -2065,13 +2190,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             sink = nullptr;
             const int buttonY = kDialogHeight - kMargin - kButtonHeight;
             makeControl(
-                L"BUTTON", L"确定",
+                L"BUTTON", T("common.ok"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0,
                 kDialogWidth - kMargin - 2 * kButtonWidth - 8, buttonY,
                 kButtonWidth, kButtonHeight, kOkId);
             makeControl(
-                L"BUTTON", L"取消",
+                L"BUTTON", T("common.cancel"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0,
                 kDialogWidth - kMargin - kButtonWidth, buttonY,
@@ -2140,7 +2265,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 if (!id.empty() && state->plugins != nullptr &&
                     state->plugins->addTile) {
                     state->plugins->addTile(base::wideToUtf8Lossy(id));
-                    MessageBoxW(hwnd, L"已添加到当前标签页。", L"插件管理",
+                    MessageBoxW(hwnd, T("settings.plugins.added"), T("settings.tab.plugins"),
                                 MB_OK | MB_ICONINFORMATION);
                 }
                 return 0;
@@ -2342,9 +2467,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     OPENFILENAMEW ofn{};
                     ofn.lStructSize = sizeof(ofn);
                     ofn.hwndOwner = hwnd;
-                    ofn.lpstrFilter =
-                        L"插件清单 (plugin.json)\\0plugin.json\\0"
-                        L"所有文件\\0*.*\\0";
+                    // 过滤器里 \0 是分隔符，所以只能拼：描述 + \0 + 通配 + \0...
+                    const std::wstring manifestFilter =
+                        infrastructure::i18n::trw("filter.pluginManifest") +
+                        L'\0' + L"plugin.json" + L'\0' +
+                        infrastructure::i18n::trw("filter.allFiles") +
+                        L'\0' + L"*.*" + L'\0';
+                    ofn.lpstrFilter = manifestFilter.c_str();
                     ofn.lpstrFile = file;
                     ofn.nMaxFile = MAX_PATH;
                     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
@@ -2354,9 +2483,12 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                             refreshPluginList(hwnd, state);
                         } else {
                             const std::wstring failureText = base::utf8ToWide(
-                                error.empty() ? std::string("安装失败") : error);
+                                error.empty()
+                                    ? std::string(infrastructure::i18n::tr(
+                                          "settings.plugins.installFailedShort"))
+                                    : error);
                             MessageBoxW(hwnd, failureText.c_str(),
-                                        L"安装插件失败",
+                                        T("settings.plugins.installFailed"),
                                         MB_OK | MB_ICONWARNING);
                         }
                     }
@@ -2382,23 +2514,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     return 0;
                 }
                 if (id.empty()) {
-                    MessageBoxW(hwnd, L"请先在列表中选择一个插件。",
-                                L"插件管理", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(hwnd, T("settings.plugins.selectFirst"),
+                                T("settings.tab.plugins"), MB_OK | MB_ICONINFORMATION);
                     return 0;
                 }
                 if (controlId == kPluginAddTileId) {
                     if (state->plugins->addTile) {
                         state->plugins->addTile(base::wideToUtf8Lossy(id));
-                        MessageBoxW(hwnd, L"已添加到当前标签页。",
-                                    L"插件管理", MB_OK | MB_ICONINFORMATION);
+                        MessageBoxW(hwnd, T("settings.plugins.added"),
+                                    T("settings.tab.plugins"), MB_OK | MB_ICONINFORMATION);
                     }
                     return 0;
                 }
 
                 const std::wstring question =
-                    L"确定删除插件「" + id +
-                    L"」？\r\n整个插件目录会被移除，且不可恢复。";
-                if (MessageBoxW(hwnd, question.c_str(), L"删除插件",
+                    infrastructure::i18n::formatW(
+                        "settings.plugins.removeConfirm", {id});
+                if (MessageBoxW(hwnd, question.c_str(), T("settings.plugins.remove"),
                                 MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
                     IDYES) {
                     return 0;
@@ -2409,8 +2541,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     refreshPluginList(hwnd, state);
                 } else {
                     const std::wstring failureText = base::utf8ToWide(
-                        error.empty() ? std::string("删除失败") : error);
-                    MessageBoxW(hwnd, failureText.c_str(), L"删除插件失败",
+                        error.empty()
+                            ? std::string(infrastructure::i18n::tr(
+                                  "settings.plugins.removeFailedShort"))
+                            : error);
+                    MessageBoxW(hwnd, failureText.c_str(), T("settings.plugins.removeFailed"),
                                 MB_OK | MB_ICONWARNING);
                 }
                 return 0;
@@ -2424,8 +2559,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             if (controlId == kThemeComboId && notification == CBN_SELCHANGE) {
                 if (state != nullptr && state->preview != nullptr &&
                     state->preview->themeChanged) {
-                    const std::wstring name =
-                        comboSelectedText(hwnd, kThemeComboId);
+                    const std::wstring name = ui::canonicalThemeName(
+                        comboSelectedText(hwnd, kThemeComboId));
                     if (!name.empty()) {
                         state->preview->themeChanged(
                             base::wideToUtf8Lossy(name));
@@ -2457,9 +2592,13 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     OPENFILENAMEW ofn{};
                     ofn.lStructSize = sizeof(ofn);
                     ofn.hwndOwner = hwnd;
-                    ofn.lpstrFilter =
-                        L"图片文件\\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\\0"
-                        L"所有文件\\0*.*\\0";
+                    // 过滤器里 NUL 是分隔符，只能运行时拼（文案来自语言文件）
+                    const std::wstring imageFilter =
+                        infrastructure::i18n::trw("filter.images") + L'\0' +
+                        L"*.png;*.jpg;*.jpeg;*.bmp;*.gif" + L'\0' +
+                        infrastructure::i18n::trw("filter.allFiles") + L'\0' +
+                        L"*.*" + L'\0';
+                    ofn.lpstrFilter = imageFilter.c_str();
                     ofn.lpstrFile = file;
                     ofn.nMaxFile = MAX_PATH;
                     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
@@ -2585,6 +2724,17 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         }
                     }
 
+                    // ---- 语言 ----
+                    //
+                    // 只在与初值不同时才回传：应用层据此判断要不要落盘 +
+                    // 重新取词。值本身可以是 "auto"（跟随系统）。
+                    {
+                        const std::string language = selectedLanguageCode(hwnd);
+                        if (language != state->initialLanguage) {
+                            state->result.language = language;
+                        }
+                    }
+
                     // ---- 标签栏位置（单选）----
                     HWND tabBottom = GetDlgItem(hwnd, kTabBottomRadioId);
                     if (tabBottom != nullptr) {
@@ -2613,8 +2763,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     }
 
                     // ---- 皮肤 ----
-                    const std::wstring themeName =
-                        comboSelectedText(hwnd, kThemeComboId);
+                    const std::wstring themeName = ui::canonicalThemeName(
+                        comboSelectedText(hwnd, kThemeComboId));
                     if (!themeName.empty() &&
                         themeName != state->initialThemeName) {
                         state->result.themeName =
@@ -2878,7 +3028,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                         : kRadialCancelValueId;
                 HWND label = GetDlgItem(hwnd, valueId);
                 if (label != nullptr) {
-                    const std::wstring text = std::to_wstring(value) + L" 像素";
+                    const std::wstring text = std::to_wstring(value) + infrastructure::i18n::trw("unit.pixels");
                     SetWindowTextW(label, text.c_str());
                 }
                 return 0;
@@ -3132,6 +3282,7 @@ bool showSettingsWindow(HWND owner,
                         bool currentTabBarAtBottom,
                         core::WindowPlacement currentWindowPlacement,
                         const std::string& currentThemeName,
+                        const std::string& currentLanguage,
                         const bool currentStartup,
                         const core::HotkeyPreset currentHotkeyPreset,
                         const int currentWindowOpacity,
@@ -3170,6 +3321,7 @@ bool showSettingsWindow(HWND owner,
     state.initialTabBarAtBottom = currentTabBarAtBottom;
     state.initialWindowPlacement = currentWindowPlacement;
     state.initialThemeName = base::utf8ToWide(currentThemeName);
+    state.initialLanguage.assign(currentLanguage);
     state.initialStartup = currentStartup;
     state.initialHotkeyPreset = currentHotkeyPreset;
     state.initialWindowOpacity = currentWindowOpacity;
@@ -3194,7 +3346,7 @@ bool showSettingsWindow(HWND owner,
     HWND dialog = CreateWindowExW(
         exStyle,
         kSettingsDialogClass,
-        L"KTile 设置",
+        T("settings.windowTitle"),
         style,
         0, 0,
         desired.right - desired.left,

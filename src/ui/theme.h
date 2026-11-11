@@ -1,4 +1,4 @@
-// KTile - 皮肤（配色主题）
+﻿// KTile - 皮肤（配色主题）
 //
 // 设计取舍：
 //
@@ -183,6 +183,14 @@ bool loadThemeByName(const std::wstring& displayName, ThemeColors* out);
 
 // 内置预置（同时用于生成文件与「配置里的皮肤名失效时」的回落）
 const std::vector<std::pair<std::wstring, ThemeColors>>& builtinPresets();
+
+// 内置皮肤的显示名 / 反向还原。
+//
+// config.json 里存的是**规范名**（builtinPresets 的 first，如「经典深空」），
+// 只有这样切语言时已选的皮肤才不会丢；界面上下拉里显示的才是译文。
+// 自定义皮肤（themes\*.json）不翻译：名字是用户起的。
+std::wstring themeDisplayName(const std::wstring& canonicalName);
+std::wstring canonicalThemeName(const std::wstring& displayName);
 
 // 导入背景图：复制进 backgrounds 目录（哈希命名，内容不变不重复复制），
 // 返回相对 data 的存储值（形如 "themes\backgrounds\xxx.jpg"），失败返回空串

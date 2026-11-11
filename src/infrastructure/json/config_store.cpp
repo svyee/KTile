@@ -156,6 +156,7 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     writer.member("schemaVersion",
                   static_cast<std::uint32_t>(config.schemaVersion));
     writer.member("loggingEnabled", config.loggingEnabled);
+    writer.member("language", config.language);
 
     // ---- appearance ----
     writer.key("appearance").beginObject();
@@ -398,6 +399,11 @@ ConfigStore::deserializeConfig(const std::string& text) {
     result.value.schemaVersion =
         root.find("schemaVersion").asUint32(core::kCurrentSchemaVersion);
     result.value.loggingEnabled = root.find("loggingEnabled").asBool(true);
+    result.value.language = root.find("language").asString();
+    if (result.value.language.empty()) {
+        // 老配置文件没有这一项：按「跟随系统」处理，与首次运行一致
+        result.value.language = "auto";
+    }
 
     const JsonValue& appearance = root.find("appearance");
     if (appearance.isObject()) {

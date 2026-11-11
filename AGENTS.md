@@ -13,6 +13,8 @@ KTile 是一个 Windows 原生磁贴式快速启动器：按热键唤出面板�
 - 目标平台：Windows 7 SP1 ~ Windows 11（x64）
 - 产物：单个 `KTile.exe`，静态链接 `/MT`，约 1.2 MB，无外部运行库
 - 运行时数据：exe 同级的 `data/`（`items.json`、`config.json`、`themes/`、`res/`）
+- 界面语言：exe 同级的 `lang/<code>.json`（`zh-Hans` / `en`），加语言 = 加文件，
+  不改代码不重新编译（见 `docs/i18n.md`）
 - 第三方依赖：**没有**。JSON 自研，UI 只用系统自带的 Direct2D / DirectWrite / WIC
 
 ## 2. 常用命令
@@ -110,12 +112,26 @@ KTile 是一个 Windows 原生磁贴式快速启动器：按热键唤出面板�
 - 不提交 `build/`、`data/`（`data/themes/*.json` 例外）、`*.exe`、`*.obj`。
 - 不提交真实用户数据、绝对路径配置、日志和截图产物。
 
+### 3.7 界面文案一律进语言文件
+
+- 任何用户能看到的字（窗口标题、控件、菜单、提示框、错误消息）都必须走
+  `infrastructure/i18n.h` 取词，禁止在 `.cpp` 里写中文字面量。
+- 改文案 = 改 `lang/*.json`，**两份文件的 key 集合必须完全一致**（
+  `tests/test_i18n.cpp` 会比对，缺一条就失败）。
+- 不拼句子：整句进一条 key，用 `{0}` `{1}` 占位符留空。
+- `trw()` / `tr()` 返回字典里的引用，要存下来必须拷贝。
+- 例外（保持中文，不在语言文件里）：日志、JSON 解析错误、插件 HTTP / 子进程
+  细节、`plugin.json` 清单校验错误、`core` 里的规范名、字体名与版权行。
+  理由见 `docs/i18n.md` 第 5 节。
+- 语言文件跟着 exe 走（`<exe>\lang`），**不放 `data/`**：它属于程序资源，
+  与 `plugin/`、`slugin/` 同级；用户在 `data/` 里清数据不该把界面变成 key。
+
 ## 4. 分层架构与依赖方向
 
 ```
 base/           C++17 兼容层 + 编码转换（expected / span / algo / text_convert）
 core/           领域层：数据模型、跨度布局、搜索、项目/标签操作、轮盘几何
-infrastructure/ 持久化：JSON 解析与写入、便携路径
+infrastructure/ 持久化：JSON 解析与写入、便携路径、多语言（i18n）
 platform/win32/ 平台层：Win32 / D2D / WIC / 拖放 / 热键 / 图标
 ui/             界面层：主窗口、编辑对话框、设置、皮肤、轮盘窗口/编辑器
 app/            组装与生命周期
@@ -130,6 +146,9 @@ app/            组装与生命周期
 - `platform/win32`：可依赖 `core` / `base` / Win32；禁止依赖 `ui` / `app`。
 - `ui`：可依赖 `base` / `core` / `platform` / `infrastructure`；禁止依赖 `app`。
 - `app`：唯一可以组装所有层的层。
+- `infrastructure/i18n`：叶子模块，只依赖 `json_parser` + `base/text_convert`。
+  `infrastructure` / `platform` / `ui` / `app` 都可以用它取词；**`core` 不行**，
+  所以 core 只提供「显示名的 key」（`tileSizeLabelKey` 这类），由 UI 层翻译。
 
 判断标准：新增逻辑若不需要窗口、不需要 Win32 句柄，就应放 `core` 并补单元测试。
 
@@ -209,6 +228,8 @@ app/            组装与生命周期
 - [ ] 新增 `.cpp` 已加入 `build.ps1` 对应列表
 - [ ] 未使用 C++20 / Win8+ API / 新增第三方依赖
 - [ ] 用户可见改动已写入 `CHANGELOG.md`
+- [ ] 新增 / 修改的界面文案已同时写进 `lang/zh-Hans.json` 与 `lang/en.json`
+      （两边 key 集合一致，由 `test_i18n` 兜底）
 - [ ] 数据模型变更已递增 `schemaVersion` 并提供迁移
 - [ ] 新资源路径使用 data 目录相对路径
 - [ ] 未混入 `build/`、`data/`、日志或截图产物
@@ -294,5 +315,9 @@ app/            组装与生命周期
 | `src/platform/win32/global_hotkey.{h,cpp}` | 注册热键 + 低级键盘钩子手势 |
 | `src/platform/win32/icon_loader.cpp` | Shell / 商店应用图标提取 |
 | `src/platform/win32/icon_store.cpp` | 自定义图标导入、缩放、PNG 落盘 |
+| `src/infrastructure/i18n.{h,cpp}` | 多语言：扫描 `lang/*.json`、回退链、占位符替换 |
+| `src/ui/builtin_labels.h` | 内置系统项的译名（key 由 item id 派生） |
+| `lang/zh-Hans.json` `lang/en.json` | 语言文件（key 集合必须一致） |
+| `docs/i18n.md` | 多语言设计、key 命名、加语言的步骤 |
 | `docs/environment-report.md` | 工具链与 Win7 兼容性的实机验证结论 |
 | `CHANGELOG.md` | 版本记录与未发布改动 |

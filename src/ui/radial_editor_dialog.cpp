@@ -1,10 +1,12 @@
-// KTile - UI 层：轮盘菜单编辑器（实现）
+﻿// KTile - UI 层：轮盘菜单编辑器（实现）
 //
 // 界面分两页（左上角两枚按钮切换）：
 //   扇区动作 —— 左列轮盘方案列表，右侧该方案的扇区列表 + 选中扇区的动作表单；
 //   按应用   —— 进程名 → 方案 的映射表，匹配不到时回退全局默认。
 //
 #include "ui/radial_editor_dialog.h"
+
+#include "ui/builtin_labels.h"
 
 #include "base/text_convert.h"
 #include "core/builtin_items.h"
@@ -77,36 +79,36 @@ constexpr const wchar_t* kPropTabFont = L"KTileRadialTabFont";
 // 动作类型下拉的七项。第 0 项是「空」——空槽位在数据模型里是一个
 // isEmpty() 的动作，界面上必须能明确选到它，否则用户没法把配错的扇区清空。
 struct ActionTypeOption {
-    const wchar_t* label;
+    const char* key;   // 语言文件 key（文案不放表里）
     bool empty;
     core::RadialActionType type;
 };
 
 const ActionTypeOption kActionTypes[] = {
-    {L"（空）", true, core::RadialActionType::Application},
-    {L"程序", false, core::RadialActionType::Application},
-    {L"文件", false, core::RadialActionType::File},
-    {L"文件夹", false, core::RadialActionType::Folder},
-    {L"网址", false, core::RadialActionType::Url},
-    {L"快捷键", false, core::RadialActionType::Shortcut},
-    {L"内置命令", false, core::RadialActionType::Builtin},
+    {"radial.action.empty", true, core::RadialActionType::Application},
+    {"radial.action.application", false, core::RadialActionType::Application},
+    {"radial.action.file", false, core::RadialActionType::File},
+    {"radial.action.folder", false, core::RadialActionType::Folder},
+    {"radial.action.url", false, core::RadialActionType::Url},
+    {"radial.action.shortcut", false, core::RadialActionType::Shortcut},
+    {"radial.action.builtin", false, core::RadialActionType::Builtin},
 };
 constexpr int kActionTypeCount =
     static_cast<int>(sizeof(kActionTypes) / sizeof(kActionTypes[0]));
 
 // 修饰键下拉（第 0 项 = 无）
 struct ModifierOption {
-    const wchar_t* label;
+    const char* key;
     bool none;
     core::HotkeyModifier modifier;
 };
 
 const ModifierOption kModifiers[] = {
-    {L"无", true, core::HotkeyModifier::Control},
-    {L"Ctrl", false, core::HotkeyModifier::Control},
-    {L"Shift", false, core::HotkeyModifier::Shift},
-    {L"Alt", false, core::HotkeyModifier::Alt},
-    {L"Win", false, core::HotkeyModifier::Win},
+    {"common.none", true, core::HotkeyModifier::Control},
+    {"key.ctrl", false, core::HotkeyModifier::Control},
+    {"key.shift", false, core::HotkeyModifier::Shift},
+    {"key.alt", false, core::HotkeyModifier::Alt},
+    {"key.win", false, core::HotkeyModifier::Win},
 };
 constexpr int kModifierCount =
     static_cast<int>(sizeof(kModifiers) / sizeof(kModifiers[0]));
@@ -182,12 +184,15 @@ std::wstring trimWide(const std::wstring& text) {
 //
 // 表里只有八个方位，4/6/8 扇区都就近取整 —— 用户看的是「我要往下拖」，
 // 精确角度对操作没有帮助，八个方位已经够指路。
-const wchar_t* sectorDirectionName(const std::uint8_t index,
-                                   const std::uint8_t count) {
-    static const wchar_t* kNames[] = {L"上", L"右上", L"右", L"右下",
-                                      L"下", L"左下", L"左", L"左上"};
+std::wstring sectorDirectionName(const std::uint8_t index,
+                                 const std::uint8_t count) {
+    static const char* kKeys[] = {
+        "radial.sector.up",    "radial.sector.upRight",
+        "radial.sector.right", "radial.sector.downRight",
+        "radial.sector.down",  "radial.sector.downLeft",
+        "radial.sector.left",  "radial.sector.upLeft"};
     if (count == 0) {
-        return kNames[0];
+        return infrastructure::i18n::trw(kKeys[0]);
     }
     const float angle = 360.0F * static_cast<float>(index) /
                         static_cast<float>(count);
@@ -195,22 +200,28 @@ const wchar_t* sectorDirectionName(const std::uint8_t index,
     if (slot < 0) {
         slot += 8;
     }
-    return kNames[slot];
+    return infrastructure::i18n::trw(kKeys[slot]);
 }
 
 const wchar_t* actionTypeLabel(const core::RadialAction& action) {
     if (action.isEmpty()) {
-        return L"（空）";
+        return infrastructure::i18n::trw("radial.action.empty").c_str();
     }
     switch (action.type) {
-        case core::RadialActionType::Application: return L"程序";
-        case core::RadialActionType::File:        return L"文件";
-        case core::RadialActionType::Folder:      return L"文件夹";
-        case core::RadialActionType::Url:         return L"网址";
-        case core::RadialActionType::Shortcut:    return L"快捷键";
-        case core::RadialActionType::Builtin:     return L"内置命令";
+        case core::RadialActionType::Application:
+            return infrastructure::i18n::trw("radial.action.application").c_str();
+        case core::RadialActionType::File:
+            return infrastructure::i18n::trw("radial.action.file").c_str();
+        case core::RadialActionType::Folder:
+            return infrastructure::i18n::trw("radial.action.folder").c_str();
+        case core::RadialActionType::Url:
+            return infrastructure::i18n::trw("radial.action.url").c_str();
+        case core::RadialActionType::Shortcut:
+            return infrastructure::i18n::trw("radial.action.shortcut").c_str();
+        case core::RadialActionType::Builtin:
+            return infrastructure::i18n::trw("radial.action.builtin").c_str();
     }
-    return L"程序";
+    return infrastructure::i18n::trw("radial.action.application").c_str();
 }
 
 // 动作的「目标」列显示什么：快捷键显示组合键，其余显示 target
@@ -232,11 +243,11 @@ std::wstring actionTargetLabel(const core::RadialAction& action) {
         return text;
     }
     if (action.type == core::RadialActionType::Builtin) {
-        // 目标存的是 "ktile:<id>"，界面上只显示中文名更好认
+        // 目标存的是 "ktile:<id>"，界面上显示本地化的名字更好认
         const std::wstring target = base::utf8ToWide(action.target);
         for (const auto& item : core::builtinItems()) {
             if (std::wstring(item.target) == target) {
-                return std::wstring(item.name);
+                return builtinItemDisplayName(item);
             }
         }
         return target;
@@ -333,20 +344,20 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
     std::wstring text;
     const core::RadialMenu* menu = currentMenu(state);
     if (menu == nullptr) {
-        text = L"先在左侧新建一个轮盘方案。";
+        text = infrastructure::i18n::trw("radialedit.hint.noProfile").c_str();
     } else if (state->currentSector < 0) {
-        text = L"选中上方扇区后即可编辑它的动作。";
+        text = infrastructure::i18n::trw("radialedit.hint.selectSector").c_str();
     } else if (const core::RadialAction* action = currentAction(state)) {
         if (action->isEmpty()) {
-            text = L"该扇区为空，拖动到这里不会触发任何动作。";
+            text = infrastructure::i18n::trw("radialedit.hint.emptySector").c_str();
         } else if (action->type == core::RadialActionType::Shortcut) {
-            text = L"快捷键动作会注入到当前前台窗口，例如复制 = Ctrl + C。";
+            text = infrastructure::i18n::trw("radialedit.hint.shortcut").c_str();
         } else if (action->type == core::RadialActionType::Builtin) {
-            text = L"内置命令：点「选择…」从系统项列表里挑，不用手写 id。";
+            text = infrastructure::i18n::trw("radialedit.hint.builtin").c_str();
         } else if (action->type == core::RadialActionType::Url) {
-            text = L"网址动作会交给默认浏览器打开。";
+            text = infrastructure::i18n::trw("radialedit.hint.url").c_str();
         } else {
-            text = L"「选择…」挑文件或文件夹；也可以直接粘贴路径。";
+            text = infrastructure::i18n::trw("radialedit.hint.file").c_str();
         }
     }
     setControlText(dialog, kActionStateHintId, text);
@@ -590,15 +601,17 @@ void pickBuiltinAction(HWND dialog, RadialEditorState* state) {
     std::wstring currentCategory;
     int commandId = 1;
     for (const auto& item : core::builtinItems()) {
+        // 分组判定用规范名，显示用译文
         const std::wstring category(item.category);
         if (category != currentCategory) {
             if (!currentCategory.empty()) {
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             }
-            AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, category.c_str());
+            const std::wstring shown = builtinCategoryDisplayName(item.category);
+            AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, shown.c_str());
             currentCategory = category;
         }
-        const std::wstring name(item.name);
+        const std::wstring name = builtinItemDisplayName(item);
         AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(commandId),
                     name.c_str());
         targets.push_back(std::wstring(item.target));
@@ -622,7 +635,8 @@ void pickBuiltinAction(HWND dialog, RadialEditorState* state) {
     if (trimWide(controlText(dialog, kActionNameEditId)).empty()) {
         for (const auto& item : core::builtinItems()) {
             if (std::wstring(item.target) == target) {
-                setControlText(dialog, kActionNameEditId, item.name);
+                setControlText(dialog, kActionNameEditId,
+                               builtinItemDisplayName(item));
                 break;
             }
         }
@@ -659,7 +673,7 @@ void pickTargetPath(HWND dialog, RadialEditorState* state) {
     if (type == core::RadialActionType::Folder) {
         BROWSEINFOW browse{};
         browse.hwndOwner = dialog;
-        browse.lpszTitle = L"选择文件夹";
+        browse.lpszTitle = infrastructure::i18n::trw("radialedit.chooseFolderTitle").c_str();
         browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
         LPITEMIDLIST idList = SHBrowseForFolderW(&browse);
         if (idList == nullptr) {
@@ -686,8 +700,13 @@ void pickTargetPath(HWND dialog, RadialEditorState* state) {
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = dialog;
-    ofn.lpstrFilter =
-        L"程序 (*.exe;*.lnk;*.bat)\\0*.exe;*.lnk;*.bat\\0所有文件\\0*.*\\0";
+    // 过滤器用 NUL 分隔，只能运行时拼；文案来自语言文件。
+    const std::wstring programFilter =
+        infrastructure::i18n::trw("filter.program") + L'\0' +
+        L"*.exe;*.lnk;*.bat" + L'\0' +
+        infrastructure::i18n::trw("filter.allFiles") + L'\0' +
+        L"*.*" + L'\0';
+    ofn.lpstrFilter = programFilter.c_str();
     ofn.lpstrFile = file;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
@@ -776,28 +795,28 @@ void createControls(HWND hwnd, RadialEditorState* state) {
 
     // ---- 顶部两枚页签（自绘：选中页画成强调色主按钮）----
     sink = nullptr;
-    makeControl(L"BUTTON", L"扇区动作",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.tab.sectors").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_OWNERDRAW,
                 0, kTabLeft, 14, 96, kButtonHeight, kTabSectorsId);
-    makeControl(L"BUTTON", L"黑名单",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.tab.blacklist").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kTabLeft + 104, 14, 96, kButtonHeight, kTabProfilesId);
 
     // ==================== 第 1 页：扇区动作 ====================
     sink = &state->sectorPageControls;
 
-    makeLabel(L"扇区数", kRightLeft, 44, 44, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.sectorCount").c_str(), kRightLeft, 44, 44, 18);
     HWND countCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
         kRightLeft + 48, 40, 90, 160, kSectorCountComboId);
     if (countCombo != nullptr) {
         SendMessageW(countCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"4 扇区"));
+                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw("radialedit.sectors.4").c_str()));
         SendMessageW(countCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"6 扇区"));
+                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw("radialedit.sectors.6").c_str()));
         SendMessageW(countCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"8 扇区"));
+                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw("radialedit.sectors.8").c_str()));
         SendMessageW(countCombo, CB_SETCURSEL, 2, 0);
     }
 
@@ -817,10 +836,10 @@ void createControls(HWND hwnd, RadialEditorState* state) {
         // 「目标」列吃满剩余宽度：列表加宽后固定列宽会在右边留一条空白，
         // 视觉上像多了一列空表头。
         const ColumnSpec columns[] = {
-            {L"扇区", 92},
-            {L"类型", 84},
-            {L"名称", 120},
-            {L"目标", kRightWidth - 92 - 84 - 120 - 8},
+            {infrastructure::i18n::trw("radialedit.col.sector").c_str(), 92},
+            {infrastructure::i18n::trw("radialedit.col.type").c_str(), 84},
+            {infrastructure::i18n::trw("radialedit.col.name").c_str(), 120},
+            {infrastructure::i18n::trw("radialedit.col.target").c_str(), kRightWidth - 92 - 84 - 120 - 8},
         };
         const int columnCount =
             static_cast<int>(sizeof(columns) / sizeof(columns[0]));
@@ -836,7 +855,7 @@ void createControls(HWND hwnd, RadialEditorState* state) {
 
     // ---- 动作表单 ----
     const int formTop = kSectorListTop + kSectorListHeight + 12;  // 296
-    makeLabel(L"类型", kRightLeft, formTop + 4, 30, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.col.type").c_str(), kRightLeft, formTop + 4, 30, 18);
     HWND typeCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
@@ -844,18 +863,18 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     if (typeCombo != nullptr) {
         for (int i = 0; i < kActionTypeCount; ++i) {
             SendMessageW(typeCombo, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(kActionTypes[i].label));
+                         reinterpret_cast<LPARAM>(infrastructure::i18n::trw(kActionTypes[i].key).c_str()));
         }
         SendMessageW(typeCombo, CB_SETCURSEL, 0, 0);
     }
 
-    makeLabel(L"名称", kRightLeft + 144, formTop + 4, 32, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.col.name").c_str(), kRightLeft + 144, formTop + 4, 32, 18);
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 WS_EX_CLIENTEDGE, kRightLeft + 180, formTop - 2, 140, 24,
                 kActionNameEditId);
 
-    makeLabel(L"修饰键", kRightLeft + 332, formTop + 4, 44, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.modifier").c_str(), kRightLeft + 332, formTop + 4, 44, 18);
     HWND modifierCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
@@ -863,29 +882,29 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     if (modifierCombo != nullptr) {
         for (int i = 0; i < kModifierCount; ++i) {
             SendMessageW(modifierCombo, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(kModifiers[i].label));
+                         reinterpret_cast<LPARAM>(infrastructure::i18n::trw(kModifiers[i].key).c_str()));
         }
         SendMessageW(modifierCombo, CB_SETCURSEL, 0, 0);
     }
 
     const int targetTop = formTop + 34;
-    makeLabel(L"目标", kRightLeft, targetTop + 4, 30, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.col.target").c_str(), kRightLeft, targetTop + 4, 30, 18);
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 WS_EX_CLIENTEDGE, kRightLeft + 32, targetTop - 2, 300, 24,
                 kActionTargetEditId);
-    makeControl(L"BUTTON", L"选择…",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.choose").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kRightLeft + 340, targetTop - 2, 64, kSmallButtonHeight,
                 kActionPickId);
 
     const int keyTop = targetTop + 34;
-    makeLabel(L"主键", kRightLeft, keyTop + 4, 30, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.key").c_str(), kRightLeft, keyTop + 4, 30, 18);
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 WS_EX_CLIENTEDGE, kRightLeft + 32, keyTop - 2, 60, 24,
                 kActionKeyEditId);
-    makeControl(L"STATIC", L"例如 C / F4 / Space，仅「快捷键」类型生效。",
+    makeControl(L"STATIC", infrastructure::i18n::trw("radialedit.keyHint").c_str(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kRightLeft + 100,
                 keyTop + 2, 380, 18, kActionKeyHintId);
 
@@ -907,23 +926,23 @@ void createControls(HWND hwnd, RadialEditorState* state) {
             profileList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-        column.pszText = const_cast<LPWSTR>(L"进程名（这些程序里不弹轮盘）");
+        column.pszText = const_cast<LPWSTR>(infrastructure::i18n::trw("radialedit.blacklistColumn").c_str());
         column.cx = scaleFor(hwnd, kDialogWidth - 2 * kMargin - 8);
         column.fmt = LVCFMT_LEFT;
         ListView_InsertColumn(profileList, 0, &column);
     }
 
     const int profileFormTop = 294;
-    makeLabel(L"进程名", kMargin, profileFormTop + 4, 48, 18);
+    makeLabel(infrastructure::i18n::trw("radialedit.processName").c_str(), kMargin, profileFormTop + 4, 48, 18);
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 WS_EX_CLIENTEDGE, kMargin + 52, profileFormTop - 2, 260, 24,
                 kBlacklistEditId);
-    makeControl(L"BUTTON", L"添加 / 更新",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.addOrUpdate").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kMargin + 324, profileFormTop - 2, 110, kSmallButtonHeight,
                 kBlacklistAddId);
-    makeControl(L"BUTTON", L"删除选中",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.removeSelected").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kMargin + 442, profileFormTop - 2, 90, kSmallButtonHeight,
                 kBlacklistDeleteId);
@@ -931,21 +950,18 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     // 说明按四行给高度：150% 缩放下这段中文会折到第四行，给少了末尾会被裁掉
     makeControl(
         L"STATIC",
-        L"只按进程名整名匹配、不区分大小写（如 chrome.exe），不支持通配符。\r\n"
-        L"命中后鼠标事件完全放行：该应用里的右键菜单、鼠标手势都不受影响。\r\n"
-        L"少数 UWP 应用的进程名统一是 ApplicationFrameHost.exe，拉黑会连带"
-        L"全部 UWP 应用。",
+        infrastructure::i18n::trw("radialedit.blacklistHint").c_str(),
         WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kMargin, profileFormTop + 34,
         kDialogWidth - 2 * kMargin, 72, kBlacklistHintId);
 
     // ---- 底部按钮 ----
     sink = nullptr;
     const int buttonY = kDialogHeight - kMargin - kButtonHeight;
-    makeControl(L"BUTTON", L"确定",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("common.ok").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kDialogWidth - kMargin - 2 * kButtonWidth - 8, buttonY,
                 kButtonWidth, kButtonHeight, kOkId);
-    makeControl(L"BUTTON", L"取消",
+    makeControl(L"BUTTON", infrastructure::i18n::trw("common.cancel").c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                 kDialogWidth - kMargin - kButtonWidth, buttonY, kButtonWidth,
                 kButtonHeight, kCancelId);
@@ -1167,8 +1183,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                 const std::wstring process =
                     trimWide(controlText(hwnd, kBlacklistEditId));
                 if (process.empty()) {
-                    MessageBoxW(hwnd, L"请先填写进程名，例如 game.exe。",
-                                L"黑名单", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(hwnd, infrastructure::i18n::trw("radialedit.needProcess").c_str(),
+                                infrastructure::i18n::trw("radialedit.tab.blacklist").c_str(), MB_OK | MB_ICONINFORMATION);
                     return 0;
                 }
                 const std::string pattern = base::wideToUtf8Lossy(process);
@@ -1186,8 +1202,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                     if (editing && i == slot) continue;
                     if (core::processNameEquals(state->draft.blacklist[i],
                                                 pattern)) {
-                        MessageBoxW(hwnd, L"这个进程名已经在列表里了。",
-                                    L"黑名单", MB_OK | MB_ICONINFORMATION);
+                        MessageBoxW(hwnd, infrastructure::i18n::trw("radialedit.duplicateProcess").c_str(),
+                                    infrastructure::i18n::trw("radialedit.tab.blacklist").c_str(), MB_OK | MB_ICONINFORMATION);
                         return 0;
                     }
                 }
@@ -1208,8 +1224,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                 if (state->currentProfile < 0 ||
                     static_cast<std::size_t>(state->currentProfile) >=
                         state->draft.blacklist.size()) {
-                    MessageBoxW(hwnd, L"请先在列表中选择要删除的进程。",
-                                L"黑名单", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(hwnd, infrastructure::i18n::trw("radialedit.selectToRemove").c_str(),
+                                infrastructure::i18n::trw("radialedit.tab.blacklist").c_str(), MB_OK | MB_ICONINFORMATION);
                     return 0;
                 }
                 state->draft.blacklist.erase(
@@ -1278,7 +1294,7 @@ bool showRadialEditorWindow(HWND owner, core::RadialConfig* config) {
     const DWORD exStyle = WS_EX_DLGMODALFRAME;
     AdjustWindowRectEx(&desired, style, FALSE, exStyle);
 
-    HWND dialog = CreateWindowExW(exStyle, kEditorClass, L"轮盘菜单设置",
+    HWND dialog = CreateWindowExW(exStyle, kEditorClass, infrastructure::i18n::trw("radialedit.title").c_str(),
                                   style, 0, 0, desired.right - desired.left,
                                   desired.bottom - desired.top, owner, nullptr,
                                   instance, &state);

@@ -1,5 +1,7 @@
-// KTile - Win32 平台层：开机自启动实现
+﻿// KTile - Win32 平台层：开机自启动实现
 #include "platform/win32/startup_registration.h"
+
+#include "infrastructure/i18n.h"
 
 #include <Windows.h>
 
@@ -78,7 +80,8 @@ Win32Status StartupRegistration::enable(const std::wstring& valueName,
         nullptr);
     if (createStatus != ERROR_SUCCESS) {
         return base::makeUnexpected(Win32Error(
-            static_cast<DWORD>(createStatus), "无法打开开机自启注册表项"));
+            static_cast<DWORD>(createStatus),
+            infrastructure::i18n::tr("error.registryAutostartOpen")));
     }
 
     // 路径含空格时加引号，避免被当作参数分隔
@@ -96,7 +99,8 @@ Win32Status StartupRegistration::enable(const std::wstring& valueName,
 
     if (setStatus != ERROR_SUCCESS) {
         return base::makeUnexpected(Win32Error(
-            static_cast<DWORD>(setStatus), "写入开机自启注册表失败"));
+            static_cast<DWORD>(setStatus),
+            infrastructure::i18n::tr("error.registryAutostartWrite")));
     }
     return {};
 }
@@ -111,7 +115,8 @@ Win32Status StartupRegistration::disable(const std::wstring& valueName) {
             return {};
         }
         return base::makeUnexpected(Win32Error(
-            static_cast<DWORD>(openStatus), "无法打开开机自启注册表项"));
+            static_cast<DWORD>(openStatus),
+            infrastructure::i18n::tr("error.registryAutostartOpen")));
     }
 
     const LSTATUS deleteStatus = RegDeleteValueW(key, valueName.c_str());
@@ -120,7 +125,8 @@ Win32Status StartupRegistration::disable(const std::wstring& valueName) {
     // 值不存在也算成功（目标状态已达成）
     if (deleteStatus != ERROR_SUCCESS && deleteStatus != ERROR_FILE_NOT_FOUND) {
         return base::makeUnexpected(Win32Error(
-            static_cast<DWORD>(deleteStatus), "删除开机自启注册表值失败"));
+            static_cast<DWORD>(deleteStatus),
+            infrastructure::i18n::tr("error.registryAutostartDelete")));
     }
     return {};
 }
@@ -133,7 +139,8 @@ Win32Status StartupRegistration::setEnabled(const std::wstring& valueName,
 Win32Status StartupRegistration::currentExecutablePath(std::wstring* outPath) {
     if (outPath == nullptr) {
         return base::makeUnexpected(
-            Win32Error(ERROR_INVALID_PARAMETER, "输出参数为空"));
+            Win32Error(ERROR_INVALID_PARAMETER,
+                       infrastructure::i18n::tr("error.outputParamEmpty")));
     }
 
     std::vector<wchar_t> buffer(MAX_PATH, L'\0');
@@ -141,7 +148,8 @@ Win32Status StartupRegistration::currentExecutablePath(std::wstring* outPath) {
         const DWORD length = GetModuleFileNameW(
             nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
         if (length == 0) {
-            return base::makeUnexpected(lastError("无法获取程序路径"));
+            return base::makeUnexpected(
+                lastError(infrastructure::i18n::tr("error.programPathUnavailable")));
         }
         // 缓冲区足够（未截断）：返回值小于缓冲区容量即表示完整路径
         if (static_cast<std::size_t>(length) < buffer.size() - 1) {
@@ -151,7 +159,8 @@ Win32Status StartupRegistration::currentExecutablePath(std::wstring* outPath) {
         // 路径超长，扩大缓冲区重试（上限 32768）
         if (buffer.size() >= 32768) {
             return base::makeUnexpected(
-                Win32Error(ERROR_INSUFFICIENT_BUFFER, "程序路径过长"));
+                Win32Error(ERROR_INSUFFICIENT_BUFFER,
+                           infrastructure::i18n::tr("error.programPathTooLong")));
         }
         buffer.resize(buffer.size() * 2);
     }
