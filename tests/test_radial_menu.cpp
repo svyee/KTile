@@ -417,6 +417,23 @@ static void testLabelWindowDegenerate() {
     CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 0.0F, 100.0F, 14.0F), 0.0F));
 }
 
+// ---------------------------------------------------------------- 单击 vs 手势
+
+static void testReleaseLooksLikeClick() {
+    // 正常执行了动作：不补发点击（否则右键菜单会盖在动作结果上）
+    CHECK(!releaseLooksLikeClick(true, true, 0.0F, 47.0F));
+    CHECK(!releaseLooksLikeClick(true, false, 0.0F, 47.0F));
+    // 一次扇区都没碰过、又在中心松手：这就是一次手抖的单击
+    CHECK(releaseLooksLikeClick(false, false, 0.0F, 47.0F));
+    CHECK(releaseLooksLikeClick(false, false, 30.0F, 47.0F));
+    // 内半径那一圈本来就没有扇区，边界值算空档
+    CHECK(releaseLooksLikeClick(false, false, 47.0F, 47.0F));
+    // 划进过扇区又退回来取消：不算单击，不能凭空补一个右键菜单
+    CHECK(!releaseLooksLikeClick(false, true, 0.0F, 47.0F));
+    // 外甩取消：松手点在取消半径之外
+    CHECK(!releaseLooksLikeClick(false, false, 160.0F, 47.0F));
+}
+
 // ---------------------------------------------------------------- 入口
 
 int wmain() {
@@ -448,6 +465,7 @@ int wmain() {
     testLabelWindowMirrorSymmetry();
     testLabelWindowNeverExceedsCard();
     testLabelWindowDegenerate();
+    testReleaseLooksLikeClick();
 
     wprintf(L"\n%d failures\n", g_failures);
     return g_failures;

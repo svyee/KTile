@@ -3,6 +3,7 @@
 #include "base/text_convert.h"
 #include "platform/win32/foreground_process.h"
 
+#include <chrono>
 #include <cmath>
 
 namespace ktile {
@@ -12,11 +13,12 @@ namespace win32 {
 RadialMouseHook* RadialMouseHook::active_ = nullptr;
 
 LRESULT CALLBACK RadialMouseHook::mouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
-    if (code < 0 || active_ == nullptr) {
+    RadialMouseHook* self = active_;
+    if (code < 0 || self == nullptr) {
         return CallNextHookEx(nullptr, code, wParam, lParam);
     }
     const auto* event = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
-    const bool swallowed = active_->handleMouseEvent(wParam, *event);
+    const bool swallowed = self->handleMouseEvent(wParam, *event);
     if (swallowed) {
         return 1;  // 吞掉事件
     }
@@ -34,40 +36,140 @@ bool RadialMouseHook::install(HWND notifyWindow,
         uninstall();
         return true;
     }
-    if (hook_ != nullptr) {
-        uninstall();
-    }
+    // 先把上一份配置的线程收干净：状态机、配置、黑名单都靠「重新 install」
+    // 生效，两代同时活着会互相抢事件。
+    uninstall();
 
     notifyWindow_ = notifyWindow;
     trigger_ = trigger;
     blacklist_ = blacklist;
-    state_ = State::Idle;
+    state_.store(State::Idle, std::memory_order_relaxed);
     armedTick_ = 0;
     // 全新的一次安装：窗口可见性由应用层随后回灌，这里先按「没亮」算。
     // 如果轮盘这时其实还亮着，应用层下一次 setWheelVisible 会纠正回来。
-    wheelVisible_ = false;
-
-    hook_ = SetWindowsHookExW(WH_MOUSE_LL, &mouseHookProc, nullptr, 0);
-    if (hook_ != nullptr) {
-        active_ = this;
-        return true;
+    wheelVisible_.store(false, std::memory_order_relaxed);
+    stop_.store(false, std::memory_order_relaxed);
+    threadId_.store(0, std::memory_order_relaxed);
+    installed_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(startMutex_);
+        startReady_ = false;
+        startOk_ = false;
     }
-    notifyWindow_ = nullptr;
-    return false;
+
+    // 回调靠 active_ 转发，必须在起线程之前设好（线程一起来就可能收到事件）
+    active_ = this;
+    thread_ = std::thread(&RadialMouseHook::threadMain, this);
+
+    bool ready = false;
+    bool ok = false;
+    {
+        std::unique_lock<std::mutex> lock(startMutex_);
+        ready = startCondition_.wait_for(lock, std::chrono::seconds(5),
+                                         [this] { return startReady_; });
+        ok = ready && startOk_;
+    }
+    if (!ok) {
+        // 线程没起来（或超时）：把它收掉，别留一个半死不活的线程
+        stop_.store(true, std::memory_order_relaxed);
+        const DWORD tid = threadId_.load(std::memory_order_acquire);
+        if (tid != 0) {
+            PostThreadMessageW(tid, WM_QUIT, 0, 0);
+        }
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+        active_ = nullptr;
+        notifyWindow_ = nullptr;
+        return false;
+    }
+    return true;
 }
 
 void RadialMouseHook::uninstall() noexcept {
-    if (hook_ != nullptr) {
-        UnhookWindowsHookEx(hook_);
-        hook_ = nullptr;
+    stop_.store(true, std::memory_order_relaxed);
+    const DWORD tid = threadId_.load(std::memory_order_acquire);
+    if (tid != 0) {
+        PostThreadMessageW(tid, WM_QUIT, 0, 0);
+    }
+    if (thread_.joinable()) {
+        // 有界等待：钩子线程正常情况下收到 WM_QUIT 立刻退出；万一它卡在某个
+        // 系统调用里，也不能把 UI 线程（本函数从 UI 线程调用）一起拖死。
+        const HANDLE handle = static_cast<HANDLE>(thread_.native_handle());
+        if (WaitForSingleObject(handle, 2000) == WAIT_OBJECT_0) {
+            thread_.join();
+        } else {
+            thread_.detach();
+        }
     }
     if (active_ == this) {
         active_ = nullptr;
     }
+    installed_.store(false, std::memory_order_relaxed);
     notifyWindow_ = nullptr;
     blacklist_.clear();
-    state_ = State::Idle;
+    state_.store(State::Idle, std::memory_order_relaxed);
+    wheelVisible_.store(false, std::memory_order_relaxed);
+    threadId_.store(0, std::memory_order_relaxed);
 }
+
+void RadialMouseHook::threadMain() {
+    // 先建好本线程的消息队列：否则 install() 收尾时 PostThreadMessage(WM_QUIT)
+    // 会因为「队列还不存在」而直接失败，线程就会一直卡在 GetMessage 里。
+    MSG probe{};
+    PeekMessageW(&probe, nullptr, 0, 0, PM_NOREMOVE);
+
+    const DWORD tid = GetCurrentThreadId();
+    threadId_.store(tid, std::memory_order_release);
+    // 比 UI 线程略高一点：事件必须在系统超时之前被取走，绘制晚几毫秒无所谓。
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+    hook_ = SetWindowsHookExW(WH_MOUSE_LL, &mouseHookProc, nullptr, 0);
+    {
+        std::lock_guard<std::mutex> lock(startMutex_);
+        startOk_ = hook_ != nullptr;
+        startReady_ = true;
+    }
+    startCondition_.notify_all();
+
+    if (hook_ == nullptr) {
+        threadId_.store(0, std::memory_order_release);
+        return;
+    }
+    if (stop_.load(std::memory_order_acquire)) {
+        // install() 和 uninstall() 抢跑：装完就被叫停
+        UnhookWindowsHookEx(hook_);
+        hook_ = nullptr;
+        threadId_.store(0, std::memory_order_release);
+        return;
+    }
+    installed_.store(true, std::memory_order_release);
+
+    MSG msg{};
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        // 线程消息（无窗口）自己处理：补发点击必须回到消息循环里做，
+        // 不能在钩子回调里调 SendInput（会死锁）。见头文件说明。
+        if (msg.hwnd == nullptr && msg.message == kReinjectMessage) {
+            reinjectClick();
+            continue;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    UnhookWindowsHookEx(hook_);
+    hook_ = nullptr;
+    installed_.store(false, std::memory_order_release);
+    threadId_.store(0, std::memory_order_release);
+}
+
+void RadialMouseHook::requestReinjectClick() const noexcept {
+    const DWORD tid = threadId_.load(std::memory_order_acquire);
+    if (tid != 0) {
+        PostThreadMessageW(tid, kReinjectMessage, 0, 0);
+    }
+}
+
 
 WPARAM RadialMouseHook::downMessage() const noexcept {
     switch (trigger_.button) {
@@ -209,6 +311,9 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
     }
 
     const WPARAM upMsg = upMessage();
+    // 状态机只有本线程（钩子线程）写，读一次就够；原子是因为 UI 线程的
+    // isGestureActive() 也在读。
+    const State state = state_.load(std::memory_order_relaxed);
 
     if (isTriggerDownMessage(message)) {
         // 侧键1/侧键2 共用 WM_XBUTTONDOWN，还得看 mouseData 才知是哪一个
@@ -235,32 +340,33 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         // 满足条件：吞掉事件，进入跟踪
         //
         // 先对账：如果上一次手势还「在跑」，或者轮盘还亮着，说明那一次
-        // 抬起到我们手上的路断了（见头文件「由此带来的一个真实故障」）。
+        // 抬起到我们手上的路断了（见头文件「为什么用专用线程」）。
         // 让主线程把残影收掉，再当作全新的一次按下 —— 否则状态机会带着
         // 上一次的起点继续跑，窗口也会留在屏幕上跟着鼠标走。
-        if (state_ != State::Idle || wheelVisible_) {
+        if (state != State::Idle || wheelVisible_.load(std::memory_order_relaxed)) {
             PostMessageW(notifyWindow_, kRadialAbortMessage,
                          static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
         }
-        state_ = State::Tracking;
+        state_.store(State::Tracking, std::memory_order_relaxed);
         armedTick_ = GetTickCount64();
         startPoint_ = event.pt;
         currentPoint_ = event.pt;
         return true;  // 吞掉
     }
 
-    if (state_ != State::Idle) {
+    if (state != State::Idle) {
         if (message == WM_MOUSEMOVE) {
             currentPoint_ = event.pt;
             const long dx = currentPoint_.x - startPoint_.x;
             const long dy = currentPoint_.y - startPoint_.y;
             const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
 
-            if (state_ == State::Tracking) {
+            State next = state;
+            if (state == State::Tracking) {
                 // 过期判定放在阈值判定之前：跨过阈值的判定一旦赢了，
                 // 就会把一个「抬起早丢了」的陈旧起点当成新手势弹出来。
                 if (GetTickCount64() - armedTick_ > kMaxTrackingMs) {
-                    state_ = State::Idle;
+                    state_.store(State::Idle, std::memory_order_relaxed);
                     PostMessageW(notifyWindow_, kRadialAbortMessage,
                                  static_cast<WPARAM>(
                                      RadialAbortReason::StaleGesture),
@@ -270,13 +376,14 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
                 if (distance >=
                     static_cast<float>(trigger_.activationThresholdPx)) {
                     // 超过阈值：显示轮盘
-                    state_ = State::Shown;
+                    next = State::Shown;
+                    state_.store(next, std::memory_order_relaxed);
                     PostMessageW(notifyWindow_, kRadialShowMessage,
                                  static_cast<WPARAM>(startPoint_.x),
                                  static_cast<LPARAM>(startPoint_.y));
                 }
             }
-            if (state_ == State::Shown) {
+            if (next == State::Shown) {
                 PostMessageW(notifyWindow_, kRadialMoveMessage,
                              static_cast<WPARAM>(currentPoint_.x),
                              static_cast<LPARAM>(currentPoint_.y));
@@ -295,25 +402,28 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
             }
             // 按键抬起
             currentPoint_ = event.pt;
-            if (state_ == State::Shown) {
+            if (state == State::Shown) {
                 // 已显示轮盘：通知主线程判定扇区
                 PostMessageW(notifyWindow_, kRadialReleaseMessage,
                              static_cast<WPARAM>(currentPoint_.x),
                              static_cast<LPARAM>(currentPoint_.y));
-            } else if (wheelVisible_) {
+            } else if (wheelVisible_.load(std::memory_order_relaxed)) {
                 // 状态机回 Idle 了、窗口却还亮着（中间被 abort / 重装钩子
                 // 重置过）。这时候绝不能注入原生点击 —— 用户看到的是一次
                 // 结束了的轮盘操作，再弹一个右键菜单等于凭空多一次点击。
                 PostMessageW(notifyWindow_, kRadialAbortMessage,
                              static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
             } else {
-                // 未超阈值：恢复原生点击
+                // 未超阈值：恢复原生点击。
+                // 不在这里直接 SendInput：SendInput 在低级钩子回调里调用有
+                // 死锁风险（原始输入线程正等着我们这个回调返回）。给自己投
+                // 个消息，回到消息循环里再补。
                 if (trigger_.modifier == core::RadialTriggerModifier::None) {
-                    reinjectClick();
+                    requestReinjectClick();
                 }
                 // 有修饰键时不注入（用户是想做手势，不弹原生菜单）
             }
-            state_ = State::Idle;
+            state_.store(State::Idle, std::memory_order_relaxed);
             return true;  // 吞掉抬起
         }
     }

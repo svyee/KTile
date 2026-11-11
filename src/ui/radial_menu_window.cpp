@@ -199,6 +199,8 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
     menu_ = menu;
     centerScreen_ = centerScreen;
     highlightedValid_ = false;
+    // 新手势：上一次「碰过扇区」的记录作废，否则会一直算成「真手势」
+    gestureHadHighlight_ = false;
 
     // 换了一份菜单，标签的排版结果（窗口宽度随角度、字号随文字）全部作废
     labelLayoutCache_.clear();
@@ -290,18 +292,35 @@ void RadialMenuWindow::updateCursor(POINT screenPoint) {
                          (next.has_value() && *next != highlightedSector_);
     if (changed) {
         highlightedValid_ = next.has_value();
-        if (next.has_value()) highlightedSector_ = *next;
+        if (next.has_value()) {
+            highlightedSector_ = *next;
+            // 有过一帧高亮 = 用户真的进到某个扇区里了。releaseAt 靠它把
+            // 「真手势」和「手抖的单击」分开。
+            gestureHadHighlight_ = true;
+        }
         render();
     }
 }
 
-void RadialMenuWindow::releaseAt(POINT screenPoint) {
-    if (!isVisible()) return;
+bool RadialMenuWindow::releaseAt(POINT screenPoint) {
+    if (!isVisible()) return false;
     updateCursor(screenPoint);
-    if (highlightedValid_ && actionHandler_) {
+    const bool executed = highlightedValid_ && actionHandler_ != nullptr;
+    if (executed) {
         actionHandler_(highlightedSector_);
     }
+    // 判「这压根不是手势」：全程一次扇区都没高亮过，松手又落在中心空档。
+    // 阈值最小只有 4 像素，一次手抖的单击很容易跨过去，然后原生右键菜单被
+    // 吞掉、动作也没执行 —— 用户看到的是「右键按了没反应」。这种情况把点击
+    // 还回去（由调用方补发），宁可多一次上下文菜单，也不要丢一次按键。
+    float dx = 0.0F;
+    float dy = 0.0F;
+    screenToDipOffset(screenPoint, dx, dy);
+    const bool clickLike = core::releaseLooksLikeClick(
+        executed, gestureHadHighlight_, std::sqrt(dx * dx + dy * dy),
+        kInnerRadiusDip);
     hide();
+    return clickLike;
 }
 
 void RadialMenuWindow::hide() {

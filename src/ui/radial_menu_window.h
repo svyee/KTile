@@ -59,8 +59,13 @@ public:
     // 更新光标位置（屏幕坐标），用于高亮扇区
     void updateCursor(POINT screenPoint);
 
-    // 按键释放：判定命中扇区并触发动作，然后隐藏
-    void releaseAt(POINT screenPoint);
+    // 按键释放：判定命中扇区并触发动作，然后隐藏。
+    //
+    // 返回值 answer 的是「这一次压根不算手势，该把原生点击还回去吗」：
+    // 从头到尾没有任何扇区被高亮过、松手又落在中心空档里，说明这只是
+    // 一次抖动的单击（8 像素阈值下很常见）。吞掉它等于右键按了没反应，
+    // 所以这种情况返回 true，由调用方补发一次原生右键。
+    bool releaseAt(POINT screenPoint);
 
     void hide();
     bool isVisible() const noexcept;
@@ -156,6 +161,9 @@ private:
     core::RadialMenu menu_;
     std::uint8_t highlightedSector_ = 0;
     bool highlightedValid_ = false;
+    // 本次手势里是否有过任何一帧高亮。用来区分「真的在选」与「抖动的单击」：
+    // 只在中心空档里划过几下就松手的人，其实一次扇区都没碰到。
+    bool gestureHadHighlight_ = false;
 
     // D2D / DWrite / WIC
     platform::win32::ComPtr<ID2D1Factory> d2dFactory_;

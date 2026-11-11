@@ -9,15 +9,41 @@
 //   5. 若未超过阈值且触发方式无修饰键，重新注入一次原始点击（让原生右键菜单
 //      正常弹出）；有修饰键时不注入（用户明确是想做手势，不弹原生菜单）。
 //
-// 钩子回调纪律（与 GestureHotkey / OutsideClickMonitor 一致）：
-//   - 只做纯内存操作 + PostMessage，严禁文件 I/O 或任何耗时操作。
-//   - 回调在注册线程（消息循环线程）上执行，与窗口过程同线程，无需加锁。
+// ---------------------------------------------------------------- 为什么用专用线程
 //
-// 唯一的例外是黑名单判断：按下瞬间要知道前台进程名才决定吞不吞，这必须
-// 同步完成（异步问一句就晚了，事件已经进/不进目标队列了）。它只在按键
-// **按下**那一次发生，不是每个 mouse move 都查；QueryFullProcessImageNameW
-// 读的是内核里已有的映像路径，微秒级。查不到进程名（提权窗口等）按「不拉黑」
-// 处理 —— 宁可弹一次，也别让功能静默失效。
+// WH_MOUSE_LL 的回调运行在**安装钩子的那个线程**上。1.2.0 里它装在 UI 线程，
+// 而「显示轮盘」是同步的：查前台进程、建 D2D 资源、解码图标、排标签、首帧绘制
+// —— 首次尤其慢。这段时间 UI 线程不泵消息，系统等不及就把事件**静默丢掉**，
+// 没有任何通知。
+//
+// 实测（build/probe_busy.cpp）：钩子线程忙等 600ms，期间从高优先级线程注入的
+// 按下事件，3 次实验 3 次都没送到回调。丢掉的若是「抬起」：
+//   - 状态机停在 Shown：轮盘一直挂在屏幕上跟着鼠标高亮（「我松手了它还在」）；
+//   - 状态机停在 Tracking：之后任意一次 8 像素移动把它弹出来（「单击也弹」）。
+// 这就是用户报的那个 bug。
+//
+// 所以钩子搬进专用线程（与 StarPie 的 MouseHook 一致：独立 _hookThread、
+// AboveNormal 优先级、先用 PeekMessage 建好消息队列、WM_QUIT + Join 收尾）。
+// 回调只做纯内存操作 + PostMessage，UI 那边慢多久都影响不到事件接收。
+//
+// 补发点击也**不能在回调里做**：SendInput 在低级钩子回调里调用有死锁风险
+// （StarPie 也是丢到线程池去补发的）。这里改成给自己线程 PostThreadMessage，
+// 回到消息循环里再补，回调立刻返回。
+//
+// ---------------------------------------------------------------- 仍然问不出物理按键状态
+//
+// 「触发键现在物理上还按着吗」在本模块里问不出来，别试：手势开始时我们吞掉了
+// 按下事件，而 GetAsyncKeyState 的鼠标键状态要等事件真正派发到目标队列才更新。
+// 实测（build/probe_phys.cpp）：同一个实验，钩子放行时 Async 能正确变 DOWN，
+// 钩子吞掉后全程回答 up。
+//
+// 所以「用户还按着吗」只能靠状态机自己记账，外加下面几条兜底对账：
+//   1. 再按一次触发键 = 上一次的抬起丢了 → 先发 abort 收掉残影；
+//   2. Tracking 有寿命上限（kMaxTrackingMs），过期作废；
+//   3. 应用层把窗口真实可见性回灌到 setWheelVisible()，状态机与窗口分家时
+//      以窗口为准收掉它。
+// 专用线程把「抬起被丢」的概率压到接近零，这几条只兜剩下的意外（系统临时
+// 移除钩子、钩子线程被极端抢占等）。
 //
 #pragma once
 
@@ -25,7 +51,12 @@
 
 #include <Windows.h>
 
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ktile {
@@ -53,33 +84,6 @@ enum class RadialAbortReason : WPARAM {
     StaleGesture = 2,
 };
 
-// 触发键「物理上还按着吗」这件事，在本模块里是**问不出来**的，别试：
-//
-// 手势开始时我们吞掉了按下事件，而 GetAsyncKeyState / GetKeyState 的鼠标键
-// 状态是在事件**通过钩子链、进入目标队列**时才更新的。事件被吞 = 系统从未
-// 认为这个键被按下过，于是整个拖动期间它都回答「没按下」。
-//
-// 1.2.0 就栽在这里：兜底定时器每 120ms 问一次物理状态，答案永远是「松开了」，
-// 轮盘刚出现就被强制收起，用户根本来不及选（日志里能看到连续 4 条
-// 「抬起事件丢失」）。应用层现在改成用 isGestureActive() + 可见时长上限兜底。
-//
-// ---- 由此带来的一个真实故障：抬起事件也会丢 ----
-//
-// 同理，系统会**静默跳过超时的钩子回调**（回调跑在装钩子的线程上，也就是
-// UI 线程；UI 线程忙于显示轮盘时，那一段时间里的事件可能不经过我们，而且
-// 没有任何通知）。被跳过的是「抬起」时，状态机就停在 Shown/Tracking 上：
-//   - 停在 Shown：轮盘一直挂在屏幕上，还跟着鼠标高亮（用户看到的是
-//     「我明明松开右键了，一动鼠标轮盘还在」）；
-//   - 停在 Tracking：轮盘当时没出来，之后任意一次 8 像素的移动都会突然
-//     把它弹出来（用户看到的还是同一句话）。
-// 物理状态问不出来，所以**不能靠问**，只能靠三条自愈规则：
-//   1. 再按一次触发键 = 铁证上一次的抬起丢了 → 先发 abort 收掉残影；
-//   2. Tracking 有寿命上限（kMaxTrackingMs），过期就作废，不让它变成
-//      埋在未来的地雷；
-//   3. 应用层把窗口真实可见性回灌到 setWheelVisible()，抬起时若「窗口亮着
-//      但状态已经回 Idle」，同样发 abort —— 状态机与窗口不一致时，
-//      以窗口为准收掉它。
-
 class RadialMouseHook {
 public:
     RadialMouseHook() = default;
@@ -91,12 +95,17 @@ public:
 
     // 安装钩子。trigger 为 enabled=false 时等同 uninstall()。
     // blacklist 是进程黑名单（命中即完全放行，既不吞事件也不弹轮盘）。
+    //
+    // 内部起一个专用钩子线程，本函数等它装好才返回（最多 5 秒）。
+    // 只能在 UI 线程调用：会 join 上一次的线程。
     bool install(HWND notifyWindow, const core::RadialTriggerConfig& trigger,
                  const std::vector<std::string>& blacklist);
 
     void uninstall() noexcept;
 
-    bool isInstalled() const noexcept { return hook_ != nullptr; }
+    bool isInstalled() const noexcept {
+        return installed_.load(std::memory_order_acquire);
+    }
 
     // 状态机是否还处在一次手势里（Tracking / Shown）。
     //
@@ -107,7 +116,9 @@ public:
     //
     // 注意它回答的是「钩子自己看到的手势进度」，不是物理按键状态 ——
     // 见文件开头那段说明。
-    bool isGestureActive() const noexcept { return state_ != State::Idle; }
+    bool isGestureActive() const noexcept {
+        return state_.load(std::memory_order_acquire) != State::Idle;
+    }
 
     // 主线程告知「轮盘此刻是否真的亮着」。
     //
@@ -116,12 +127,20 @@ public:
     // 不了「有个轮盘赖在屏幕上」，光看窗口也不知道该不该执行扇区动作。
     // 把窗口可见性回灌进来，抬起时就能拿它做对账。
     //
-    // **只允许在装钩子的那个线程调用**（本模块的安装线程就是 UI 线程），
-    // 与钩子回调同线程，因此不需要加锁。
-    void setWheelVisible(bool visible) noexcept { wheelVisible_ = visible; }
+    // 线程安全：原子写，UI 线程可随时调（钩子线程读）。
+    void setWheelVisible(bool visible) noexcept {
+        wheelVisible_.store(visible, std::memory_order_release);
+    }
 
-    // 供钩子回调使用（文件级单例转发）
+    // 供钩子回调使用（文件级单例转发，只在钩子线程上跑）
     bool handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& event);
+
+    // 请求补发一次原生点击（线程安全，任意线程可调）。
+    //
+    // 用在两处：钩子自己在「按下没超阈值」时补发；应用层在「轮盘亮过但
+    // 全程没碰任何扇区、又在中心松手」时补发（见 releaseAt 的返回值）。
+    // 真正的 SendInput 在钩子线程的消息循环里做，调用方立刻返回。
+    void requestReinjectClick() const noexcept;
 
 private:
     enum class State : std::uint8_t {
@@ -130,20 +149,39 @@ private:
         Shown = 2,      // 已超阈值，轮盘已显示
     };
 
-    HHOOK hook_ = nullptr;
+    // 钩子线程专用消息：把「补发原生点击」挪出回调（见文件开头说明）。
+    static constexpr UINT kReinjectMessage = WM_APP + 0x75U;
+
+    // 钩子线程主体：建消息队列 → 装钩子 → 泵消息 → 卸载钩子。
+    void threadMain();
+
+    HHOOK hook_ = nullptr;   // 只在钩子线程上读写
     HWND notifyWindow_ = nullptr;
     core::RadialTriggerConfig trigger_;
     // 进程黑名单副本。装钩子时拷一份，配置变更靠重新 install 生效 ——
     // 回调里不能去碰应用层的对象（跨线程且可能已被销毁）。
     std::vector<std::string> blacklist_;
 
-    State state_ = State::Idle;
+    // 状态机。只有钩子线程写，UI 线程通过 isGestureActive() 读，故用原子。
+    std::atomic<State> state_{State::Idle};
+    // 下面三个只在钩子线程上用，不需要原子
     POINT startPoint_{};
     POINT currentPoint_{};
     // 按下时刻。只用于「按住太久还没拖」的过期判定，见 kMaxTrackingMs。
     ULONGLONG armedTick_ = 0;
+
     // 主线程回灌的窗口可见性（见 setWheelVisible）
-    bool wheelVisible_ = false;
+    std::atomic<bool> wheelVisible_{false};
+    std::atomic<bool> installed_{false};
+
+    // 线程生命周期
+    std::atomic<bool> stop_{false};
+    std::atomic<DWORD> threadId_{0};
+    std::thread thread_;
+    std::mutex startMutex_;
+    std::condition_variable startCondition_;
+    bool startReady_ = false;   // 受 startMutex_ 保护
+    bool startOk_ = false;      // 受 startMutex_ 保护
 
     // 自身注入的事件签名（避免重复处理自己注入的点击）
     static constexpr ULONG_PTR kInjectSignature = 0x4B545244;  // "KTRD"
@@ -182,8 +220,10 @@ private:
     // 前台进程是否在黑名单里（是则整条放行，连状态机都不进）。
     bool foregroundBlocked() const noexcept;
 
-    // 把虚拟键码对应的鼠标按键重新注入（用于阈值内抬起时恢复原生点击）
+    // 把触发键的按下+抬起重新注入一次（恢复原生点击）。
+    // **只能在钩子线程、回调之外调用**（见 requestReinjectClick）。
     void reinjectClick() const;
+
     // 当前配置的按键对应的按下/抬起消息
     WPARAM downMessage() const noexcept;
     WPARAM upMessage() const noexcept;

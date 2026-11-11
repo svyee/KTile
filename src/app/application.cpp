@@ -1159,6 +1159,12 @@ void Application::onRadialShow(POINT startPoint) {
 
     activeRadialMenu_ = menu;
 
+    infrastructure::applog::info(
+        "轮盘菜单：显示 起点 " + std::to_string(startPoint.x) + "," +
+        std::to_string(startPoint.y) + " 扇区 " +
+        std::to_string(menu->sectorCount) + " 动作 " +
+        std::to_string(menu->actions.size()));
+
     if (!radialWindow_) {
         radialWindow_ = std::make_unique<ui::RadialMenuWindow>();
         if (!radialWindow_->create(instance_)) {
@@ -1213,10 +1219,16 @@ void Application::onRadialRelease(POINT currentPoint) {
         radialHook_.setWheelVisible(false);
         return;
     }
-    // 窗口自行判定扇区并触发动作，然后隐藏
-    radialWindow_->releaseAt(currentPoint);
+    // 窗口自行判定扇区并触发动作，然后隐藏。
+    // 返回值是「这一次其实只是一次抖动的单击」（全程没碰过扇区、又在中心
+    // 空档松手）：那就把右键原样还给前台程序，别让用户觉得右键坏了。
+    const bool clickLike = radialWindow_->releaseAt(currentPoint);
     activeRadialMenu_ = nullptr;
     radialHook_.setWheelVisible(false);
+    if (clickLike) {
+        // 补发走钩子线程的队列：SendInput 不能在本线程、更不能在钩子回调里做。
+        radialHook_.requestReinjectClick();
+    }
 }
 
 // 钩子报「这次手势作废」。
