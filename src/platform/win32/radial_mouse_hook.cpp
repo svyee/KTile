@@ -42,6 +42,10 @@ bool RadialMouseHook::install(HWND notifyWindow,
     trigger_ = trigger;
     blacklist_ = blacklist;
     state_ = State::Idle;
+    armedTick_ = 0;
+    // 全新的一次安装：窗口可见性由应用层随后回灌，这里先按「没亮」算。
+    // 如果轮盘这时其实还亮着，应用层下一次 setWheelVisible 会纠正回来。
+    wheelVisible_ = false;
 
     hook_ = SetWindowsHookExW(WH_MOUSE_LL, &mouseHookProc, nullptr, 0);
     if (hook_ != nullptr) {
@@ -83,6 +87,20 @@ WPARAM RadialMouseHook::upMessage() const noexcept {
         case core::RadialTriggerButton::Side2:  return WM_XBUTTONUP;
     }
     return WM_RBUTTONUP;
+}
+
+bool RadialMouseHook::isTriggerDownMessage(WPARAM message) const noexcept {
+    if (message == downMessage()) {
+        return true;
+    }
+    // 双击的第二次按下走的是 *DBLCLK，右键/中键各有一条
+    switch (trigger_.button) {
+        case core::RadialTriggerButton::Right:  return message == WM_RBUTTONDBLCLK;
+        case core::RadialTriggerButton::Middle: return message == WM_MBUTTONDBLCLK;
+        case core::RadialTriggerButton::Side1:
+        case core::RadialTriggerButton::Side2:  return false;  // 侧键没有双击消息
+    }
+    return false;
 }
 
 bool RadialMouseHook::matchesTriggerButton(const MSLLHOOKSTRUCT& event) const noexcept {
@@ -190,10 +208,9 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         return false;
     }
 
-    const WPARAM downMsg = downMessage();
     const WPARAM upMsg = upMessage();
 
-    if (message == downMsg) {
+    if (isTriggerDownMessage(message)) {
         // 侧键1/侧键2 共用 WM_XBUTTONDOWN，还得看 mouseData 才知是哪一个
         if (!matchesTriggerButton(event)) {
             return false;  // 另一个侧键：放行给目标窗口
@@ -216,7 +233,17 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
             return false;
         }
         // 满足条件：吞掉事件，进入跟踪
+        //
+        // 先对账：如果上一次手势还「在跑」，或者轮盘还亮着，说明那一次
+        // 抬起到我们手上的路断了（见头文件「由此带来的一个真实故障」）。
+        // 让主线程把残影收掉，再当作全新的一次按下 —— 否则状态机会带着
+        // 上一次的起点继续跑，窗口也会留在屏幕上跟着鼠标走。
+        if (state_ != State::Idle || wheelVisible_) {
+            PostMessageW(notifyWindow_, kRadialAbortMessage,
+                         static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
+        }
         state_ = State::Tracking;
+        armedTick_ = GetTickCount64();
         startPoint_ = event.pt;
         currentPoint_ = event.pt;
         return true;  // 吞掉
@@ -229,13 +256,25 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
             const long dy = currentPoint_.y - startPoint_.y;
             const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
 
-            if (state_ == State::Tracking &&
-                distance >= static_cast<float>(trigger_.activationThresholdPx)) {
-                // 超过阈值：显示轮盘
-                state_ = State::Shown;
-                PostMessageW(notifyWindow_, kRadialShowMessage,
-                             static_cast<WPARAM>(startPoint_.x),
-                             static_cast<LPARAM>(startPoint_.y));
+            if (state_ == State::Tracking) {
+                // 过期判定放在阈值判定之前：跨过阈值的判定一旦赢了，
+                // 就会把一个「抬起早丢了」的陈旧起点当成新手势弹出来。
+                if (GetTickCount64() - armedTick_ > kMaxTrackingMs) {
+                    state_ = State::Idle;
+                    PostMessageW(notifyWindow_, kRadialAbortMessage,
+                                 static_cast<WPARAM>(
+                                     RadialAbortReason::StaleGesture),
+                                 0);
+                    return false;
+                }
+                if (distance >=
+                    static_cast<float>(trigger_.activationThresholdPx)) {
+                    // 超过阈值：显示轮盘
+                    state_ = State::Shown;
+                    PostMessageW(notifyWindow_, kRadialShowMessage,
+                                 static_cast<WPARAM>(startPoint_.x),
+                                 static_cast<LPARAM>(startPoint_.y));
+                }
             }
             if (state_ == State::Shown) {
                 PostMessageW(notifyWindow_, kRadialMoveMessage,
@@ -261,6 +300,12 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
                 PostMessageW(notifyWindow_, kRadialReleaseMessage,
                              static_cast<WPARAM>(currentPoint_.x),
                              static_cast<LPARAM>(currentPoint_.y));
+            } else if (wheelVisible_) {
+                // 状态机回 Idle 了、窗口却还亮着（中间被 abort / 重装钩子
+                // 重置过）。这时候绝不能注入原生点击 —— 用户看到的是一次
+                // 结束了的轮盘操作，再弹一个右键菜单等于凭空多一次点击。
+                PostMessageW(notifyWindow_, kRadialAbortMessage,
+                             static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
             } else {
                 // 未超阈值：恢复原生点击
                 if (trigger_.modifier == core::RadialTriggerModifier::None) {

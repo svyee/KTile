@@ -167,6 +167,9 @@ public:
     void onRadialShow(POINT startPoint);
     void onRadialMove(POINT currentPoint);
     void onRadialRelease(POINT currentPoint);
+    // 钩子报「这次手势作废」：把轮盘收掉，但**不**执行任何扇区动作。
+    // 用于抬起事件丢失后的对账（见 radial_mouse_hook.h 里那段说明）。
+    void onRadialAbort(int reason);
     // 收起轮盘并清理与它绑定的临时状态（动作分发指针、兜底定时器、计时）
     void hideRadialMenu();
 private:

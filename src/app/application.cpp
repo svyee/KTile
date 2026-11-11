@@ -379,6 +379,13 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
             }
             break;
         }
+        case platform::win32::kRadialAbortMessage: {
+            if (self != nullptr) {
+                self->onRadialAbort(static_cast<int>(wParam));
+                return 0;
+            }
+            break;
+        }
 
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -813,6 +820,8 @@ void Application::hideRadialMenu() {
     activeRadialMenu_ = nullptr;
     radialShownTick_ = 0;
     radialWatchdogMismatchTicks_ = 0;
+    // 窗口已经不在屏幕上了，同步告诉钩子，免得它拿「还亮着」去做出错误判断
+    radialHook_.setWheelVisible(false);
     if (messageWindow_ != nullptr) {
         KillTimer(messageWindow_, kRadialWatchdogTimerId);
     }
@@ -1128,6 +1137,7 @@ void Application::persistRadialConfig() {
 // ================================================================ 轮盘菜单
 
 void Application::onRadialShow(POINT startPoint) {
+    const ULONGLONG showStartTick = GetTickCount64();
     // 黑名单在钩子按下时就已经拦掉了，这里不再判 —— 能走到这一步说明
     // 前台进程没被拉黑（或者黑名单里没有它）。
     //
@@ -1164,12 +1174,25 @@ void Application::onRadialShow(POINT startPoint) {
     }
     radialWindow_->show(*menu, startPoint,
                         static_cast<int>(radialConfig_.trigger.cancelRadiusPx));
+    // 告诉钩子「窗口真的亮了」。两者是两套状态，抬起事件丢失时会分家，
+    // 钩子要靠这个才能判断「该收还是不收」（见 radial_mouse_hook.h）。
+    radialHook_.setWheelVisible(true);
     radialShownTick_ = GetTickCount64();
     radialWatchdogMismatchTicks_ = 0;
     // 挂上兜底定时器（钩子失效 / 状态不一致 / 停留过久三种收尾）
     if (messageWindow_ != nullptr) {
         SetTimer(messageWindow_, kRadialWatchdogTimerId,
                  kRadialWatchdogIntervalMs, nullptr);
+    }
+
+    // 显示这一段是**在装钩子的线程上**同步跑的（本窗口的消息循环），跑太久
+    // 会让系统跳过这期间的钩子回调 —— 抬起事件就是这么丢的。超过半秒就
+    // 留一条记录，下次再出现「松开右键轮盘还在」时可以直接对上号。
+    const ULONGLONG elapsed = GetTickCount64() - showStartTick;
+    if (elapsed >= 500) {
+        infrastructure::applog::warn(
+            "轮盘菜单：显示耗时 " + std::to_string(elapsed) +
+            " ms，期间的鼠标事件可能被系统跳过");
     }
 }
 
@@ -1187,11 +1210,43 @@ void Application::onRadialRelease(POINT currentPoint) {
     radialWatchdogMismatchTicks_ = 0;
     if (!radialWindow_ || !radialWindow_->isVisible()) {
         activeRadialMenu_ = nullptr;
+        radialHook_.setWheelVisible(false);
         return;
     }
     // 窗口自行判定扇区并触发动作，然后隐藏
     radialWindow_->releaseAt(currentPoint);
     activeRadialMenu_ = nullptr;
+    radialHook_.setWheelVisible(false);
+}
+
+// 钩子报「这次手势作废」。
+//
+// 触发场景都不是用户操作失误，而是**抬起事件没走到钩子里**（系统会静默
+// 跳过超时的低级钩子回调，我们的回调就跑在装钩子的 UI 线程上）。这件事
+// 平时完全静默：状态机停在 Shown/Tracking，轮盘要么赖在屏幕上跟着鼠标
+// 高亮，要么在几百毫秒后某次小移动里突然弹出来。这里把它收掉，并且记一条
+// 日志 —— 这条日志是唯一能证明「不是用户手抖」的证据。
+//
+// 注意：**不执行任何扇区动作**。用户已经把这次手势作废了，再补一次快捷键
+// 等于凭空多按了一下。
+void Application::onRadialAbort(int reason) {
+    const char* why = "未知";
+    switch (static_cast<platform::win32::RadialAbortReason>(reason)) {
+        case platform::win32::RadialAbortReason::LostRelease:
+            why = "上一次手势的抬起事件丢失";
+            break;
+        case platform::win32::RadialAbortReason::StaleGesture:
+            why = "按住超时仍未拖动";
+            break;
+    }
+    if (radialWindow_ && radialWindow_->isVisible()) {
+        infrastructure::applog::warn(std::string("轮盘菜单：") + why +
+                                     "，收起轮盘");
+    } else {
+        // 窗口早就收了：说明这只是状态机清理，记 info 就够，别当作告警
+        infrastructure::applog::info(std::string("轮盘手势作废（") + why + "）");
+    }
+    hideRadialMenu();
 }
 
 void Application::executeRadialAction(const core::RadialAction& action) {

@@ -127,20 +127,19 @@ constexpr int kRadialButtonOptionCount = static_cast<int>(
 // 用 HotkeyModifier 而不是 RadialTriggerModifier，因为要覆盖 Win，
 // 而触发修饰键里没有 Win（Win+右键 是系统手势的地盘，不做触发键）。
 //
-// width 是各复选框自己的宽度：这一组要和触发键 / 修饰键挤在同一行，
-// 统一 72 宽会直接顶出内容区。Shift 多一个字符，单独给宽一点。
+// 这里只描述「下拉里有哪些行」。选中状态不存在这张表里 —— 它存在组合框的
+// item data 上（见 suppressChecked），这样保存时统一从控件读，和这一页
+// 其它控件（BM_GETCHECK / CB_GETCURSEL / TBM_GETPOS）保持同一种取数方式。
 struct RadialSuppressOption {
     const wchar_t* label;
     core::HotkeyModifier value;
-    int controlId;
-    int width;
 };
 
 constexpr RadialSuppressOption kRadialSuppressOptions[] = {
-    {L"Ctrl", core::HotkeyModifier::Control, 1191, 48},
-    {L"Shift", core::HotkeyModifier::Shift,  1192, 56},
-    {L"Alt", core::HotkeyModifier::Alt,      1193, 42},
-    {L"Win", core::HotkeyModifier::Win,      1194, 48},
+    {L"Ctrl", core::HotkeyModifier::Control},
+    {L"Shift", core::HotkeyModifier::Shift},
+    {L"Alt", core::HotkeyModifier::Alt},
+    {L"Win", core::HotkeyModifier::Win},
 };
 
 constexpr int kRadialSuppressOptionCount = static_cast<int>(
@@ -166,20 +165,21 @@ constexpr int kRadialModifierOptionCount = static_cast<int>(
 // 触发方式第一行的三段横排：触发键 / 修饰键 / 抑制键。
 //
 // 三者是一条因果链（按住什么键 + 组合什么修饰键 + 什么情况下让路），拆成两三行
-// 就看不出它们在描述同一件事。但一行要放下 2 个下拉 + 4 个复选框，共用
-// kLabelWidth（76）根本不够，所以这里按实际文字宽度把列位置卡死：
+// 就看不出它们在描述同一件事。三个都是下拉框之后宽度宽裕了不少，列位置仍按
+// 实际文字卡死，右边缘落在内容区右界：
 //
-//   150 标签 44 | 194 下拉 84 | 284 标签 44 | 328 下拉 66 | 400 标签 44 |
-//   448 四个复选框 48+56+42+48 = 194  →  右边缘 642（正好等于内容区右界）
+//   150 标签 44 | 194 下拉 84 | 284 标签 44 | 328 下拉 84 | 420 标签 44 |
+//   464 下拉 178  →  右边缘 642（正好等于内容区右界）
 constexpr int kRadialLabelWidthTight = 44;
 constexpr int kRadialTriggerLabelX = kContentLeft + 8;   // 150
 constexpr int kRadialTriggerComboX = 194;
 constexpr int kRadialTriggerComboW = 84;
 constexpr int kRadialModifierLabelX = 284;
 constexpr int kRadialModifierComboX = 328;
-constexpr int kRadialModifierComboW = 66;
-constexpr int kRadialSuppressLabelX = 400;
-constexpr int kRadialSuppressBoxX = 448;
+constexpr int kRadialModifierComboW = 84;
+constexpr int kRadialSuppressLabelX = 420;
+constexpr int kRadialSuppressComboX = 464;
+constexpr int kRadialSuppressComboW = 178;
 
 // ---------------------------------------------------------------- 控件 ID
 
@@ -245,7 +245,11 @@ constexpr int kRadialCancelSliderId = 1186;
 constexpr int kRadialCancelValueId = 1187;
 constexpr int kRadialEditButtonId = 1188;
 constexpr int kRadialSummaryId = 1189;
-// 抑制键的四个复选框用 1191~1194（见 kRadialSuppressOptions）。
+// 抑制键：一个「可勾选的下拉」。Win32 没有原生的多选下拉，实做法是
+// CBS_DROPDOWNLIST + CBS_OWNERDRAWFIXED：字段（itemID == -1）自己画汇总文字，
+// 列表行自己画 ☑/☐，再把列表的子类化拦住单击 —— 否则点一下就收起，
+// 勾第二个还得再展开一次。
+constexpr int kRadialSuppressComboId = 1191;
 // 1190 / 1195 是「说明行」拆掉后空出来的两个位，现在给抑制键的标签用：
 // 选修饰键时整组连标签一起变灰，标签也得有个句柄。
 constexpr int kRadialSuppressLabelId = 1190;
@@ -687,6 +691,189 @@ void addTooltip(HWND owner, HWND tool, const wchar_t* text) {
     SendMessageW(tip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
 }
 
+// ---------------------------------------------------------------- 抑制键下拉
+//
+// 用户要的是「一个下拉框」，不是四个复选框。除了少占版面，还有一个实在的
+// 好处：四个复选框并排时，光看勾选框很难一眼说出「按住这几个键都不弹」，
+// 收起状态下更是完全没有汇总；下拉框收起来就写着 "Ctrl、Shift"。
+//
+// Win32 没有原生的多选下拉，这里的做法是 CBS_DROPDOWNLIST +
+// CBS_OWNERDRAWFIXED：
+//   - 勾选状态放在 item data（1 = 勾上），保存时从控件读，与这一页其它控件
+//     （BM_GETCHECK / CB_GETCURSEL / TBM_GETPOS）保持同一种取数方式；
+//   - 字段自己画汇总文字（WM_DRAWITEM 的 itemID == -1）；
+//   - 列表子类化后拦鼠标单击：点一行只切换勾选、不收起列表。
+//
+// 两个「能不能做到」都实测过（build/probe_combo.cpp）：
+//   - CB_SETCURSEL(-1)（没有任何选中项）时，字段照样会收到 itemID == -1 的
+//     WM_DRAWITEM —— 所以不需要塞一行假的「摘要项」来撑住显示；
+//   - GetComboBoxInfo 在还没下拉过时就能拿到 hwndList，创建完当场就能子类化，
+//     不用等第一次展开。
+
+bool suppressChecked(HWND combo, int index) {
+    if (combo == nullptr || index < 0 || index >= kRadialSuppressOptionCount) {
+        return false;
+    }
+    return SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(index), 0) == 1;
+}
+
+void setSuppressChecked(HWND combo, int index, bool checked) {
+    if (combo == nullptr || index < 0 || index >= kRadialSuppressOptionCount) {
+        return;
+    }
+    SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index),
+                 checked ? 1 : 0);
+}
+
+// 收起状态显示的文字：勾了几个就列几个，一个没勾写「无」。
+// 用顿号而不是加号：这里表达的是「任意一个按住都算」，不是「一起按住」。
+std::wstring suppressSummary(HWND combo) {
+    std::wstring text;
+    for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
+        if (!suppressChecked(combo, i)) {
+            continue;
+        }
+        if (!text.empty()) {
+            text += L"、";
+        }
+        text += kRadialSuppressOptions[i].label;
+    }
+    if (text.empty()) {
+        text = L"无";
+    }
+    return text;
+}
+
+void fillRectColor(HDC dc, const RECT& rect, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    if (brush != nullptr) {
+        FillRect(dc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+// 勾选方格用 DrawFrameControl 画，不自己拼线，也不依赖字体里有没有 ☑。
+// 它同时负责禁用态的灰化，省掉一条「灰了但还看得出是勾」的分支。
+void paintSuppressRow(HDC dc, const RECT& rect, HFONT font,
+                      const wchar_t* label, bool checked, bool selected,
+                      bool disabled) {
+    fillRectColor(dc, rect, selected ? dialog_style::accent()
+                                     : dialog_style::card());
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, disabled
+                        ? dialog_style::secondaryText()
+                        : (selected ? dialog_style::accentText()
+                                    : dialog_style::text()));
+
+    // 勾选方格按 DPI 定尺寸，并且不许顶满行高（行高由字体决定，撑满会贴边）
+    const int rowHeight = rect.bottom - rect.top;
+    int boxSide = MulDiv(13, GetDeviceCaps(dc, LOGPIXELSY), 96);
+    if (boxSide > rowHeight - 4) {
+        boxSide = rowHeight - 4;
+    }
+    if (boxSide < 9) {
+        boxSide = 9;
+    }
+    RECT box{};
+    box.left = rect.left + 8;
+    box.right = box.left + boxSide;
+    box.top = rect.top + (rowHeight - boxSide) / 2;
+    box.bottom = box.top + boxSide;
+    UINT flags = DFCS_BUTTONCHECK;
+    if (checked) flags |= DFCS_CHECKED;
+    if (disabled) flags |= DFCS_INACTIVE;
+    DrawFrameControl(dc, &box, DFC_BUTTON, flags);
+
+    HFONT previous = font != nullptr ? static_cast<HFONT>(SelectObject(dc, font))
+                                     : nullptr;
+    RECT text = rect;
+    text.left = box.right + 8;
+    text.right -= 6;
+    DrawTextW(dc, label, -1, &text,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (previous != nullptr) {
+        SelectObject(dc, previous);
+    }
+}
+
+void paintSuppressField(HDC dc, const RECT& rect, HFONT font,
+                        const std::wstring& summary, bool disabled) {
+    fillRectColor(dc, rect, dialog_style::card());
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, disabled ? dialog_style::secondaryText()
+                              : dialog_style::text());
+    HFONT previous = font != nullptr ? static_cast<HFONT>(SelectObject(dc, font))
+                                     : nullptr;
+    RECT text = rect;
+    text.left += 8;
+    text.right -= 20;   // 右端是下拉箭头，别压上去
+    DrawTextW(dc, summary.c_str(), -1, &text,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (previous != nullptr) {
+        SelectObject(dc, previous);
+    }
+}
+
+// 列表的子类过程：单击 = 切换勾选，且不收起列表。
+//
+// 不这么做的话，CBS_DROPDOWNLIST 点一行就收起并选中那一行 —— 勾第二个键要
+// 再展开一次，四个键勾完是八次点击。这里把成对的按下/抬起都吞掉，列表就
+// 停在那儿等用户勾完；点列表外面仍然按原生逻辑收起（那条路径走 combo 自己
+// 的捕获，不经过这里）。
+LRESULT CALLBACK suppressListProc(HWND list, UINT message, WPARAM wParam,
+                                  LPARAM lParam, UINT_PTR /*subclassId*/,
+                                  DWORD_PTR refData) {
+    // 组合框句柄走 refData 传进来。**不能**用 GetParent(list) 反推：
+    // 实测 ComboLBox 的父窗口既不是组合框也不是对话框（是一个内部窗口，
+    // GetAncestor(list, GA_ROOT) 就是它自己），拿错句柄的结果是「点一行
+    // 列表不收起、但勾选没变」—— 最难查的那种静默失败。
+    HWND combo = reinterpret_cast<HWND>(refData);
+    if (message == WM_LBUTTONDOWN) {
+        // LB_ITEMFROMPOINT：低位是行号，高位非零表示点在行外的空白处
+        const LRESULT hit = SendMessageW(list, LB_ITEMFROMPOINT, 0, lParam);
+        if (HIWORD(hit) == 0) {
+            const int index = static_cast<int>(LOWORD(hit));
+            if (combo != nullptr && index >= 0 &&
+                index < kRadialSuppressOptionCount) {
+                setSuppressChecked(combo, index,
+                                   !suppressChecked(combo, index));
+                InvalidateRect(list, nullptr, TRUE);
+                // 收起后显示的汇总也要跟着变，否则要等下次展开才刷新
+                InvalidateRect(combo, nullptr, TRUE);
+                return 0;
+            }
+        }
+    } else if (message == WM_LBUTTONUP) {
+        return 0;
+    }
+    return DefSubclassProc(list, message, wParam, lParam);
+}
+
+// 给抑制键下拉挂上列表子类。条目与初始勾选都从 radial 配置来。
+void initSuppressCombo(HWND combo, const core::RadialConfig& radial) {
+    if (combo == nullptr) {
+        return;
+    }
+    for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
+        const RadialSuppressOption& option = kRadialSuppressOptions[i];
+        SendMessageW(combo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(option.label));
+        const auto& held = radial.trigger.suppressWhileHeld;
+        const bool checked =
+            std::find(held.begin(), held.end(), option.value) != held.end();
+        setSuppressChecked(combo, i, checked);
+    }
+    // 没有「当前项」这个概念：收起的字段是自绘的汇总文字，见 paintSuppressField
+    SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
+
+    COMBOBOXINFO info{};
+    info.cbSize = sizeof(info);
+    if (GetComboBoxInfo(combo, &info) != FALSE && info.hwndList != nullptr) {
+        SetWindowSubclass(info.hwndList, suppressListProc, 1,
+                          reinterpret_cast<DWORD_PTR>(combo));
+    }
+}
+
 // ---------------------------------------------------------------- 轮盘触发
 
 // 修饰键不是「无」时，抑制键整组失效。
@@ -712,9 +899,12 @@ void refreshRadialSuppressEnabled(HWND dialog) {
     }
     const BOOL enable = usable ? TRUE : FALSE;
     EnableWindow(GetDlgItem(dialog, kRadialSuppressLabelId), enable);
-    for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
-        EnableWindow(GetDlgItem(dialog, kRadialSuppressOptions[i].controlId),
-                     enable);
+    EnableWindow(GetDlgItem(dialog, kRadialSuppressComboId), enable);
+    // 灰掉时自绘的字段不会自己重画（原生控件靠 WM_ENABLE 走系统绘制，我们不
+    // 走那条路），补一次重绘让文字真的变灰 —— 否则「灰了」只体现在点不动上。
+    HWND combo = GetDlgItem(dialog, kRadialSuppressComboId);
+    if (combo != nullptr) {
+        InvalidateRect(combo, nullptr, TRUE);
     }
 }
 
@@ -1670,30 +1860,18 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
 
             // 抑制键：按住这些键时轮盘一律不弹，鼠标事件原样放行。
-            // 四个横排复选框比下拉多选更直观（一眼看到开了哪几个），
-            // 也少一次展开动作。标签带 ID：选修饰键时它要跟着一起变灰。
+            // 一个可勾选的下拉（自绘 + 列表子类化，见 suppressListProc）。
+            // 标签带 ID：选修饰键时它要跟着下拉一起变灰。
             makeControl(L"STATIC", L"抑制键", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                         kRadialSuppressLabelX, yRadial + 3,
                         kRadialLabelWidthTight, 18, kRadialSuppressLabelId);
-            HWND suppressBoxes[kRadialSuppressOptionCount] = {};
-            int boxX = kRadialSuppressBoxX;
-            for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
-                const RadialSuppressOption& option = kRadialSuppressOptions[i];
-                HWND box = makeControl(
-                    L"BUTTON", option.label,
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,
-                    boxX, yRadial, option.width, 20, option.controlId);
-                suppressBoxes[i] = box;
-                if (box != nullptr) {
-                    const auto& held = state->radial.trigger.suppressWhileHeld;
-                    const bool checked =
-                        std::find(held.begin(), held.end(), option.value) !=
-                        held.end();
-                    SendMessageW(box, BM_SETCHECK,
-                                 checked ? BST_CHECKED : BST_UNCHECKED, 0);
-                }
-                boxX += option.width;
-            }
+            HWND suppressCombo = makeControl(
+                L"COMBOBOX", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                    CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, 0,
+                kRadialSuppressComboX, yRadial, kRadialSuppressComboW, 160,
+                kRadialSuppressComboId);
+            initSuppressCombo(suppressCombo, state->radial);
             yRadial += 30;
 
             // 拖动阈值：超过这个距离才认为「用户是在做手势」而不是单击。
@@ -1785,11 +1963,10 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             addTooltip(hwnd, cancelSlider,
                        L"拖出这个半径再松手 = 取消，不触发任何动作。"
                        L"必须大于「拖动启动」。");
-            for (HWND box : suppressBoxes) {
-                addTooltip(hwnd, box,
-                           L"按住其中任意一个键时，轮盘不弹、鼠标事件原样放行。"
-                           L"仅在修饰键为「无」时可用。");
-            }
+            addTooltip(hwnd, suppressCombo,
+                       L"按住其中任意一个键时，轮盘不弹、鼠标事件原样放行。"
+                       L"下拉可以连续勾选，点列表外面收起。\r\n"
+                       L"仅在修饰键为「无」时可用。");
             addTooltip(hwnd, radialSummary,
                        L"扇区动作与进程黑名单都在「编辑扇区动作」里改。\r\n"
                        L"按应用显示不同轮盘由 slugin 插件目录提供，不在这里设。");
@@ -2007,6 +2184,30 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     RECT focus = draw->rcItem;
                     InflateRect(&focus, -2, -2);
                     DrawFocusRect(draw->hDC, &focus);
+                }
+                return TRUE;
+            }
+
+            // 抑制键下拉：字段（itemID == -1）画汇总，列表行画勾选方格。
+            // 为什么自绘：「当前选中项」这个概念在这里不成立（是 N 选多），
+            // 原生下拉只能显示选中项的文字，收起后看不出勾了哪几个。
+            if (draw != nullptr && draw->CtlType == ODT_COMBOBOX &&
+                draw->CtlID == static_cast<UINT>(kRadialSuppressComboId)) {
+                const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+                HFONT comboFont = static_cast<HFONT>(GetPropW(hwnd, kPropFont));
+                if (draw->itemID == static_cast<UINT>(-1)) {
+                    paintSuppressField(draw->hDC, draw->rcItem, comboFont,
+                                       suppressSummary(draw->hwndItem),
+                                       disabled);
+                } else {
+                    const int index = static_cast<int>(draw->itemID);
+                    if (index >= 0 && index < kRadialSuppressOptionCount) {
+                        paintSuppressRow(
+                            draw->hDC, draw->rcItem, comboFont,
+                            kRadialSuppressOptions[index].label,
+                            suppressChecked(draw->hwndItem, index),
+                            (draw->itemState & ODS_SELECTED) != 0, disabled);
+                    }
                 }
                 return TRUE;
             }
@@ -2563,17 +2764,16 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                 static_cast<std::uint16_t>(
                                     SendMessageW(cancel, TBM_GETPOS, 0, 0));
                         }
-                        // 抑制键：四个复选框重建列表。与触发修饰键撞车的
-                        // 直接丢掉，保证交给 core 的配置必然合法（提示行
-                        // 里已经写明这条规则，用户不会莫名其妙）。
+                        // 抑制键：从下拉的 item data 重建列表。与触发修饰键
+                        // 撞车的直接丢掉，保证交给 core 的配置必然合法（
+                        // tooltip 里已经写明这条规则，用户不会莫名其妙）。
                         state->radial.trigger.suppressWhileHeld.clear();
+                        HWND suppressCombo =
+                            GetDlgItem(hwnd, kRadialSuppressComboId);
                         for (int i = 0; i < kRadialSuppressOptionCount; ++i) {
                             const RadialSuppressOption& option =
                                 kRadialSuppressOptions[i];
-                            HWND box = GetDlgItem(hwnd, option.controlId);
-                            if (box == nullptr) continue;
-                            if (SendMessageW(box, BM_GETCHECK, 0, 0) !=
-                                BST_CHECKED) {
+                            if (!suppressChecked(suppressCombo, i)) {
                                 continue;
                             }
                             if (core::modifierIsTriggerModifier(

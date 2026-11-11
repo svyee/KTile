@@ -243,7 +243,23 @@ app/            组装与生命周期
     `tooltips_class32` 窗口截图。
 12. **整屏截图在无交互会话里是全黑的**：`BitBlt` 抓屏幕拿不到内容，但
     `PrintWindow` 抓单个窗口正常。UI 验证优先用 `PrintWindow`，不要用桌面截图
-    判断「有没有画出来」。
+    判断「有没有画出来」。下拉列表（`ComboLBox`）不是主窗口的子窗口，主窗口
+    `PrintWindow` 抓不到它，得单独抓那个列表窗口再拼回去。
+13. **所有者绘制的组合框（`CBS_OWNERDRAWFIXED | CBS_DROPDOWNLIST`）在
+    `CB_SETCURSEL(-1)`（无选中项）时仍会收到 `WM_DRAWITEM` 的 `itemID == -1`**：
+    所以「字段显示一段和任何条目都无关的汇总文字」是可行的，不用塞一行假条目
+    占位。文字与勾选方格都在 `WM_DRAWITEM` 里自己画。
+14. **`ComboLBox` 的父窗口不是组合框**：`GetParent(hwndList)` 拿到的是一个内部
+    窗口（`GetAncestor(list, GA_ROOT)` 就是它自己），照它去 `CB_SETITEMDATA`
+    什么也不会发生 —— 而且不报错，表现是「点了列表不收起、但勾选没变」。要拿
+    组合框句柄就 `SetWindowSubclass(hwndList, proc, 1, (DWORD_PTR)combo)`，
+    在子类过程里从 `refData` 取。
+15. **低级钩子回调会被系统静默跳过**（回调跑在装钩子的线程上，超时即跳过，无
+    任何通知）：本项目钩子都装在 UI 线程，所以 UI 线程一忙，那段时间的鼠标
+    事件就不经过钩子。后果不是「没反应」，而是**状态机卡在半路**（吞掉了按下
+    却没收到抬起），表现为「松开右键后轮盘还挂在屏幕上」。`RadialMouseHook`
+    为此有三条自愈规则 + `setWheelVisible()` 回灌，细节见
+    `docs/radial-menu-design.md` 4.5。改动钩子状态机时别把这几条删掉。
 
 ## 12. 关键文件导航
 
