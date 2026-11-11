@@ -4,14 +4,15 @@
 
 # KTile 磁贴快启
 
-**把常用应用、文件、文件夹和网址，收进一块随手可用的磁贴面板。**
+**把常用应用、文件、文件夹和网址，收进一块随手可用的磁贴面板；**
+**再把高频动作挂到鼠标上，按住右键一拖即达。**
 
 *轻量 · 单文件 · 免安装 · 离线*
 
 [![Platform](https://img.shields.io/badge/Windows-7%20SP1%20~%2011-0078D4?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
-[![Size](https://img.shields.io/badge/single%20binary-~1.2%20MB-16A34A?style=flat-square)](#)
+[![Size](https://img.shields.io/badge/single%20binary-~1.3%20MB-16A34A?style=flat-square)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue?style=flat-square)](CHANGELOG.md)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus)](#)
 
 </div>
@@ -22,14 +23,45 @@
 
 <p align="center">
   <img src="docs/screenshot-main.jpg" alt="KTile 主面板：多标签磁贴布局" width="720" style="max-width:100%; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+  <br>
+  <sub>磁贴主面板：四档尺寸自由混排，多标签页分类</sub>
 </p>
+
+<p align="center">
+  <img src="docs/screenshot-radial.png" alt="KTile 轮盘菜单：八扇区环形菜单" width="300" style="border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
+  <br>
+  <sub>轮盘菜单：<code>Ctrl</code> + 右键拖动呼出，松手执行高亮扇区（图中为资源管理器插件的轮盘）</sub>
+</p>
+
+## v1.3.0 更新
+
+- **轮盘插件（`slugin/`）** — 按前台程序换轮盘。一个目录 = 一个应用：
+  `slugin/<id>/radial.json` 写清适用进程名与扇区动作，图标放插件自己的 `icons/`。
+  改完在设置页「重新扫描」即可生效，不用重启、不用重新编译。随包带两份示例：
+  文件资源管理器（新建文件夹 / 复制路径 / 刷新 / 属性……）与浏览器
+  （到顶 / 刷新 / 关标签 / 恢复刚关的标签……）
+- **中英双语界面** — 文案全部外置到 `lang/<code>.json`，加一门语言 = 加一个文件，
+  不改代码也不重新编译；首次运行跟随系统语言，之后在设置里切换
+- **一份通用轮盘 + 进程黑名单** — 不再维护「多套方案 + 按应用白名单」，
+  常用动作用一份通用轮盘表达，个别程序拉黑即可完全不弹（鼠标事件原样放行，
+  右键菜单和手势软件都不受影响）。按应用的差异化交给上面的插件目录
+- **抑制键** — 勾选 Ctrl / Shift / Alt / Win 作为照常键：按住其中任意一个时轮盘不
+  呼出，给 `Alt+Tab`、`Alt+方向` 这类系统组合键让路
+- **扇区自带 SVG 图标** — 插件里的 `.svg` 按矢量渲染，任意 DPI 不糊；带显式
+  `stroke="#RRGGBB"` 的图层保留自身颜色，只继承当前透明度
+- 细节打磨：拖动启动阈值默认 8 → 15 像素（手抖不再误弹）且老配置自动迁移；
+  扇区动作设置页按「类型」启用对应字段；松手不再残留右键上下文菜单；
+  设置窗口所有定宽控件改为按当前语言实测文字宽度（英文界面不再裁字和撑宽）
+
+完整清单见 [CHANGELOG](CHANGELOG.md)，轮盘的设计与取舍见
+[docs/radial-menu-design.md](docs/radial-menu-design.md)。
 
 ## 这是什么
 
 KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁贴整理常用项目，
 按快捷键唤出面板，输入名称即过滤，点击即启动。
 
-整个程序是一个约 **1.2 MB** 的 `KTile.exe`——无需安装、无需运行库、完全离线，
+整个程序是一个约 **1.3 MB** 的 `KTile.exe`——无需安装、无需运行库、完全离线，
 配置与数据全部存放在 exe 同级的 `data` 目录，拷走即备份。
 
 ## 为什么做这个
@@ -47,24 +79,47 @@ KTile 是一款 Windows 原生磁贴式快速启动器：用可调大小的磁�
 ## 特性
 
 - **磁贴混排** — Small / Wide / Tall / Large 四档尺寸自由组合，行列数可配置
-- **插件磁贴** — 用声明式 `plugin.json` 接入本地指标（CPU/内存/磁盘/电池）、
-  HTTP API 或命令行程序；同一插件在不同尺寸下可展示不同布局
-  （例如大磁贴并列 3 天天气，小磁贴只显示当天）
+- **插件磁贴** — 一块磁贴显示实时内容，而不是只有图标。插件是**纯声明式**的：
+  `plugin/<id>/plugin.json` 描述数据源（本地指标 CPU / 内存 / 磁盘 / 电池、
+  HTTP API、命令行程序）与每种尺寸下的布局树，不需要写代码、不需要常驻进程，
+  面板唤出时按 `refreshSeconds` 取缓存、面板开着时按 `visibleRefreshSeconds`
+  高频刷新。同一插件在不同尺寸下可给不同布局（例如大磁贴并列 3 天天气，
+  小磁贴只显示当天）。随包带「天气」与「系统监控」两个示例，设置里可安装 / 删除
 - **轮盘菜单** — 按住 `Ctrl` 再拖右键，从环形菜单里松手即执行（4 / 6 / 8 扇区）；
-  扇区可以放程序、文件、网址、快捷键或系统命令。按前台程序切换不同轮盘交给
-  `slugin` 插件目录——加一个目录就是加一个应用，不用重新编译。可设置抑制键
-  （按住 Alt 等键时不呼出）给系统组合键让路，也能拉黑某些进程完全不弹。
-  默认带修饰键，与 MouseInc 等鼠标手势软件可以同时使用
+  扇区可以放程序、文件、网址、快捷键或系统命令，图标可用插件自带的 SVG。
+  按前台程序换轮盘交给 `slugin` 插件目录——**加一个目录就是加一个应用**，
+  不用重新编译；没命中的程序回落到通用轮盘。可设抑制键（按住 `Alt` 等键时
+  不呼出）给系统组合键让路，也能把某些进程拉黑完全不弹。默认带修饰键，
+  与 MouseInc 等鼠标手势软件可以同时使用。设计与取舍见
+  [docs/radial-menu-design.md](docs/radial-menu-design.md)
 - **多标签页** — 分类整理项目；点击、滚轮、`Ctrl+Tab`、`Ctrl+1..9` 切换
 - **即输即搜** — 唤出面板直接打字，磁贴按名称实时过滤
 - **三种添加方式** — 浏览文件、粘贴目标路径、直接从资源管理器拖入
 - **自定义图标** — 任意图片一键设为磁贴图标（自动缩放导入），或使用系统图标
-- **内置系统项** — 22 个常用系统位置与命令（此电脑、回收站、锁屏、剪贴板路径……）
+- **内置系统项** — 21 个常用系统位置与命令（此电脑、回收站、锁屏、音量与媒体控制……）
 - **皮肤系统** — 4 款深色 + 1 款浅色内置主题，JSON 皮肤文件可手改；支持独立背景图
 - **不透明度** — 整窗与磁贴各自可调，百搭桌面
 - **唤醒快捷键** — `Alt+Space` / `Ctrl+Space` / 双击 `Ctrl` / 单按 `Win` 四种预设，设置里即选即换
 - **窗口出现位置** — 跟随鼠标 / 屏幕四角 / 居中 / 上次位置
+- **中英双语** — 文案外置到 `lang/<code>.json`，加语言 = 加文件，见 [docs/i18n.md](docs/i18n.md)
 - **绿色便携** — 不写注册表（唯一例外是「开机自启」会在 Run 键写一条自身路径）
+
+## 两套插件：一块磁贴，一个轮盘
+
+扩展性分成两条互不相干的线。两者都是「放个目录就算装好」，都不用写代码、不用
+重新编译，主程序也不内嵌任何插件清单或图标：
+
+| | 磁贴插件 `plugin/` | 轮盘插件 `slugin/` |
+|---|---|---|
+| 解决什么 | 磁贴里显示**实时内容**（天气、CPU、HTTP 返回值） | 换个前台程序就换**一套轮盘** |
+| 清单位置 | `plugin/<id>/plugin.json` | `slugin/<id>/radial.json` |
+| 数据来源 | 本地指标 / HTTP / 命令行 | 纯静态：适用进程名 + 扇区动作 |
+| 生效方式 | 设置 → 插件管理 → 安装 / 删除 | 设置 → 轮盘插件 → 重新扫描 |
+| 图标 | `plugin/<id>/icons/*.svg` | `slugin/<id>/icons/*.svg` |
+| 随包示例 | 「天气」「系统监控」 | 「文件资源管理器」「浏览器」 |
+
+exe 目录不可写时（如装在 `Program Files`）两者都会回落到 `data/plugin/`、
+`data/slugin/`。清单格式与字段说明见下方[数据与配置](#数据与配置)。
 
 ## 快捷键
 
