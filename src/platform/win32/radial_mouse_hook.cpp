@@ -45,6 +45,7 @@ bool RadialMouseHook::install(HWND notifyWindow,
     blacklist_ = blacklist;
     state_.store(State::Idle, std::memory_order_relaxed);
     armedTick_ = 0;
+    wheelShownThisGesture_ = false;
     // 全新的一次安装：窗口可见性由应用层随后回灌，这里先按「没亮」算。
     // 如果轮盘这时其实还亮着，应用层下一次 setWheelVisible 会纠正回来。
     wheelVisible_.store(false, std::memory_order_relaxed);
@@ -351,6 +352,7 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         armedTick_ = GetTickCount64();
         startPoint_ = event.pt;
         currentPoint_ = event.pt;
+        wheelShownThisGesture_ = false;
         return true;  // 吞掉
     }
 
@@ -378,6 +380,9 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
                     // 超过阈值：显示轮盘
                     next = State::Shown;
                     state_.store(next, std::memory_order_relaxed);
+                    // 从这一刻起，这一次按下的结果就交给轮盘了：抬起必须吞掉，
+                    // 即使随后状态机被 abort / 过期打回 Idle 也一样。
+                    wheelShownThisGesture_ = true;
                     PostMessageW(notifyWindow_, kRadialShowMessage,
                                  static_cast<WPARAM>(startPoint_.x),
                                  static_cast<LPARAM>(startPoint_.y));
@@ -393,39 +398,50 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
             // 不修改事件流。
             return false;
         }
+    }
 
-        if (message == upMsg) {
-            // 同上：抬起也要确认是配置的那一个侧键（另一个侧键的抬起
-            // 不能当成手势结束，否则会把状态机提前打回 Idle）
-            if (!matchesTriggerButton(event)) {
-                return false;
+    // 抬起单独处理，不放在 `state != Idle` 里面。
+    //
+    // 为什么：状态机随时可能被 abort、被过期判定、被重装钩子打回 Idle，
+    // 而这一次按下确实唤出过轮盘（wheelShownThisGesture_）。那时抬起落到
+    // 「不在跟踪中」那一支上会原样放行 —— 前台窗口收到一个没有配对按下的
+    // 右键抬起，Explorer 这类程序照样弹上下文菜单。用户看到的就是
+    // 「轮盘刚消失，右键菜单又冒出来」，而且时有时无，全看那一次有没有被
+    // 打回 Idle。只要轮盘亮过，抬起就一律吞掉。
+    if (message == upMsg && matchesTriggerButton(event)) {
+        currentPoint_ = event.pt;
+        const bool shownNow = state == State::Shown;
+        const bool wheelWasUp = wheelShownThisGesture_ ||
+                                wheelVisible_.load(std::memory_order_relaxed);
+        wheelShownThisGesture_ = false;
+
+        if (shownNow) {
+            // 已显示轮盘：通知主线程判定扇区
+            PostMessageW(notifyWindow_, kRadialReleaseMessage,
+                         static_cast<WPARAM>(currentPoint_.x),
+                         static_cast<LPARAM>(currentPoint_.y));
+        } else if (wheelWasUp) {
+            // 轮盘亮过，但状态机已经回了 Idle（中间被 abort / 重装钩子
+            // 重置过）。让主线程收掉残影，绝不注入原生点击 —— 用户做的是
+            // 一次轮盘操作，再弹一个右键菜单等于凭空多一次点击。
+            PostMessageW(notifyWindow_, kRadialAbortMessage,
+                         static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
+        } else if (state == State::Idle) {
+            // 既没在跟踪、轮盘也没亮过：这不是我们管的那一次手势，放行。
+            // （函数开头已经拦掉自身注入的事件，这里不会自激。）
+            return false;
+        } else {
+            // 未超阈值：恢复原生点击。
+            // 不在这里直接 SendInput：SendInput 在低级钩子回调里调用有
+            // 死锁风险（原始输入线程正等着我们这个回调返回）。给自己投
+            // 个消息，回到消息循环里再补。
+            if (trigger_.modifier == core::RadialTriggerModifier::None) {
+                requestReinjectClick();
             }
-            // 按键抬起
-            currentPoint_ = event.pt;
-            if (state == State::Shown) {
-                // 已显示轮盘：通知主线程判定扇区
-                PostMessageW(notifyWindow_, kRadialReleaseMessage,
-                             static_cast<WPARAM>(currentPoint_.x),
-                             static_cast<LPARAM>(currentPoint_.y));
-            } else if (wheelVisible_.load(std::memory_order_relaxed)) {
-                // 状态机回 Idle 了、窗口却还亮着（中间被 abort / 重装钩子
-                // 重置过）。这时候绝不能注入原生点击 —— 用户看到的是一次
-                // 结束了的轮盘操作，再弹一个右键菜单等于凭空多一次点击。
-                PostMessageW(notifyWindow_, kRadialAbortMessage,
-                             static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
-            } else {
-                // 未超阈值：恢复原生点击。
-                // 不在这里直接 SendInput：SendInput 在低级钩子回调里调用有
-                // 死锁风险（原始输入线程正等着我们这个回调返回）。给自己投
-                // 个消息，回到消息循环里再补。
-                if (trigger_.modifier == core::RadialTriggerModifier::None) {
-                    requestReinjectClick();
-                }
-                // 有修饰键时不注入（用户是想做手势，不弹原生菜单）
-            }
-            state_.store(State::Idle, std::memory_order_relaxed);
-            return true;  // 吞掉抬起
+            // 有修饰键时不注入（用户是想做手势，不弹原生菜单）
         }
+        state_.store(State::Idle, std::memory_order_relaxed);
+        return true;  // 吞掉抬起
     }
 
     return false;

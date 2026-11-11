@@ -137,8 +137,10 @@ public:
 
     // 请求补发一次原生点击（线程安全，任意线程可调）。
     //
-    // 用在两处：钩子自己在「按下没超阈值」时补发；应用层在「轮盘亮过但
-    // 全程没碰任何扇区、又在中心松手」时补发（见 releaseAt 的返回值）。
+    // 只剩一种触发场景：按下之后**没越过激活阈值**就松手 —— 那压根没唤出
+    // 轮盘，用户就是普通地点了一下右键，原生菜单该照常弹。
+    // 轮盘亮过之后一律不补发：用户那一刻的意图是用轮盘，松手就是「取消」，
+    // 再补一次点击会让后台窗口凭空弹出上下文菜单（见 handleMouseEvent）。
     // 真正的 SendInput 在钩子线程的消息循环里做，调用方立刻返回。
     void requestReinjectClick() const noexcept;
 
@@ -169,6 +171,15 @@ private:
     POINT currentPoint_{};
     // 按下时刻。只用于「按住太久还没拖」的过期判定，见 kMaxTrackingMs。
     ULONGLONG armedTick_ = 0;
+
+    // 本次按下序列里，轮盘到底亮过没有。
+    //
+    // 状态机会被 abort / 过期判定打回 Idle，之后抬起就落到「不在跟踪中」
+    // 那条路上去 —— 那一支原本会放行事件，前台窗口收到一个没有配对按下的
+    // 右键抬起，Explorer 这类程序照样弹上下文菜单。用户看到的就是「轮盘
+    // 明明弹出来了，我松手它却又给我一个右键菜单」。
+    // 记这个事实，抬起时才知道「这一下该吞」。
+    bool wheelShownThisGesture_ = false;
 
     // 主线程回灌的窗口可见性（见 setWheelVisible）
     std::atomic<bool> wheelVisible_{false};

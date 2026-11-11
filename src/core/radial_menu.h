@@ -184,20 +184,6 @@ bool modifierIsTriggerModifier(HotkeyModifier held,
 // 「看不见却起作用」，是最难排查的那类问题。
 bool suppressionApplies(RadialTriggerModifier trigger) noexcept;
 
-// 这次松手该不该按「一次单击」处理（也就是把被吞掉的原生点击还回去）。
-//
-// 拖动阈值最小只有 4 像素，一次手抖的右键很容易跨过去，轮盘就亮了一下、
-// 松手时却不在任何扇区里 —— 动作没执行，原生右键菜单也被吞了，用户看到的
-// 是「右键按了没反应」。三个条件同时成立才算单击：
-//   executedAction   —— 没有执行任何动作；
-//   hadSectorHighlight —— 整个手势里一次扇区都没高亮过（真的在选的人必然
-//                         有一帧落在扇区里）；
-//   releaseDistanceDip < innerRadiusDip —— 松手在中心空档里。外甩取消的
-//                         松手点远在取消半径之外，不会被误判成单击。
-bool releaseLooksLikeClick(bool executedAction, bool hadSectorHighlight,
-                           float releaseDistanceDip,
-                           float innerRadiusDip) noexcept;
-
 // 外甩取消半径的可用区间（DIP，逻辑像素）。
 //
 // 下限 142 就是卡片环的外缘：比它更小的半径会把卡片自己判成「已甩出去」，

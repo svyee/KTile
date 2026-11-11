@@ -61,11 +61,12 @@ public:
 
     // 按键释放：判定命中扇区并触发动作，然后隐藏。
     //
-    // 返回值 answer 的是「这一次压根不算手势，该把原生点击还回去吗」：
-    // 从头到尾没有任何扇区被高亮过、松手又落在中心空档里，说明这只是
-    // 一次抖动的单击（8 像素阈值下很常见）。吞掉它等于右键按了没反应，
-    // 所以这种情况返回 true，由调用方补发一次原生右键。
-    bool releaseAt(POINT screenPoint);
+    // 没有返回值是有意的。调用方拿到「这次像不像单击」只会去做一件事：
+    // 补发一次原生右键，好让用户「右键没坏」。可轮盘已经亮在屏幕上了，
+    // 用户松手就是取消，补一次点击只会让后台窗口凭空弹出上下文菜单。
+    // 所以判定权收敛到钩子层：没越过激活阈值的那一次，压根没唤出轮盘，
+    // 由钩子自己补发；只要轮盘亮过，抬起一律算轮盘的结果。
+    void releaseAt(POINT screenPoint);
 
     void hide();
     bool isVisible() const noexcept;
@@ -161,9 +162,6 @@ private:
     core::RadialMenu menu_;
     std::uint8_t highlightedSector_ = 0;
     bool highlightedValid_ = false;
-    // 本次手势里是否有过任何一帧高亮。用来区分「真的在选」与「抖动的单击」：
-    // 只在中心空档里划过几下就松手的人，其实一次扇区都没碰到。
-    bool gestureHadHighlight_ = false;
 
     // D2D / DWrite / WIC
     platform::win32::ComPtr<ID2D1Factory> d2dFactory_;

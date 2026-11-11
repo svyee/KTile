@@ -38,17 +38,6 @@ bool suppressionApplies(RadialTriggerModifier trigger) noexcept {
     return trigger == RadialTriggerModifier::None;
 }
 
-bool releaseLooksLikeClick(bool executedAction, bool hadSectorHighlight,
-                           float releaseDistanceDip,
-                           float innerRadiusDip) noexcept {
-    if (executedAction || hadSectorHighlight) {
-        return false;
-    }
-    // 松手落在中心空档（含恰好落在内半径上的边界）才算单击。
-    // 写成 <= 而不是 <：内半径那一圈本来就没有扇区可命中。
-    return releaseDistanceDip <= innerRadiusDip;
-}
-
 // ================================================================ 黑名单匹配
 
 bool processNameEquals(const std::string& left,

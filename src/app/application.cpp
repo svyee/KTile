@@ -1266,15 +1266,16 @@ void Application::onRadialRelease(POINT currentPoint) {
         return;
     }
     // 窗口自行判定扇区并触发动作，然后隐藏。
-    // 返回值是「这一次其实只是一次抖动的单击」（全程没碰过扇区、又在中心
-    // 空档松手）：那就把右键原样还给前台程序，别让用户觉得右键坏了。
-    const bool clickLike = radialWindow_->releaseAt(currentPoint);
+    //
+    // 这里**不再补发原生右键**。以前的做法是「全程没碰任何扇区、又在中心
+    // 空档松手」就当作手抖的单击，把点击还给前台 —— 结果是用户明明看到轮盘
+    // 弹出来、想取消，桌面上却跟着冒出一个上下文菜单，而且松手位置不同就
+    // 时有时无。既然轮盘亮过，这一次按下的结果就交给轮盘：选中就执行，
+    // 没选中就是取消。真的只想点右键（压根没拖动、没唤出轮盘）的那一次，
+    // 在钩子层（未超激活阈值）就已经补发了，跟这里无关。
+    radialWindow_->releaseAt(currentPoint);
     activeRadialMenu_ = nullptr;
     radialHook_.setWheelVisible(false);
-    if (clickLike) {
-        // 补发走钩子线程的队列：SendInput 不能在本线程、更不能在钩子回调里做。
-        radialHook_.requestReinjectClick();
-    }
 }
 
 // 钩子报「这次手势作废」。
