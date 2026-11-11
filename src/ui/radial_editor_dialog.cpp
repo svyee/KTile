@@ -349,6 +349,26 @@ void refreshSectorRow(HWND dialog, RadialEditorState* state) {
     state->suppressNotify = false;
 }
 
+// 「类型」下拉当前选中的条目（0 = 「(空)」）。
+//
+// 表单的可用性和动态提示都以它为准，不以动作数据里的 isEmpty() 为准。
+// isEmpty() 的定义是「名称、目标、主键三者全空」—— 空扇区刚把类型从
+// 「(空)」改成「快捷键」时，这三个字段本来就都还空着，拿它判断就会把
+// 名称 / 目标 / 主键一起灰掉：想填名称得先有内容，想有内容得先能填名称，
+// 于是这一格永远填不进去。类型下拉是用户唯一能动的入口，就以它为准。
+int selectedTypeIndex(HWND dialog) {
+    HWND combo = GetDlgItem(dialog, kActionTypeComboId);
+    if (combo == nullptr) {
+        return 0;
+    }
+    const int selection =
+        static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    if (selection < 0 || selection >= kActionTypeCount) {
+        return 0;
+    }
+    return selection;
+}
+
 void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
     std::wstring text;
     const core::RadialMenu* menu = currentMenu(state);
@@ -356,14 +376,17 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
         text = infrastructure::i18n::trw("radialedit.hint.noProfile").c_str();
     } else if (state->currentSector < 0) {
         text = infrastructure::i18n::trw("radialedit.hint.selectSector").c_str();
-    } else if (const core::RadialAction* action = currentAction(state)) {
-        if (action->isEmpty()) {
+    } else {
+        // 同样跟着「类型」下拉走：空扇区选好类型后，提示要立刻变成
+        // 「这一格该填什么」，而不是继续说他是个空槽位。
+        const ActionTypeOption& option = kActionTypes[selectedTypeIndex(dialog)];
+        if (option.empty) {
             text = infrastructure::i18n::trw("radialedit.hint.emptySector").c_str();
-        } else if (action->type == core::RadialActionType::Shortcut) {
+        } else if (option.type == core::RadialActionType::Shortcut) {
             text = infrastructure::i18n::trw("radialedit.hint.shortcut").c_str();
-        } else if (action->type == core::RadialActionType::Builtin) {
+        } else if (option.type == core::RadialActionType::Builtin) {
             text = infrastructure::i18n::trw("radialedit.hint.builtin").c_str();
-        } else if (action->type == core::RadialActionType::Url) {
+        } else if (option.type == core::RadialActionType::Url) {
             text = infrastructure::i18n::trw("radialedit.hint.url").c_str();
         } else {
             text = infrastructure::i18n::trw("radialedit.hint.file").c_str();
@@ -380,22 +403,23 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
 // 界面上看不出哪些字段属于当前类型。现在按类型分别启用，配合下方动态
 // 提示，一眼能看出「这一格要填什么」。
 void refreshFormAvailability(HWND dialog, RadialEditorState* state) {
-    const core::RadialAction* action = currentAction(state);
-    const bool hasSector = action != nullptr;
-    const bool empty = !hasSector || action->isEmpty();
+    // 有没有选中扇区看数据，能不能填看「类型」下拉（见 selectedTypeIndex）。
+    const bool hasSector = currentAction(state) != nullptr;
+    const ActionTypeOption& option = kActionTypes[selectedTypeIndex(dialog)];
+    const bool hasType = hasSector && !option.empty;
     const bool shortcut =
-        !empty && action->type == core::RadialActionType::Shortcut;
+        hasType && option.type == core::RadialActionType::Shortcut;
 
     struct Entry {
         int id;
         bool enabled;
     };
-    // 「类型」始终可用：空扇区得先能选类型。名称只在非空时可用
+    // 「类型」始终可用：空扇区得先能选类型
     const Entry entries[] = {
         {kActionTypeComboId, hasSector},
-        {kActionNameEditId, !empty},
-        {kActionTargetEditId, !empty && !shortcut},
-        {kActionPickId, !empty && !shortcut},
+        {kActionNameEditId, hasType},
+        {kActionTargetEditId, hasType && !shortcut},
+        {kActionPickId, hasType && !shortcut},
         {kActionModifierComboId, shortcut},
         {kActionPlusId, shortcut},
         {kActionKeyEditId, shortcut},
@@ -572,6 +596,17 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
     if (kActionTypes[typeIndex].empty) {
         // 清空该扇区：所有字段一起重置，保证 isEmpty() 为真
         *action = core::RadialAction();
+        // 表单也要跟着清。只清数据的话，列表已经变回「(空)」，名称框里却
+        // 还留着上一格的名字，看着像「这个空扇区叫复制」。
+        state->suppressNotify = true;
+        setControlText(dialog, kActionNameEditId, std::wstring());
+        setControlText(dialog, kActionTargetEditId, std::wstring());
+        setControlText(dialog, kActionKeyEditId, std::wstring());
+        HWND modifierCombo = GetDlgItem(dialog, kActionModifierComboId);
+        if (modifierCombo != nullptr) {
+            SendMessageW(modifierCombo, CB_SETCURSEL, 0, 0);
+        }
+        state->suppressNotify = false;
         refreshSectorRow(dialog, state);
         refreshFormAvailability(dialog, state);
         refreshActionStateHint(dialog, state);
@@ -1455,6 +1490,9 @@ bool showRadialEditorWindow(HWND owner, core::RadialConfig* config) {
         state.draft.menu.sectorCount = 8;
         state.draft.menu.actions.assign(8, core::RadialAction());
     }
+    // 打开就选中第 1 个扇区：否则列表空选、下面整片表单灰着，用户得先
+    // 猜「要先点一下列表里那一行」才知道能编辑。
+    state.currentSector = 0;
 
     RECT desired{0, 0, scaleFor(owner, kDialogWidth),
                  scaleFor(owner, kDialogHeight)};
