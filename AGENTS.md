@@ -44,7 +44,11 @@ KTile 是一个 Windows 原生磁贴式快速启动器：按热键唤出面板�
 .\build\KTile.exe --debug-add="C:\path\a.lnk"  # 走一次拖入添加流程
 .\build\KTile.exe --debug-radial               # 渲染轮盘菜单到 radial-shot.png
 .\build\KTile.exe --debug-radial=0,108         # 同上，并高亮正下方扇区（偏移单位 DIP）
+.\build\KTile.exe --debug-wheel-editor         # 打开「轮盘菜单设置」对话框
 ```
+
+`--debug-wheel-editor` 不能叫 `--debug-radial-editor`：开关是按「命令行里是否
+含这个子串」判定的，`--debug-radial` 会命中它，于是先跑一遍位图导出再退出。
 
 ## 3. 硬约束（违反即视为错误）
 

@@ -10,6 +10,7 @@
 
 #include "base/text_convert.h"
 #include "core/builtin_items.h"
+#include "infrastructure/i18n.h"
 #include "ui/dialog_style.h"
 
 #include <Windows.h>
@@ -18,6 +19,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -33,9 +35,10 @@ constexpr const wchar_t* kEditorClass = L"KTile.RadialEditor";
 constexpr UINT kEditorCloseMessage = WM_APP + 0x91U;
 
 constexpr int kDialogWidth = 700;
-// 高度按最密的一页（扇区动作：列表 + 三行动作表单）定，两页共用。
-// 再高就是纯留白 —— 实测 560 时底部空了近 90 DIP。
-constexpr int kDialogHeight = 460;
+// 高度按最密的一页（扇区动作：列表 + 四行动作表单）定，两页共用。
+// 460 时动作表单的最后一行会压到底部按钮上（提示文字直接盖住「确定」），
+// 所以往下让 40：列表略收，表单拿到完整的四行，卡片与按钮之间留 18。
+constexpr int kDialogHeight = 500;
 constexpr int kMargin = 16;
 constexpr int kButtonWidth = 78;
 constexpr int kButtonHeight = 26;
@@ -49,8 +52,13 @@ constexpr int kTabLeft = 16;      // 顶部两枚页签的起始横坐标
 // 那 168px 还给内容区，扇区列表和动作表单都能更宽。
 constexpr int kRightLeft = kMargin;
 constexpr int kRightWidth = kDialogWidth - kMargin * 2;  // 668
-constexpr int kSectorListTop = 74;
-constexpr int kSectorListHeight = 210;
+// 列表从页签下方的「扇区数」一行之后开始；190 够放 8 个扇区（每行约 22）
+constexpr int kSectorListTop = 82;
+constexpr int kSectorListHeight = 190;
+
+// 动作表单：四行网格。标签列宽度按当前语言实测（见 createControls），
+// 控件列共用同一条左边界，右边缘统一落在内容区右界。
+constexpr int kFormRowStep = 34;
 
 // 控件 ID
 constexpr int kTabSectorsId = 2101;
@@ -65,6 +73,7 @@ constexpr int kActionModifierComboId = 2113;
 constexpr int kActionKeyEditId = 2114;
 constexpr int kActionStateHintId = 2115;
 constexpr int kActionKeyHintId = 2116;
+constexpr int kActionPlusId = 2117;  // 修饰键与主键之间的「+」
 constexpr int kBlacklistListId = 2120;
 constexpr int kBlacklistEditId = 2121;
 constexpr int kBlacklistAddId = 2123;
@@ -363,6 +372,43 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
     setControlText(dialog, kActionStateHintId, text);
 }
 
+// 表单可用性：只让跟当前动作类型有关的部分亮着。
+//
+// 快捷键不需要「目标」（填了也会在写回时被清掉），程序 / 文件 / 网址 /
+// 内置命令不需要「修饰键 + 主键」。原来只有「没选中扇区」这一种全灰状态，
+// 于是切到快捷键后目标框还亮着、点「选择…」能弹文件框、选完却没效果 ——
+// 界面上看不出哪些字段属于当前类型。现在按类型分别启用，配合下方动态
+// 提示，一眼能看出「这一格要填什么」。
+void refreshFormAvailability(HWND dialog, RadialEditorState* state) {
+    const core::RadialAction* action = currentAction(state);
+    const bool hasSector = action != nullptr;
+    const bool empty = !hasSector || action->isEmpty();
+    const bool shortcut =
+        !empty && action->type == core::RadialActionType::Shortcut;
+
+    struct Entry {
+        int id;
+        bool enabled;
+    };
+    // 「类型」始终可用：空扇区得先能选类型。名称只在非空时可用
+    const Entry entries[] = {
+        {kActionTypeComboId, hasSector},
+        {kActionNameEditId, !empty},
+        {kActionTargetEditId, !empty && !shortcut},
+        {kActionPickId, !empty && !shortcut},
+        {kActionModifierComboId, shortcut},
+        {kActionPlusId, shortcut},
+        {kActionKeyEditId, shortcut},
+        {kActionKeyHintId, shortcut},
+    };
+    for (const Entry& entry : entries) {
+        HWND control = GetDlgItem(dialog, entry.id);
+        if (control != nullptr) {
+            EnableWindow(control, entry.enabled ? TRUE : FALSE);
+        }
+    }
+}
+
 // 把某个扇区的数据回填到动作表单
 void refreshActionForm(HWND dialog, RadialEditorState* state) {
     if (state == nullptr) {
@@ -415,19 +461,9 @@ void refreshActionForm(HWND dialog, RadialEditorState* state) {
                      static_cast<WPARAM>(modifierIndex), 0);
     }
 
-    // 表单的可用性跟着「是否选中扇区」走，未选中时灰掉比让人白点强
-    const bool enabled = action != nullptr;
-    const int ids[] = {kActionTypeComboId, kActionNameEditId,
-                       kActionTargetEditId, kActionPickId,
-                       kActionModifierComboId, kActionKeyEditId};
-    for (const int id : ids) {
-        HWND control = GetDlgItem(dialog, id);
-        if (control != nullptr) {
-            EnableWindow(control, enabled ? TRUE : FALSE);
-        }
-    }
-
+    // 可用性按「是否选中扇区 + 动作类型」决定，见 refreshFormAvailability
     state->suppressNotify = false;
+    refreshFormAvailability(dialog, state);
     refreshActionStateHint(dialog, state);
 }
 
@@ -537,6 +573,7 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
         // 清空该扇区：所有字段一起重置，保证 isEmpty() 为真
         *action = core::RadialAction();
         refreshSectorRow(dialog, state);
+        refreshFormAvailability(dialog, state);
         refreshActionStateHint(dialog, state);
         return;
     }
@@ -581,6 +618,7 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
     }
 
     refreshSectorRow(dialog, state);
+    refreshFormAvailability(dialog, state);
     refreshActionStateHint(dialog, state);
 }
 
@@ -793,33 +831,80 @@ void createControls(HWND hwnd, RadialEditorState* state) {
                            x, y, w, h, -1);
     };
 
+    // 取词助手：文案都在语言文件里，这里只做取值与指针转换
+    auto T = [](const char* key) -> const wchar_t* {
+        return infrastructure::i18n::trw(key).c_str();
+    };
+
+    // 用对话框字体现量文字，按 96 DPI 逻辑像素返回。
+    //
+    // 这一页原来按中文的字数手工排像素：加英文后「Modifier」「Choose…」
+    // 这些定宽控件会被裁字。改成先量再定宽之后，中文一个像素不动，
+    // 长语言自动撑开（与设置窗口同一套办法）。
+    auto measureText = [&](const wchar_t* text) -> int {
+        if (text == nullptr || text[0] == L'\0' || font == nullptr) {
+            return 0;
+        }
+        HDC dc = GetDC(hwnd);
+        if (dc == nullptr) {
+            return 0;
+        }
+        HGDIOBJ previous = SelectObject(dc, font);
+        SIZE size{};
+        const bool measured =
+            GetTextExtentPoint32W(dc, text, lstrlenW(text), &size) != FALSE;
+        const int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+        SelectObject(dc, previous);
+        ReleaseDC(hwnd, dc);
+        if (!measured || dpi <= 0) {
+            return 0;
+        }
+        return MulDiv(size.cx, 96, dpi);
+    };
+    // 按钮 / 下拉：文字宽 + 内边距与箭头占位
+    auto fitWidth = [&](const wchar_t* text, const int minWidth) -> int {
+        return (std::max)(minWidth, measureText(text) + 22);
+    };
+
     // ---- 顶部两枚页签（自绘：选中页画成强调色主按钮）----
     sink = nullptr;
-    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.tab.sectors").c_str(),
+    const int tabSectorsW = fitWidth(T("radialedit.tab.sectors"), 96);
+    const int tabBlacklistX = kTabLeft + tabSectorsW + 8;
+    makeControl(L"BUTTON", T("radialedit.tab.sectors"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_OWNERDRAW,
-                0, kTabLeft, 14, 96, kButtonHeight, kTabSectorsId);
-    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.tab.blacklist").c_str(),
+                0, kTabLeft, 14, tabSectorsW, kButtonHeight, kTabSectorsId);
+    makeControl(L"BUTTON", T("radialedit.tab.blacklist"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kTabLeft + 104, 14, 96, kButtonHeight, kTabProfilesId);
+                tabBlacklistX, 14, fitWidth(T("radialedit.tab.blacklist"), 96),
+                kButtonHeight, kTabProfilesId);
 
     // ==================== 第 1 页：扇区动作 ====================
     sink = &state->sectorPageControls;
 
-    makeLabel(infrastructure::i18n::trw("radialedit.sectorCount").c_str(), kRightLeft, 44, 44, 18);
+    // 扇区数：[4 扇区 ▾] 跟在标签后面，标签宽度按实测递推
+    const int countLabelW = measureText(T("radialedit.sectorCount")) + 18;
+    makeLabel(T("radialedit.sectorCount"), kRightLeft, 52, countLabelW, 18);
+    const int countComboX = kRightLeft + countLabelW;
     HWND countCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-        kRightLeft + 48, 40, 90, 160, kSectorCountComboId);
+        countComboX, 48, fitWidth(T("radialedit.sectors.4"), 90), 160,
+        kSectorCountComboId);
     if (countCombo != nullptr) {
         SendMessageW(countCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw("radialedit.sectors.4").c_str()));
+                     reinterpret_cast<LPARAM>(T("radialedit.sectors.4")));
         SendMessageW(countCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw("radialedit.sectors.6").c_str()));
+                     reinterpret_cast<LPARAM>(T("radialedit.sectors.6")));
         SendMessageW(countCombo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(infrastructure::i18n::trw("radialedit.sectors.8").c_str()));
+                     reinterpret_cast<LPARAM>(T("radialedit.sectors.8")));
         SendMessageW(countCombo, CB_SETCURSEL, 2, 0);
     }
 
+    // ---- 扇区列表 ----
+    //
+    // 四列宽度按内容实测/估宽排：类型列按最长的动作类型（英文 Application
+    // 比中文「快捷键」宽一倍），目标列吃满剩余 —— 原来目标列分到 364px、
+    // 名称列只有 120px，表格看着像被切成「三小列 + 一大块」。
     HWND sectorList = makeControl(
         WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
@@ -829,17 +914,28 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     if (sectorList != nullptr) {
         ListView_SetExtendedListViewStyle(
             sectorList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+
+        int sectorColumnW =
+            (std::max)(92, measureText(T("radialedit.col.sector")) + 24);
+        int typeColumnW =
+            (std::max)(88, measureText(T("radialedit.col.type")) + 24);
+        for (int i = 0; i < kActionTypeCount; ++i) {
+            typeColumnW =
+                (std::max)(typeColumnW, measureText(T(kActionTypes[i].key)) + 16);
+        }
+        const int nameColumnW = 150;
+        const int targetColumnW =
+            kRightWidth - 8 - sectorColumnW - typeColumnW - nameColumnW;
+
         struct ColumnSpec {
             const wchar_t* text;
             int width;
         };
-        // 「目标」列吃满剩余宽度：列表加宽后固定列宽会在右边留一条空白，
-        // 视觉上像多了一列空表头。
         const ColumnSpec columns[] = {
-            {infrastructure::i18n::trw("radialedit.col.sector").c_str(), 92},
-            {infrastructure::i18n::trw("radialedit.col.type").c_str(), 84},
-            {infrastructure::i18n::trw("radialedit.col.name").c_str(), 120},
-            {infrastructure::i18n::trw("radialedit.col.target").c_str(), kRightWidth - 92 - 84 - 120 - 8},
+            {T("radialedit.col.sector"), sectorColumnW},
+            {T("radialedit.col.type"), typeColumnW},
+            {T("radialedit.col.name"), nameColumnW},
+            {T("radialedit.col.target"), targetColumnW},
         };
         const int columnCount =
             static_cast<int>(sizeof(columns) / sizeof(columns[0]));
@@ -854,105 +950,165 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     }
 
     // ---- 动作表单 ----
-    const int formTop = kSectorListTop + kSectorListHeight + 12;  // 296
-    makeLabel(infrastructure::i18n::trw("radialedit.col.type").c_str(), kRightLeft, formTop + 4, 30, 18);
+    //
+    // 三行网格 + 一行提示，标签列统一宽度、控件列共用同一条左边界：
+    //
+    //   16                      fieldX                    684
+    //   类型    [快捷键 ▾]        名称 [___________________]
+    //   目标    [______________________________] [选择…]
+    //   修饰键  [Ctrl ▾] + [z]      例如 C / F4 / Space，仅「快捷键」生效
+    //   （动态提示：这一格现在能做什么、会注入到哪里）
+    //
+    // 原来的排法是「类型 / 名称 / 修饰键」硬拆三段、后面两行各自起头，
+    // 同一个组合键在表格里是 Ctrl+C、在这边被拆成修饰键 Ctrl 与主键 z，
+    // 读起来像四块不相干的东西。现在「修饰键 + 主键」用「+」连成一串，
+    // 与列表「目标」列是同一种读法。
+    const int formTop = kSectorListTop + kSectorListHeight + 16;  // 288
+    const int contentRight = kDialogWidth - kMargin;              // 684
+
+    int formLabelW = measureText(T("radialedit.col.type"));
+    formLabelW = (std::max)(formLabelW, measureText(T("radialedit.col.name")));
+    formLabelW = (std::max)(formLabelW, measureText(T("radialedit.col.target")));
+    formLabelW = (std::max)(formLabelW, measureText(T("radialedit.modifier")));
+    formLabelW = (std::max)(formLabelW + 16, 52);
+    const int fieldX = kRightLeft + formLabelW;
+
+    // 第 1 行：类型 + 名称
+    const int row1 = formTop;
+    makeLabel(T("radialedit.col.type"), kRightLeft, row1 + 4, formLabelW - 8, 18);
+    int typeComboW = 100;
+    for (int i = 0; i < kActionTypeCount; ++i) {
+        typeComboW =
+            (std::max)(typeComboW, measureText(T(kActionTypes[i].key)) + 30);
+    }
     HWND typeCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-        kRightLeft + 32, formTop, 100, 200, kActionTypeComboId);
+        fieldX, row1, typeComboW, 220, kActionTypeComboId);
     if (typeCombo != nullptr) {
         for (int i = 0; i < kActionTypeCount; ++i) {
             SendMessageW(typeCombo, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(infrastructure::i18n::trw(kActionTypes[i].key).c_str()));
+                         reinterpret_cast<LPARAM>(T(kActionTypes[i].key)));
         }
         SendMessageW(typeCombo, CB_SETCURSEL, 0, 0);
     }
 
-    makeLabel(infrastructure::i18n::trw("radialedit.col.name").c_str(), kRightLeft + 144, formTop + 4, 32, 18);
+    const int nameLabelX = fieldX + typeComboW + 24;
+    const int nameLabelW = measureText(T("radialedit.col.name")) + 8;
+    makeLabel(T("radialedit.col.name"), nameLabelX, row1 + 4, nameLabelW, 18);
+    const int nameEditX = nameLabelX + nameLabelW + 8;
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                WS_EX_CLIENTEDGE, kRightLeft + 180, formTop - 2, 140, 24,
-                kActionNameEditId);
+                WS_EX_CLIENTEDGE, nameEditX, row1 - 2,
+                contentRight - nameEditX, 24, kActionNameEditId);
 
-    makeLabel(infrastructure::i18n::trw("radialedit.modifier").c_str(), kRightLeft + 332, formTop + 4, 44, 18);
+    // 第 2 行：目标（路径 / 网址 / 内置命令），「选择…」贴右边界
+    const int row2 = formTop + kFormRowStep;
+    makeLabel(T("radialedit.col.target"), kRightLeft, row2 + 4, formLabelW - 8, 18);
+    const int chooseW = fitWidth(T("radialedit.choose"), 64);
+    const int chooseX = contentRight - chooseW;
+    makeControl(L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                WS_EX_CLIENTEDGE, fieldX, row2 - 2, chooseX - 8 - fieldX, 24,
+                kActionTargetEditId);
+    makeControl(L"BUTTON", T("radialedit.choose"),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                chooseX, row2 - 2, chooseW, kSmallButtonHeight, kActionPickId);
+
+    // 第 3 行：修饰键 + 主键（「+」把它们连成一个组合键）
+    const int row3 = formTop + kFormRowStep * 2;
+    makeLabel(T("radialedit.modifier"), kRightLeft, row3 + 4, formLabelW - 8, 18);
+    int modifierW = 90;
+    for (int i = 0; i < kModifierCount; ++i) {
+        modifierW =
+            (std::max)(modifierW, measureText(T(kModifiers[i].key)) + 30);
+    }
     HWND modifierCombo = makeControl(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0,
-        kRightLeft + 380, formTop, 90, 160, kActionModifierComboId);
+        fieldX, row3, modifierW, 160, kActionModifierComboId);
     if (modifierCombo != nullptr) {
         for (int i = 0; i < kModifierCount; ++i) {
             SendMessageW(modifierCombo, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(infrastructure::i18n::trw(kModifiers[i].key).c_str()));
+                         reinterpret_cast<LPARAM>(T(kModifiers[i].key)));
         }
         SendMessageW(modifierCombo, CB_SETCURSEL, 0, 0);
     }
 
-    const int targetTop = formTop + 34;
-    makeLabel(infrastructure::i18n::trw("radialedit.col.target").c_str(), kRightLeft, targetTop + 4, 30, 18);
+    // 「+」左右各留 6：太贴会看成修饰键下拉的一部分
+    const int plusX = fieldX + modifierW + 6;
+    makeControl(L"STATIC", L"+", WS_CHILD | WS_VISIBLE | SS_CENTER,
+                0, plusX, row3 + 4, 14, 18, kActionPlusId);
+    const int keyX = plusX + 20;
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                WS_EX_CLIENTEDGE, kRightLeft + 32, targetTop - 2, 300, 24,
-                kActionTargetEditId);
-    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.choose").c_str(),
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kRightLeft + 340, targetTop - 2, 64, kSmallButtonHeight,
-                kActionPickId);
+                WS_EX_CLIENTEDGE, keyX, row3 - 2, 64, 24, kActionKeyEditId);
+    const int keyHintX = keyX + 64 + 12;
+    makeControl(L"STATIC", T("radialedit.keyHint"),
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 0, keyHintX, row3 + 4,
+                contentRight - keyHintX, 18, kActionKeyHintId);
 
-    const int keyTop = targetTop + 34;
-    makeLabel(infrastructure::i18n::trw("radialedit.key").c_str(), kRightLeft, keyTop + 4, 30, 18);
-    makeControl(L"EDIT", L"",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                WS_EX_CLIENTEDGE, kRightLeft + 32, keyTop - 2, 60, 24,
-                kActionKeyEditId);
-    makeControl(L"STATIC", infrastructure::i18n::trw("radialedit.keyHint").c_str(),
-                WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kRightLeft + 100,
-                keyTop + 2, 380, 18, kActionKeyHintId);
-
-    // 动态说明：选中扇区的状态提示（空槽位 / 需要选目标 / 快捷键会注入到前台）
-    makeControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kRightLeft,
-                keyTop + 30, kRightWidth, 36, kActionStateHintId);
+    // 第 4 行：动态提示（两行高度）。这里原来在 row3 + 30 处以 36 高摆放，
+    // 底边 430 直接盖住 y=418 的「确定」按钮 —— 现在整体下移到表单之下，
+    // 卡片下沿（446）之前收住。
+    makeControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
+                kRightLeft, row3 + kFormRowStep, kRightWidth, 38,
+                kActionStateHintId);
 
     // ==================== 第 2 页：黑名单 ====================
     sink = &state->profilePageControls;
 
+    // 这一页没有「扇区数」那一行，列表就从页签下方起、一直铺到表单上沿
+    // （288 = 扇区动作页的表单起点），两页的动作区最终落在同一条水平线上。
+    const int blacklistListTop = 48;
     HWND profileList = makeControl(
         WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
             LVS_SHOWSELALWAYS,
-        WS_EX_CLIENTEDGE, kMargin, 62, kDialogWidth - 2 * kMargin, 220,
+        WS_EX_CLIENTEDGE, kMargin, blacklistListTop,
+        kDialogWidth - 2 * kMargin,
+        kSectorListTop + kSectorListHeight - blacklistListTop,
         kBlacklistListId);
     if (profileList != nullptr) {
         ListView_SetExtendedListViewStyle(
             profileList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-        column.pszText = const_cast<LPWSTR>(infrastructure::i18n::trw("radialedit.blacklistColumn").c_str());
+        column.pszText = const_cast<LPWSTR>(T("radialedit.blacklistColumn"));
         column.cx = scaleFor(hwnd, kDialogWidth - 2 * kMargin - 8);
         column.fmt = LVCFMT_LEFT;
         ListView_InsertColumn(profileList, 0, &column);
     }
 
-    const int profileFormTop = 294;
-    makeLabel(infrastructure::i18n::trw("radialedit.processName").c_str(), kMargin, profileFormTop + 4, 48, 18);
+    // 进程名一行：输入框吃满到按钮之前，两个按钮贴右边界、按实测宽度
+    const int profileFormTop = blacklistListTop +
+                               (kSectorListTop + kSectorListHeight - blacklistListTop) + 16;
+    const int processLabelW = measureText(T("radialedit.processName")) + 12;
+    makeLabel(T("radialedit.processName"), kMargin, profileFormTop + 4,
+              processLabelW, 18);
+    const int removeW = fitWidth(T("radialedit.removeSelected"), 96);
+    const int addW = fitWidth(T("radialedit.addOrUpdate"), 96);
+    const int removeX = kDialogWidth - kMargin - removeW;
+    const int addX = removeX - 8 - addW;
     makeControl(L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                WS_EX_CLIENTEDGE, kMargin + 52, profileFormTop - 2, 260, 24,
+                WS_EX_CLIENTEDGE, kMargin + processLabelW,
+                profileFormTop - 2, addX - 8 - (kMargin + processLabelW), 24,
                 kBlacklistEditId);
-    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.addOrUpdate").c_str(),
+    makeControl(L"BUTTON", T("radialedit.addOrUpdate"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kMargin + 324, profileFormTop - 2, 110, kSmallButtonHeight,
+                addX, profileFormTop - 2, addW, kSmallButtonHeight,
                 kBlacklistAddId);
-    makeControl(L"BUTTON", infrastructure::i18n::trw("radialedit.removeSelected").c_str(),
+    makeControl(L"BUTTON", T("radialedit.removeSelected"),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
-                kMargin + 442, profileFormTop - 2, 90, kSmallButtonHeight,
+                removeX, profileFormTop - 2, removeW, kSmallButtonHeight,
                 kBlacklistDeleteId);
 
     // 说明按四行给高度：150% 缩放下这段中文会折到第四行，给少了末尾会被裁掉
     makeControl(
-        L"STATIC",
-        infrastructure::i18n::trw("radialedit.blacklistHint").c_str(),
+        L"STATIC", T("radialedit.blacklistHint"),
         WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kMargin, profileFormTop + 34,
-        kDialogWidth - 2 * kMargin, 72, kBlacklistHintId);
+        kDialogWidth - 2 * kMargin, 88, kBlacklistHintId);
 
     // ---- 底部按钮 ----
     sink = nullptr;
@@ -1010,9 +1166,21 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
         }
 
         case WM_CTLCOLORSTATIC: {
-            // 说明文字不铺灰底，直接画在白色卡片上
-            SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-            SetTextColor(reinterpret_cast<HDC>(wParam), dialog_style::text());
+            // 说明文字不铺灰底，直接画在白色卡片上。
+            // 提示 / 示例用次要色，与正文字段区分；禁用的控件仍用系统灰字 ——
+            // 否则被禁用的编辑框看起来还像能输入（表单会按动作类型灰掉无关项）。
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            HWND control = reinterpret_cast<HWND>(lParam);
+            SetBkMode(dc, TRANSPARENT);
+            const int id = control != nullptr ? GetDlgCtrlID(control) : 0;
+            COLORREF color = dialog_style::text();
+            if (control != nullptr && IsWindowEnabled(control) == FALSE) {
+                color = GetSysColor(COLOR_GRAYTEXT);
+            } else if (id == kActionStateHintId || id == kActionKeyHintId ||
+                       id == kBlacklistHintId) {
+                color = dialog_style::secondaryText();
+            }
+            SetTextColor(dc, color);
             return reinterpret_cast<LRESULT>(dialog_style::cardBrush());
         }
 

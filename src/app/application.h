@@ -87,6 +87,8 @@ struct DebugOptions {
     bool about = false;
     // --debug-settings-keepalive：打开设置后继续跑主循环
     bool settingsKeepAlive = false;
+    // --debug-radial-editor：直接打开「轮盘菜单设置」对话框（供自动化截图）
+    bool radialEditor = false;
     // --debug-editor：打开第一个磁贴的「修改项目」对话框
     bool editor = false;
     // --debug-new-item：打开「添加项目」对话框（新建模式）
@@ -119,8 +121,8 @@ struct DebugOptions {
 
     // 是否有任何开关被打开
     bool any() const noexcept {
-        return shot || settings || settingsKeepAlive || about || editor ||
-               newItem || !search.empty() || !addPaths.empty() ||
+        return shot || settings || settingsKeepAlive || radialEditor || about ||
+               editor || newItem || !search.empty() || !addPaths.empty() ||
                dragSrcX >= 0 || opacityPercent > 0 || radial ||
                !radialPluginId.empty();
     }

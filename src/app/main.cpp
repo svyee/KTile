@@ -1,4 +1,4 @@
-// KTile - 应用入口
+﻿// KTile - 应用入口
 //
 // 里程碑状态：
 //   M1 单实例 + 托盘 + 全局热键 + 窗口壳          [完成]
@@ -103,6 +103,12 @@ int WINAPI wWinMain(HINSTANCE instance,
     debugOptions.settings = hasFlag(L"--debug-settings");
     // --debug-settings-keepalive：打开设置后不退出，继续跑主循环
     debugOptions.settingsKeepAlive = hasFlag(L"--debug-settings-keepalive");
+    // --debug-wheel-editor：直接打开「轮盘菜单设置」对话框。
+    //
+    // 不能叫 --debug-radial-editor：下面的 hasFlag 是按「子串是否存在」判的
+    // （--debug-settings-keepalive 依赖这个行为），--debug-radial 会命中
+    // 它，于是先跑一遍轮盘位图导出再退出，对话框根本来不及出现。
+    debugOptions.radialEditor = hasFlag(L"--debug-wheel-editor");
     // --debug-about：启动后打开「关于」对话框（供自动化检查文案）
     debugOptions.about = hasFlag(L"--debug-about");
     // --debug-editor：启动后打开第一个磁贴的「修改项目」对话框

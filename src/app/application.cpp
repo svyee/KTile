@@ -17,6 +17,7 @@
 #include "platform/win32/system_actions.h"
 #include "platform/win32/uuid.h"
 #include "ui/item_editor_dialog.h"
+#include "ui/radial_editor_dialog.h"
 #include "ui/about_dialog.h"
 #include "ui/tile_context_menu.h"
 #include "ui/settings_window.h"
@@ -674,6 +675,17 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         if (!debug.settingsKeepAlive) {
             return 0;
         }
+    }
+
+    // ---- 调试「轮盘菜单设置」对话框 ----
+    //
+    // 这个对话框平时藏在 设置 → 轮盘 → 「编辑扇区动作…」后面，自动化
+    // 要拍它的版面得先切页再点按钮，很容易点到别处。直接给个入口。
+    if (debug.radialEditor) {
+        ui::showRadialEditorWindow(
+            launcherWindow_ != nullptr ? launcherWindow_->hwnd() : nullptr,
+            &radialConfig_);
+        return 0;
     }
 
     // ---- 调试「关于」对话框 ----
