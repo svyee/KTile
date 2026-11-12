@@ -337,6 +337,17 @@ if ($Tests) {
             $extra = $extra | Select-Object -Unique
         }
 
+        # 手势热键测试需要 global_hotkey.cpp，它取错误文案走 i18n
+        if ($content -match "global_hotkey\.h") {
+            $extra = @($extra) + @(
+                (Join-Path $SrcDir "platform\win32\global_hotkey.cpp"),
+                (Join-Path $SrcDir "infrastructure\i18n.cpp"),
+                (Join-Path $SrcDir "infrastructure\json\json_parser.cpp"),
+                (Join-Path $SrcDir "base\text_convert.cpp")
+            )
+            $extra = $extra | Select-Object -Unique
+        }
+
         if (-not (Invoke-Compile -Source $tf.FullName -OutputExe $exePath -ExtraSources $extra)) {
             $failed++
             continue

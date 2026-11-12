@@ -227,6 +227,11 @@ GestureHotkey* g_gestureHotkey = nullptr;
 // 取 400ms 手感更稳，也不至于把两次独立操作误判成双击。
 constexpr ULONGLONG kDoubleCtrlWindowMs = 400;
 
+// Held / StartMenu 卡住的上限。这两个状态下的 Win down 被钩子吞掉了，系统
+// 键盘状态没有更新，GetAsyncKeyState 一律报未按，问不出「还按着吗」；
+// 抬起真丢了只能靠时间兜底。
+constexpr ULONGLONG kMaxWinStateMs = 5000;
+
 // 自己补发的按键用这个签名打标（dwExtraInfo 会原样传到钩子）。
 // 不能按 LLKHF_INJECTED 一刀切：钩子必须放行自己注入的 Win 键，
 // 否则补发出去又被吞掉，死循环；但自动化脚本模拟双击 Ctrl 是真按键，
@@ -327,6 +332,7 @@ void GestureHotkey::uninstall() {
     lastCtrlDownTick_ = 0;
     ctrlHeld_ = false;
     winState_ = WinState::Idle;
+    winStateTick_ = 0;
     startMenuByWinKey_ = false;
     ctrlPressed_ = false;
 }
@@ -353,26 +359,23 @@ void GestureHotkey::injectKey(const WORD virtualKey, const bool down) {
     SendInput(1, &input, sizeof(INPUT));
 }
 
-void GestureHotkey::reconcileWinState() {
-    // Win 抬起可能丢失：钩子回调由本线程泵送，系统负载高（典型是开机自启后
-    // 几分钟）时单次回调超过 LowLevelHooksTimeout 会被跳过，状态机就停在非 Idle。
-    // Held 卡住则单击永不触发，Replayed 卡住则系统认为 Win 一直按着（按键全变组合键）。
-    // 这里结清：Held 按单击完成处理，Replayed 补发抬起。
+void GestureHotkey::settleWinState() {
+    // 抬起事件丢失时把账结清。Replayed 必须补发 Win 抬起，否则系统认为 Win
+    // 一直按着，之后所有按键都成了 Win 组合。Held 不补唤醒：分不清用户是
+    // 还在按住还是早已松手，替他补一次只会变成莫名其妙的弹窗。
     switch (winState_) {
         case WinState::Held:
-            report("状态对账：Win 抬起事件丢失，Held 按单击完成处理");
+            report("状态对账：Win 抬起丢失，恢复 Idle");
             winState_ = WinState::Idle;
-            trigger();
             break;
         case WinState::Replayed:
-            report("状态对账：Win 抬起事件丢失，补发 Win 抬起防止卡键");
+            report("状态对账：补发 Win 抬起，防止卡键");
             injectWinKey(false);
             winState_ = WinState::Idle;
             break;
         case WinState::StartMenu:
-            winState_ = WinState::Idle;
-            break;
         case WinState::Idle:
+            winState_ = WinState::Idle;
             break;
     }
 }
@@ -429,37 +432,45 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
 
     // --- 单按 Win 键
     if (gesture_ == core::HotkeyGesture::WinKey) {
-        // 自愈对账：状态机不在 Idle 而物理 Win 已松开，说明抬起事件丢了。
-        // GetAsyncKeyState 只在非 Idle 时调用，常态零开销。
-        if (winState_ != WinState::Idle &&
-            (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
-            (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0) {
-            reconcileWinState();
+        // 卡住的兜底。Replayed 可以问 GetAsyncKeyState：那个 Win down 是
+        // 补发给系统的，键盘状态会跟着走。Held / StartMenu 的 down 被钩子
+        // 吞了，系统从未收到按下，Async 一律报未按；拿它判定会把之后每一次
+        // 按键都当成「抬起丢失」并提前唤醒（按住 Win 一直闪、Win+L 先弹
+        // 面板，都是这个误判）。这两态只能用时间上限兜底。
+        if (winState_ != WinState::Idle) {
+            const bool stale = GetTickCount64() - winStateTick_ > kMaxWinStateMs;
+            const bool replayedReleased =
+                winState_ == WinState::Replayed &&
+                (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
+                (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0;
+            if (stale || replayedReleased) {
+                settleWinState();
+            }
         }
 
         if (isWinKey(event.vkCode)) {
             if (isDown) {
+                // 键盘自动重复：按住 Win 约 500ms 后系统每 30ms 补发一次
+                // keydown。这些事件不能再结算成单击，否则面板会一直闪。
                 if (winState_ != WinState::Idle) {
-                    // 上一个抬起丢了。此刻物理 Win 是按下的，上面的对账不会触发，
-                    // 必须在这里强制结清旧账。
-                    reconcileWinState();
+                    winStateTick_ = GetTickCount64();
+                    return true;
                 }
-                if (winState_ == WinState::Idle) {
-                    if (startMenuByWinKey_ && ctrlPressed_) {
-                        // Ctrl+Win 仍开开始菜单：原生组合被钩子吞了，这里代劳。
-                        // 只补发 Win 不行，Ctrl 还按着，系统看到的仍是 Ctrl+Win
-                        // （实测）。必须先注入 Ctrl 抬起，再发一次干净的 Win
-                        // 按下+抬起。代价是这次 Ctrl 提前置为松开。
-                        injectKey(VK_CONTROL, false);
-                        // 本地状态同步，否则下一次 Win 按下还会被当成 Ctrl+Win。
-                        ctrlPressed_ = false;
-                        injectWinKey(true);
-                        injectWinKey(false);
-                        winState_ = WinState::StartMenu;
-                        report("Ctrl+Win：代发开始菜单");
-                    } else {
-                        winState_ = WinState::Held;
-                    }
+                if (startMenuByWinKey_ && ctrlPressed_) {
+                    // Ctrl+Win 仍开开始菜单：原生组合被钩子吞了，这里代劳。
+                    // 只补发 Win 不行，Ctrl 还按着，系统看到的仍是 Ctrl+Win。
+                    // 必须先注入 Ctrl 抬起，再发一次干净的 Win 按下+抬起。
+                    injectKey(VK_CONTROL, false);
+                    // 本地状态同步，否则下一次 Win 按下还会被当成 Ctrl+Win。
+                    ctrlPressed_ = false;
+                    injectWinKey(true);
+                    injectWinKey(false);
+                    winState_ = WinState::StartMenu;
+                    winStateTick_ = GetTickCount64();
+                    report("Ctrl+Win：代发开始菜单");
+                } else {
+                    winState_ = WinState::Held;
+                    winStateTick_ = GetTickCount64();
                 }
                 return true;  // 按下先吞，不让开始菜单自己弹出来
             }
@@ -487,6 +498,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
         // 其它键：Win 还按着时按了别的键，判定为 Win+X 组合
         if (isDown && winState_ == WinState::Held) {
             winState_ = WinState::Replayed;
+            winStateTick_ = GetTickCount64();
             report("判定为 Win+组合键，补发 Win 按下放行");
             injectWinKey(true);  // 把「Win 按着」补给系统
         }

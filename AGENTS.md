@@ -324,6 +324,15 @@ app/            组装与生命周期
     探针之前先 `Get-Process KTile | Stop-Process -Force` 并**确认进程数为 1**
     （带 `--debug-settings-keepalive` 开出来的也是一个 KTile 进程，容易漏）。
 
+18. **低级钩子吞掉按键后 `GetAsyncKeyState` 不可信**：Win 按下被吞，系统键盘
+    状态不更新，`GetAsyncKeyState(VK_LWIN)` 一律报未按。拿它判断「用户还按着
+    吗」会把之后**每一次**按键都当成「抬起丢失」，表现有两个：按住 Win 面板
+    几十次每秒地闪（自动重复的 keydown 全被结算成单击）、Win+L 先弹面板再
+    锁屏（L 按下时先误判，补发了一次唤醒）。判定只能靠事件序记账，按住期间的
+    重复 keydown 原地吞掉，抬起丢失用时间上限兜底。只有 `Replayed` 状态可以
+    信 `GetAsyncKeyState`——那里的 Win down 是补给系统的，键盘状态确实在走。
+    回归用例：`tests/test_gesture_win.cpp`。
+
 ## 12. 关键文件导航
 
 | 文件 | 作用 |

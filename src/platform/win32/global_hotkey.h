@@ -111,7 +111,8 @@ private:
     // Win 键不能按下就无条件吞掉：Win+E / Win+R / Win+D 都是常用组合，
     // 吞掉按下就废了它们。按下时先吞（不让开始菜单弹出），由「后续有没有
     // 别的键」判定单击还是组合：
-    //   Held：按下且无别的键，抬起即单击，唤醒面板；
+    //   Held：按下且无别的键，抬起即单击，唤醒面板。按住期间系统补发的
+    //     重复 keydown 不改变状态，也不能结算成单击；
     //   Replayed：期间按了别的键，判定为组合，补发 Win 按下放行；
     //   StartMenu：Ctrl 按着时按下 Win，补发一次干净的 Win 按下+抬起，
     //     让系统弹开始菜单（约定 Ctrl+Win 仍开开始菜单）。
@@ -122,6 +123,10 @@ private:
         StartMenu = 3,
     };
     WinState winState_ = WinState::Idle;
+
+    // 进入非 Idle 的时刻。Held / StartMenu 的按下被钩子吞掉，系统键盘状态
+    // 没更新，GetAsyncKeyState 问不出真实状态，抬起丢失只能靠它兜底。
+    ULONGLONG winStateTick_ = 0;
 
     bool startMenuByWinKey_ = false;  // install 时记录：Ctrl+Win 要不要开开始菜单
 
@@ -136,9 +141,9 @@ private:
 
     // 上报一条状态机事件（未注入 sink 时为空操作）
     void report(const char* message) const;
-    // 状态对账：本地状态机与物理按键状态不一致时把账结清。
-    // 触发场景见 cpp 注释（钩子回调被系统跳过会丢事件）。
-    void reconcileWinState();
+    // 抬起事件丢失时把状态机拉回 Idle。Replayed 还要补发一次 Win 抬起，
+    // 否则系统认为 Win 一直按着，之后所有按键都成了 Win 组合。
+    void settleWinState();
     void trigger() const;
     static void injectWinKey(bool down);
     static void injectKey(WORD virtualKey, bool down);
