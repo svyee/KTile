@@ -12,11 +12,11 @@ namespace {
 constexpr UINT kTrayIconId = 1;
 
 // 自定义消息：托盘图标事件
-// 注意：WM_APP 起始，避免与系统消息冲突
+// WM_APP 起始，避开系统消息区间
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 
-// 根据系统版本选择合适的 NOTIFYICONDATA 结构大小。
-// Win7 用 V3；更早的系统降级（本项目最低 Win7，但保守处理）。
+// 根据系统版本选择 NOTIFYICONDATA 结构大小：Win7 用 V3，更早系统降级
+// （本项目最低 Win7，保守处理）。
 DWORD notifyIconSize() {
     return NOTIFYICONDATAW_V3_SIZE;
 }
@@ -176,8 +176,7 @@ bool TrayIcon::handleMessage(const WPARAM wParam, const LPARAM lParam) {
         return false;
     }
 
-    // 回调消息 ID 过滤
-    // 注意：NOTIFYICON_VERSION_4 下事件在 LOWORD(lParam)
+    // 回调消息 ID 过滤；NOTIFYICON_VERSION_4 下事件在 LOWORD(lParam)
     const UINT event = LOWORD(lParam);
     switch (event) {
         case WM_LBUTTONUP:
@@ -190,8 +189,6 @@ bool TrayIcon::handleMessage(const WPARAM wParam, const LPARAM lParam) {
         case WM_CONTEXTMENU: {
             POINT cursor{};
             if (GetCursorPos(&cursor) != FALSE) {
-                // 菜单内容由外部通过 commandHandler 提供，
-                // 这里只负责触发：由调用方在 CommandHandler 之前填充菜单。
             }
             return true;  // 具体菜单由调用方构造并调用 showContextMenu
         }
@@ -201,7 +198,7 @@ bool TrayIcon::handleMessage(const WPARAM wParam, const LPARAM lParam) {
     return false;
 }
 
-// ---------------------------------------------------------------- 图标工具
+// --- 图标工具
 
 UniqueHIcon loadApplicationIcon(HINSTANCE instance, const int resourceId) {
     // 用 LR_DEFAULTSIZE 让系统按 DPI 选择合适尺寸

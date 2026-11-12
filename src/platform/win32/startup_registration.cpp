@@ -151,7 +151,7 @@ Win32Status StartupRegistration::currentExecutablePath(std::wstring* outPath) {
             return base::makeUnexpected(
                 lastError(infrastructure::i18n::tr("error.programPathUnavailable")));
         }
-        // 缓冲区足够（未截断）：返回值小于缓冲区容量即表示完整路径
+        // 返回值小于缓冲区容量：路径完整未截断
         if (static_cast<std::size_t>(length) < buffer.size() - 1) {
             *outPath = std::wstring(buffer.data(), length);
             return {};

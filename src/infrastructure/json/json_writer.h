@@ -1,16 +1,9 @@
 // KTile - 基础设施层：极简 JSON 写入器
 //
-// 为什么不用 nlohmann/json：
-//   - 目标是「体积小、依赖少」，而 KTile 的 JSON 结构完全固定
-//   - 只需覆盖写入与解析两个方向，手写约 400 行足够且零依赖
-//
-// 本文件只负责写入。解析在 json_parser.h。
-//
-// 设计要点：
-//   - 流式写入：按 key/value 顺序调用，不需要先构建 DOM 树
-//   - 缩进美化：写出的文件人眼可读、可手工编辑（配置文件必须可手改）
-//   - 窄字符输出：JSON 规范允许 UTF-8，中文以 \uXXXX 转义或原样 UTF-8 均可。
-//     这里选择原样 UTF-8（更小更可读），解析端按 UTF-8 处理。
+// 手写而不用 nlohmann/json：JSON 结构完全固定，只需读写两个方向，
+// 约 400 行零依赖。本文件只负责写入，解析在 json_parser.h。
+// 流式写入（按 key/value 顺序调用，无需构建 DOM 树）；输出带缩进，
+// 便于手工编辑；字符串原样输出 UTF-8，解析端按 UTF-8 处理。
 //
 #pragma once
 
@@ -25,13 +18,10 @@ namespace json {
 
 // 流式 JSON 写入器。
 //
-// 用法：
-//   JsonWriter writer;
+// 用法：beginObject() → key()/value() 或 member() → endObject()，
+// 最后 take() 取结果：
 //   writer.beginObject();
-//   writer.key("version").value(1);
-//   writer.key("tabs").beginArray();
-//   writer.beginObject(); ... writer.endObject();
-//   writer.endArray();
+//   writer.key("tabs").beginArray(); ... writer.endArray();
 //   writer.endObject();
 //   std::string text = writer.take();
 //
@@ -63,10 +53,8 @@ public:
                              unsigned long long unsignedValue,
                              bool negative);
 
-    // ---- 便捷：一次写一个键值对 ----
-    //
-    // 整数统一用模板接住：任何整型 T 非负则走无符号，否则走有符号。
-    // 这样避免 int/uint32_t/int64_t 多个重载互相二义。
+    // 一次写一个键值对。整数用模板接住：非负走无符号、否则走有符号，
+    // 避免多个整型重载互相二义。
     JsonWriter& member(const std::string& name, const std::string& text) {
         return key(name).value(text);
     }

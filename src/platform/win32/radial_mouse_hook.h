@@ -1,49 +1,16 @@
-// KTile - Win32 平台层：轮盘菜单鼠标钩子
+// KTile - Win32 平台层：轮盘菜单鼠标钩子（WH_MOUSE_LL）
 //
-// 职责：
-//   1. 用 WH_MOUSE_LL 监听指定鼠标键（右 / 中 / 侧键）的按下/移动/抬起。
-//   2. 按下时检查修饰键条件（Ctrl/Shift/Alt），不满足则放行（让 MouseInc 等
-//      手势软件正常工作）；满足则吞掉事件并进入跟踪。
-//   3. 拖动超过阈值时通知主线程显示轮盘；继续移动更新光标位置。
-//   4. 抬起时通知主线程最终位置（由主线程判定命中哪个扇区或取消）。
-//   5. 若未超过阈值且触发方式无修饰键，重新注入一次原始点击（让原生右键菜单
-//      正常弹出）；有修饰键时不注入（用户明确是想做手势，不弹原生菜单）。
+// 钩子装在专用线程上。低级钩子回调在安装它的线程里执行，而「显示轮盘」要查
+// 前台进程、建 D2D 资源、解码图标，首次动辄几百毫秒；装在 UI 线程期间回调
+// 会被系统静默丢弃，丢掉「抬起」就留下残影或误弹。回调因此只做纯内存操作
+// 加 PostMessage，UI 再慢也影响不到事件接收。
 //
-// ---------------------------------------------------------------- 为什么用专用线程
-//
-// WH_MOUSE_LL 的回调运行在**安装钩子的那个线程**上。1.2.0 里它装在 UI 线程，
-// 而「显示轮盘」是同步的：查前台进程、建 D2D 资源、解码图标、排标签、首帧绘制
-// —— 首次尤其慢。这段时间 UI 线程不泵消息，系统等不及就把事件**静默丢掉**，
-// 没有任何通知。
-//
-// 实测（build/probe_busy.cpp）：钩子线程忙等 600ms，期间从高优先级线程注入的
-// 按下事件，3 次实验 3 次都没送到回调。丢掉的若是「抬起」：
-//   - 状态机停在 Shown：轮盘一直挂在屏幕上跟着鼠标高亮（「我松手了它还在」）；
-//   - 状态机停在 Tracking：之后任意一次越过阈值的移动把它弹出来（「单击也弹」）。
-// 这就是用户报的那个 bug。
-//
-// 所以钩子搬进专用线程（与 StarPie 的 MouseHook 一致：独立 _hookThread、
-// AboveNormal 优先级、先用 PeekMessage 建好消息队列、WM_QUIT + Join 收尾）。
-// 回调只做纯内存操作 + PostMessage，UI 那边慢多久都影响不到事件接收。
-//
-// 补发点击也**不能在回调里做**：SendInput 在低级钩子回调里调用有死锁风险
-// （StarPie 也是丢到线程池去补发的）。这里改成给自己线程 PostThreadMessage，
-// 回到消息循环里再补，回调立刻返回。
-//
-// ---------------------------------------------------------------- 仍然问不出物理按键状态
-//
-// 「触发键现在物理上还按着吗」在本模块里问不出来，别试：手势开始时我们吞掉了
-// 按下事件，而 GetAsyncKeyState 的鼠标键状态要等事件真正派发到目标队列才更新。
-// 实测（build/probe_phys.cpp）：同一个实验，钩子放行时 Async 能正确变 DOWN，
-// 钩子吞掉后全程回答 up。
-//
-// 所以「用户还按着吗」只能靠状态机自己记账，外加下面几条兜底对账：
-//   1. 再按一次触发键 = 上一次的抬起丢了 → 先发 abort 收掉残影；
-//   2. Tracking 有寿命上限（kMaxTrackingMs），过期作废；
-//   3. 应用层把窗口真实可见性回灌到 setWheelVisible()，状态机与窗口分家时
-//      以窗口为准收掉它。
-// 专用线程把「抬起被丢」的概率压到接近零，这几条只兜剩下的意外（系统临时
-// 移除钩子、钩子线程被极端抢占等）。
+// 两条不能碰的约束：
+//   - 补发原始点击不能写在回调里。SendInput 在低级钩子回调中有死锁风险，
+//     改成 PostThreadMessage 回本线程消息循环再补，回调立刻返回。
+//   - 触发键的物理状态问不出来。手势开始时按下事件已被吞掉，而
+//     GetAsyncKeyState 要等事件派发到目标队列才更新。只能由状态机记账，
+//     靠「重按一次收残影 / Tracking 有寿命上限 / 窗口可见性回灌」兜底。
 //
 #pragma once
 
@@ -63,19 +30,18 @@ namespace ktile {
 namespace platform {
 namespace win32 {
 
-// 通知消息（投递到 notifyWindow_ 的窗口过程）
-//   kRadialShowMessage    —— 拖动超过阈值，wParam=起点X, lParam=起点Y
-//   kRadialMoveMessage    —— 光标移动，wParam=当前X, lParam=当前Y
-//   kRadialReleaseMessage —— 按键抬起，wParam=当前X, lParam=当前Y
-//   kRadialAbortMessage   —— 这次手势已经作废，请把轮盘收掉（wParam 见
-//                            RadialAbortReason）。不带坐标：它要表达的是
-//                            「别选中任何东西」，而不是「在某个位置抬起」。
+// 通知消息（投递到 notifyWindow_ 的窗口过程）：
+//   kRadialShowMessage    拖动超过阈值，wParam=起点X, lParam=起点Y
+//   kRadialMoveMessage    光标移动，wParam=当前X, lParam=当前Y
+//   kRadialReleaseMessage 按键抬起，wParam=当前X, lParam=当前Y
+//   kRadialAbortMessage   手势作废，把轮盘收掉（wParam 为 RadialAbortReason）。
+//                         不带坐标：语义是「不选中任何东西」。
 inline constexpr UINT kRadialShowMessage    = WM_APP + 0x71U;
 inline constexpr UINT kRadialMoveMessage    = WM_APP + 0x72U;
 inline constexpr UINT kRadialReleaseMessage = WM_APP + 0x73U;
 inline constexpr UINT kRadialAbortMessage   = WM_APP + 0x74U;
 
-// 作废原因。写进日志用 —— 这三种情况都意味着「抬起事件没走到钩子里」，
+// 作废原因，写进日志用：都意味着抬起事件没走到钩子，
 // 是排查「松开右键后轮盘还赖着」的唯一线索。
 enum class RadialAbortReason : WPARAM {
     // 又按下了触发键，而上一次手势还没结束：上一次的抬起丢了
@@ -94,9 +60,8 @@ public:
     ~RadialMouseHook();
 
     // 安装钩子。trigger 为 enabled=false 时等同 uninstall()。
-    // blacklist 是进程黑名单（命中即完全放行，既不吞事件也不弹轮盘）。
-    //
-    // 内部起一个专用钩子线程，本函数等它装好才返回（最多 5 秒）。
+    // blacklist 命中的进程完全放行，既不吞事件也不弹轮盘。
+    // 内部起专用钩子线程，本函数等它装好才返回（最多 5 秒）。
     // 只能在 UI 线程调用：会 join 上一次的线程。
     bool install(HWND notifyWindow, const core::RadialTriggerConfig& trigger,
                  const std::vector<std::string>& blacklist);
@@ -109,25 +74,19 @@ public:
 
     // 状态机是否还处在一次手势里（Tracking / Shown）。
     //
-    // 应用层的兜底用它做「两侧状态不一致」的判定：轮到主线程处理时窗口还
-    // 亮着、但钩子这边已经回到 Idle，说明抬起事件被我们处理掉了、而
-    // kRadialReleaseMessage 没走到（PostMessage 失败、窗口刚被重建等），
-    // 这时可以把窗口收掉，不用干等超时。
-    //
-    // 注意它回答的是「钩子自己看到的手势进度」，不是物理按键状态 ——
-    // 见文件开头那段说明。
+    // 应用层的兜底用它判定「两侧状态不一致」：轮到主线程处理时窗口还亮着、
+    // 钩子已回 Idle，说明 kRadialReleaseMessage 没走到（PostMessage 失败、
+    // 窗口刚被重建等），可以把窗口收掉，不用干等超时。
+    // 它回答的是钩子看到的手势进度，不是物理按键状态，见文件头说明。
     bool isGestureActive() const noexcept {
         return state_.load(std::memory_order_acquire) != State::Idle;
     }
 
     // 主线程告知「轮盘此刻是否真的亮着」。
     //
-    // 为什么需要双向同步：状态机和窗口是两套状态，抬起事件丢掉时它们会分家
-    // （窗口亮着、状态已回 Idle，或者反过来）。分家之后光看状态机永远发现
-    // 不了「有个轮盘赖在屏幕上」，光看窗口也不知道该不该执行扇区动作。
-    // 把窗口可见性回灌进来，抬起时就能拿它做对账。
-    //
-    // 线程安全：原子写，UI 线程可随时调（钩子线程读）。
+    // 状态机和窗口是两套状态，抬起事件丢掉时会分家（窗口亮着、状态已回
+    // Idle，或反过来），分家后两边都无法独立发现问题。回灌可见性，
+    // 抬起时就能拿它对账。原子写，UI 线程可随时调（钩子线程读）。
     void setWheelVisible(bool visible) noexcept {
         wheelVisible_.store(visible, std::memory_order_release);
     }
@@ -137,10 +96,9 @@ public:
 
     // 请求补发一次原生点击（线程安全，任意线程可调）。
     //
-    // 只剩一种触发场景：按下之后**没越过激活阈值**就松手 —— 那压根没唤出
-    // 轮盘，用户就是普通地点了一下右键，原生菜单该照常弹。
-    // 轮盘亮过之后一律不补发：用户那一刻的意图是用轮盘，松手就是「取消」，
-    // 再补一次点击会让后台窗口凭空弹出上下文菜单（见 handleMouseEvent）。
+    // 只用于按下后没越过激活阈值就松手：压根没唤出轮盘，用户是普通右键。
+    // 轮盘亮过之后一律不补发：松手就是取消，再补一次点击会让后台窗口
+    // 凭空弹出上下文菜单（见 handleMouseEvent）。
     // 真正的 SendInput 在钩子线程的消息循环里做，调用方立刻返回。
     void requestReinjectClick() const noexcept;
 
@@ -160,8 +118,8 @@ private:
     HHOOK hook_ = nullptr;   // 只在钩子线程上读写
     HWND notifyWindow_ = nullptr;
     core::RadialTriggerConfig trigger_;
-    // 进程黑名单副本。装钩子时拷一份，配置变更靠重新 install 生效 ——
-    // 回调里不能去碰应用层的对象（跨线程且可能已被销毁）。
+    // 进程黑名单副本：装钩子时拷一份，配置变更靠重新 install 生效。
+    // 回调里不能碰应用层对象（跨线程且可能已销毁）。
     std::vector<std::string> blacklist_;
 
     // 状态机。只有钩子线程写，UI 线程通过 isGestureActive() 读，故用原子。
@@ -174,11 +132,10 @@ private:
 
     // 本次按下序列里，轮盘到底亮过没有。
     //
-    // 状态机会被 abort / 过期判定打回 Idle，之后抬起就落到「不在跟踪中」
-    // 那条路上去 —— 那一支原本会放行事件，前台窗口收到一个没有配对按下的
-    // 右键抬起，Explorer 这类程序照样弹上下文菜单。用户看到的就是「轮盘
-    // 明明弹出来了，我松手它却又给我一个右键菜单」。
-    // 记这个事实，抬起时才知道「这一下该吞」。
+    // abort / 过期判定会把状态机打回 Idle，之后抬起落到「不在跟踪中」分支，
+    // 原本会放行一个没有配对按下的右键抬起，Explorer 这类程序照样弹菜单
+    // （看起来像「轮盘明明弹出来了，松手却又给我一个右键菜单」）。
+    // 记这个事实，抬起时才知道该不该吞。
     bool wheelShownThisGesture_ = false;
 
     // 主线程回灌的窗口可见性（见 setWheelVisible）
@@ -204,18 +161,16 @@ private:
 
     // 事件是否属于配置的触发键。
     //
-    // WM_XBUTTONDOWN / WM_XBUTTONUP 把侧键1 与侧键2 合并成同一个消息，
-    // 只能靠 MSLLHOOKSTRUCT::mouseData 的高位字区分。因此右键/中键比消息
-    // 类型即可，侧键还必须比 mouseData —— 否则配了侧键2 的人按侧键1 也会
-    // 被吞掉并呼出轮盘。
+    // WM_XBUTTONDOWN / WM_XBUTTONUP 把两个侧键合并成同一个消息，只能靠
+    // MSLLHOOKSTRUCT::mouseData 高位字区分：右键/中键比消息类型即可，
+    // 侧键必须再比 mouseData，否则配了侧键2 的人按侧键1 也会被吞。
     bool matchesTriggerButton(const MSLLHOOKSTRUCT& event) const noexcept;
 
     // 这条消息是不是「触发键被按下」。
     //
-    // 不能只比 WM_RBUTTONDOWN：快速连点两次时系统把第二次判定成双击，消息
-    // 变成 WM_RBUTTONDBLCLK。漏掉它就等于漏掉一次按下 —— 而且那次按下没被
-    // 吞掉，前台窗口会收到一个没有配对的右键按下（Explorer 这类程序会把它
-    // 当成拖拽/框选的起点）。
+    // 不能只比 WM_RBUTTONDOWN：快速连点时系统把第二次判成双击
+    // （WM_RBUTTONDBLCLK）。漏掉就等于漏吞一次按下，前台窗口收到无配对的
+    // 右键按下（Explorer 这类程序会当成拖拽/框选的起点）。
     bool isTriggerDownMessage(WPARAM message) const noexcept;
 
     // 检查修饰键是否满足配置
@@ -223,32 +178,25 @@ private:
 
     // 抑制键当前是否按着（按着就不弹轮盘，事件原样放行）。
     //
-    // 这里**可以**放心用 GetAsyncKeyState —— 文件开头那条「吞掉事件后
-    // 问不出物理状态」的警告只针对鼠标键：抑制键是键盘键，我们既没装
-    // 键盘钩子、也没吞任何键盘事件，它的异步状态是准确的。
+    // 可以放心用 GetAsyncKeyState：文件头「吞掉事件后问不出物理状态」
+    // 的警告只针对鼠标键，抑制键是键盘键，既没装键盘钩子也没吞键盘事件。
     bool suppressionActive() const noexcept;
 
     // 前台进程是否在黑名单里（是则整条放行，连状态机都不进）。
     bool foregroundBlocked() const noexcept;
 
     // 把触发键的按下+抬起重新注入一次（恢复原生点击）。
-    // **只能在钩子线程、回调之外调用**（见 requestReinjectClick）。
+    // 只能在钩子线程、回调之外调用（见 requestReinjectClick）。
     void reinjectClick() const;
 
     // 当前配置的按键对应的按下/抬起消息
     WPARAM downMessage() const noexcept;
     WPARAM upMessage() const noexcept;
 
-    // Tracking 的寿命上限。
-    //
-    // 一次正常手势从按下到越过阈值是几十一百毫秒的事（阈值最小 4 像素）。
-    // 停留两秒还没越过，只能是「抬起事件丢了、状态机卡在 Tracking」——
-    // 那种状态平时毫无表现，却在之后任意一次小移动里突然弹出轮盘，是最
-    // 容易让人以为「这软件抽风」的形态。过期后按 Idle 处理：这一次手势
-    // 不成立，用户重新按一次就好。
-    //
-    // 代价：按住右键思考两秒以上再拖，这一次不会出轮盘。两秒留得足够宽 ——
-    // 真要看扇区内容也是先拖出来、在轮盘上停着看（那是 Shown，不受此限）。
+    // Tracking 的寿命上限。正常手势几十到一百毫秒就会越过阈值；停留两秒
+    // 还没越过，只能是抬起事件丢了、状态机卡在 Tracking，之后任意一次
+    // 小移动会突然弹出轮盘。过期按 Idle 处理，代价是按住超过两秒再拖
+    // 这一次不出轮盘（Shown 不受此限）。
     static constexpr ULONGLONG kMaxTrackingMs = 2000;
 };
 

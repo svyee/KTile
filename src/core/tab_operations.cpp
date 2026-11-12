@@ -9,15 +9,9 @@ namespace ktile {
 namespace core {
 namespace {
 
-// 生成一个全文档唯一的标签页 id。
-//
-// 形如 "tab-3"：可读、便于手改 items.json 时对照。逐个试到不冲突为止 ——
-// 页数是个位数到几十的量级，线性试探的开销可以忽略，
-// 而比「随机 UUID」多一个好处：调试时一眼能看出新旧。
-//
-// 之所以要防冲突：id 是「记住上次在哪一页」的持久化依据，
-// 也是将来可能的页级引用键。手工编辑过的 items.json 里完全可能
-// 出现与自动编号撞车的 id。
+// 生成全文档唯一的标签页 id，形如 "tab-3"，可读且便于手改 items.json
+// 时对照；页数是个位数到几十的量级，线性试探开销可忽略。必须防冲突：
+// id 是「记住上次在哪一页」的持久化依据，手编的 items.json 可能撞车。
 std::string makeUniqueTabId(const ItemsDocument& document) {
     for (std::size_t suffix = 1;; ++suffix) {
         std::string candidate = "tab-" + std::to_string(suffix);
@@ -28,15 +22,13 @@ std::string makeUniqueTabId(const ItemsDocument& document) {
     }
 }
 
-// 自动页名：第一个未被占用的「页面 N」。
-//
-// 之所以不直接用「页数 + 1」：删掉中间某页后再新建会出现重名，
-// 用户看着两个「页面 3」会分不清哪个是新的。
+// 自动页名：第一个未被占用的「页面 N」。不用「页数 + 1」：删掉中间
+// 某页后再新建会出现重名，用户分不清哪个是新的。
 std::string automaticTabName(const ItemsDocument& document,
                              const std::string& prefix) {
     for (std::size_t suffix = document.tabs.size() + 1;; ++suffix) {
         // 前后语言都是「前缀 + 空格 + 序号」，空格统一在这里补，
-        // 语言文件里就不必留一个容易被删掉的尾随空格。
+        // 语言文件里不必留容易被删掉的尾随空格。
         const std::string candidate = prefix + " " + std::to_string(suffix);
         const bool taken = std::any_of(
             document.tabs.begin(), document.tabs.end(),

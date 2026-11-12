@@ -1,9 +1,7 @@
 ﻿// KTile - UI 层：轮盘菜单编辑器（实现）
 //
-// 界面分两页（左上角两枚按钮切换）：
-//   扇区动作 —— 左列轮盘方案列表，右侧该方案的扇区列表 + 选中扇区的动作表单；
-//   按应用   —— 进程名 → 方案 的映射表，匹配不到时回退全局默认。
-//
+// 界面分两页（左上角页签切换）：扇区动作页是扇区列表 + 动作表单；
+// 按应用页是进程黑名单。
 #include "ui/radial_editor_dialog.h"
 
 #include "ui/builtin_labels.h"
@@ -27,7 +25,7 @@ namespace ktile {
 namespace ui {
 namespace {
 
-// ---------------------------------------------------------------- 常量
+// --- 常量
 
 constexpr const wchar_t* kEditorClass = L"KTile.RadialEditor";
 
@@ -35,29 +33,27 @@ constexpr const wchar_t* kEditorClass = L"KTile.RadialEditor";
 constexpr UINT kEditorCloseMessage = WM_APP + 0x91U;
 
 constexpr int kDialogWidth = 700;
-// 高度按最密的一页（扇区动作：列表 + 四行动作表单）定，两页共用。
-// 460 时动作表单的最后一行会压到底部按钮上（提示文字直接盖住「确定」），
-// 所以往下让 40：列表略收，表单拿到完整的四行，卡片与按钮之间留 18。
+// 高度按最密的一页（扇区动作：列表 + 四行动作表单）定，两页共用；
+// 460 时提示文字会盖住「确定」按钮，往下让 40。
 constexpr int kDialogHeight = 500;
 constexpr int kMargin = 16;
 constexpr int kButtonWidth = 78;
 constexpr int kButtonHeight = 26;
 constexpr int kSmallButtonHeight = 24;
 
-// 左列（方案列表）
-constexpr int kTabLeft = 16;      // 顶部两枚页签的起始横坐标
+// 顶部页签
+constexpr int kTabLeft = 16;      // 两枚页签的起始横坐标
 
-// 右列（扇区列表 + 动作表单）
-// 左侧原来放「轮盘方案」列表（多方案时代的产物）。现在只有一份通用轮盘，
-// 那 168px 还给内容区，扇区列表和动作表单都能更宽。
+// 右列（扇区列表 + 动作表单）。左侧方案列表随多方案一起删掉，
+// 宽度让给内容区。
 constexpr int kRightLeft = kMargin;
 constexpr int kRightWidth = kDialogWidth - kMargin * 2;  // 668
 // 列表从页签下方的「扇区数」一行之后开始；190 够放 8 个扇区（每行约 22）
 constexpr int kSectorListTop = 82;
 constexpr int kSectorListHeight = 190;
 
-// 动作表单：四行网格。标签列宽度按当前语言实测（见 createControls），
-// 控件列共用同一条左边界，右边缘统一落在内容区右界。
+// 动作表单：四行网格。标签列按当前语言实测宽度（见 createControls），
+// 控件列共用左边界 fieldX，右边缘对齐 contentRight。
 constexpr int kFormRowStep = 34;
 
 // 控件 ID
@@ -85,8 +81,8 @@ constexpr int kCancelId = 2131;
 constexpr const wchar_t* kPropFont = L"KTileRadialFont";
 constexpr const wchar_t* kPropTabFont = L"KTileRadialTabFont";
 
-// 动作类型下拉的七项。第 0 项是「空」——空槽位在数据模型里是一个
-// isEmpty() 的动作，界面上必须能明确选到它，否则用户没法把配错的扇区清空。
+// 动作类型下拉的七项。第 0 项是「空」：空槽位在数据模型里是 isEmpty()
+// 的动作，界面上必须能明确选到它，否则没法把配错的扇区清空。
 struct ActionTypeOption {
     const char* key;   // 语言文件 key（文案不放表里）
     bool empty;
@@ -122,7 +118,7 @@ const ModifierOption kModifiers[] = {
 constexpr int kModifierCount =
     static_cast<int>(sizeof(kModifiers) / sizeof(kModifiers[0]));
 
-// ---------------------------------------------------------------- 状态
+// --- 状态
 
 struct RadialEditorState {
     // 草稿：确定时才写回调用方
@@ -141,7 +137,7 @@ struct RadialEditorState {
     bool accepted = false;
 };
 
-// ---------------------------------------------------------------- 小工具
+// --- 小工具
 
 int scaleFor(HWND window, const int value) {
     HDC dc = GetDC(window);
@@ -189,10 +185,8 @@ std::wstring trimWide(const std::wstring& text) {
     return text.substr(begin, end - begin + 1);
 }
 
-// 扇区方位名：0° = 正上方，顺时针。
-//
-// 表里只有八个方位，4/6/8 扇区都就近取整 —— 用户看的是「我要往下拖」，
-// 精确角度对操作没有帮助，八个方位已经够指路。
+// 扇区方位名：0° = 正上方，顺时针。表里只有八个方位，4/6/8 扇区就近取整：
+// 用户看的是「我要往下拖」，八个方位够指路。
 std::wstring sectorDirectionName(const std::uint8_t index,
                                  const std::uint8_t count) {
     static const char* kKeys[] = {
@@ -264,8 +258,8 @@ std::wstring actionTargetLabel(const core::RadialAction& action) {
     return base::utf8ToWide(action.target);
 }
 
-// 现在只有一份通用轮盘，这个包装留着是因为调用点很多 —— 都改成
-// &state->draft.menu 也行，但保留一处取值点更容易看清「哪份菜单在被编辑」。
+// 只有一份通用轮盘，包装留着是因为调用点很多：保留一处取值点，
+// 容易看清哪份菜单在被编辑。
 core::RadialMenu* currentMenu(RadialEditorState* state) {
     if (state == nullptr) {
         return nullptr;
@@ -282,7 +276,7 @@ core::RadialAction* currentAction(RadialEditorState* state) {
     return &menu->actions[static_cast<std::size_t>(state->currentSector)];
 }
 
-// ---------------------------------------------------------------- 列表刷新
+// --- 列表刷新
 
 void refreshSectorList(HWND dialog, RadialEditorState* state) {
     HWND list = GetDlgItem(dialog, kSectorListId);
@@ -351,11 +345,9 @@ void refreshSectorRow(HWND dialog, RadialEditorState* state) {
 
 // 「类型」下拉当前选中的条目（0 = 「(空)」）。
 //
-// 表单的可用性和动态提示都以它为准，不以动作数据里的 isEmpty() 为准。
-// isEmpty() 的定义是「名称、目标、主键三者全空」—— 空扇区刚把类型从
-// 「(空)」改成「快捷键」时，这三个字段本来就都还空着，拿它判断就会把
-// 名称 / 目标 / 主键一起灰掉：想填名称得先有内容，想有内容得先能填名称，
-// 于是这一格永远填不进去。类型下拉是用户唯一能动的入口，就以它为准。
+// 表单可用性和动态提示都以它为准，不用动作数据的 isEmpty()：空扇区刚把
+// 类型改成「快捷键」时，名称/目标/主键本来就全空，拿 isEmpty() 判断会把
+// 输入框全部灰掉，这一格永远填不进去。类型下拉是唯一入口。
 int selectedTypeIndex(HWND dialog) {
     HWND combo = GetDlgItem(dialog, kActionTypeComboId);
     if (combo == nullptr) {
@@ -377,8 +369,8 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
     } else if (state->currentSector < 0) {
         text = infrastructure::i18n::trw("radialedit.hint.selectSector").c_str();
     } else {
-        // 同样跟着「类型」下拉走：空扇区选好类型后，提示要立刻变成
-        // 「这一格该填什么」，而不是继续说他是个空槽位。
+        // 提示也跟着「类型」下拉走：空扇区选好类型后立刻变成
+        // 「这一格该填什么」。
         const ActionTypeOption& option = kActionTypes[selectedTypeIndex(dialog)];
         if (option.empty) {
             text = infrastructure::i18n::trw("radialedit.hint.emptySector").c_str();
@@ -395,15 +387,11 @@ void refreshActionStateHint(HWND dialog, RadialEditorState* state) {
     setControlText(dialog, kActionStateHintId, text);
 }
 
-// 表单可用性：只让跟当前动作类型有关的部分亮着。
-//
-// 快捷键不需要「目标」（填了也会在写回时被清掉），程序 / 文件 / 网址 /
-// 内置命令不需要「修饰键 + 主键」。原来只有「没选中扇区」这一种全灰状态，
-// 于是切到快捷键后目标框还亮着、点「选择…」能弹文件框、选完却没效果 ——
-// 界面上看不出哪些字段属于当前类型。现在按类型分别启用，配合下方动态
-// 提示，一眼能看出「这一格要填什么」。
+// 表单可用性：只亮跟当前动作类型有关的部分。快捷键不需要「目标」（写回
+// 时也会清掉），程序/文件/网址/内置命令不需要「修饰键 + 主键」；全灰只
+// 留给「没选中扇区」。配合动态提示，一眼能看出这一格要填什么。
 void refreshFormAvailability(HWND dialog, RadialEditorState* state) {
-    // 有没有选中扇区看数据，能不能填看「类型」下拉（见 selectedTypeIndex）。
+    // 能不能填看「类型」下拉（见 selectedTypeIndex），选中与否看数据。
     const bool hasSector = currentAction(state) != nullptr;
     const ActionTypeOption& option = kActionTypes[selectedTypeIndex(dialog)];
     const bool hasType = hasSector && !option.empty;
@@ -537,7 +525,7 @@ void refreshBlacklistForm(HWND dialog, RadialEditorState* state) {
     state->suppressNotify = false;
 }
 
-// ---------------------------------------------------------------- 分页
+// --- 分页
 
 void switchPage(HWND dialog, RadialEditorState* state, const int page) {
     if (state == nullptr) {
@@ -559,7 +547,7 @@ void switchPage(HWND dialog, RadialEditorState* state, const int page) {
     }
 }
 
-// ---------------------------------------------------------------- 表单写回
+// --- 表单写回
 
 // 把动作表单当前内容写回选中的扇区
 void commitActionForm(HWND dialog, RadialEditorState* state) {
@@ -594,10 +582,9 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
     }
 
     if (kActionTypes[typeIndex].empty) {
-        // 清空该扇区：所有字段一起重置，保证 isEmpty() 为真
+        // 清空该扇区：所有字段一起重置，保证 isEmpty() 为真。
         *action = core::RadialAction();
-        // 表单也要跟着清。只清数据的话，列表已经变回「(空)」，名称框里却
-        // 还留着上一格的名字，看着像「这个空扇区叫复制」。
+        // 表单跟着清，否则列表已变回「(空)」而名称框还留着上一格的名字。
         state->suppressNotify = true;
         setControlText(dialog, kActionNameEditId, std::wstring());
         setControlText(dialog, kActionTargetEditId, std::wstring());
@@ -616,10 +603,9 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
     action->type = kActionTypes[typeIndex].type;
     action->name = base::wideToUtf8Lossy(name);
 
-    // 按类型清理无关字段：留着上一类型的残留值会让动作「看起来配好了、
-    // 实际一按就什么都不发生」（例如切换成「程序」但 target 还是空的，
-    // 而 key 还留着 C —— isEmpty() 为假，于是去启动一个空路径）。
-    // 数据与界面一起清，否则用户看到「目标」里还挂着上一个类型的路径。
+    // 按类型清理无关字段：残留值会让动作「看着配好了、按了没反应」
+    // （例如 target 已空而 key 还留着，isEmpty() 为假就去启动空路径）。
+    // 数据与界面一起清，否则目标框还挂着上一类型的路径。
     const auto clearField = [&](const int id) {
         state->suppressNotify = true;
         setControlText(dialog, id, std::wstring());
@@ -657,7 +643,7 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
     refreshActionStateHint(dialog, state);
 }
 
-// ---------------------------------------------------------------- 选择目标
+// --- 选择目标
 
 // 内置命令选择：弹一个分组菜单，选中即写回 target
 void pickBuiltinAction(HWND dialog, RadialEditorState* state) {
@@ -802,7 +788,7 @@ void pickTargetPath(HWND dialog, RadialEditorState* state) {
     commitActionForm(dialog, state);
 }
 
-// ---------------------------------------------------------------- 窗口过程
+// --- 窗口过程
 
 LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                             LPARAM lParam);
@@ -872,10 +858,7 @@ void createControls(HWND hwnd, RadialEditorState* state) {
     };
 
     // 用对话框字体现量文字，按 96 DPI 逻辑像素返回。
-    //
-    // 这一页原来按中文的字数手工排像素：加英文后「Modifier」「Choose…」
-    // 这些定宽控件会被裁字。改成先量再定宽之后，中文一个像素不动，
-    // 长语言自动撑开（与设置窗口同一套办法）。
+    // 不能按中文字数手工排像素：英文的「Modifier」「Choose…」会被裁字。
     auto measureText = [&](const wchar_t* text) -> int {
         if (text == nullptr || text[0] == L'\0' || font == nullptr) {
             return 0;
@@ -901,7 +884,7 @@ void createControls(HWND hwnd, RadialEditorState* state) {
         return (std::max)(minWidth, measureText(text) + 22);
     };
 
-    // ---- 顶部两枚页签（自绘：选中页画成强调色主按钮）----
+    // --- 顶部两枚页签（自绘：选中页画成强调色主按钮）
     sink = nullptr;
     const int tabSectorsW = fitWidth(T("radialedit.tab.sectors"), 96);
     const int tabBlacklistX = kTabLeft + tabSectorsW + 8;
@@ -913,7 +896,7 @@ void createControls(HWND hwnd, RadialEditorState* state) {
                 tabBlacklistX, 14, fitWidth(T("radialedit.tab.blacklist"), 96),
                 kButtonHeight, kTabProfilesId);
 
-    // ==================== 第 1 页：扇区动作 ====================
+    // --- 第 1 页：扇区动作
     sink = &state->sectorPageControls;
 
     // 扇区数：[4 扇区 ▾] 跟在标签后面，标签宽度按实测递推
@@ -935,11 +918,10 @@ void createControls(HWND hwnd, RadialEditorState* state) {
         SendMessageW(countCombo, CB_SETCURSEL, 2, 0);
     }
 
-    // ---- 扇区列表 ----
+    // --- 扇区列表
     //
-    // 四列宽度按内容实测/估宽排：类型列按最长的动作类型（英文 Application
-    // 比中文「快捷键」宽一倍），目标列吃满剩余 —— 原来目标列分到 364px、
-    // 名称列只有 120px，表格看着像被切成「三小列 + 一大块」。
+    // 四列宽度按内容实测/估宽排：类型列按最长的动作类型名（英文
+    // Application 比中文「快捷键」宽一倍），目标列吃满剩余。
     HWND sectorList = makeControl(
         WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
@@ -984,20 +966,11 @@ void createControls(HWND hwnd, RadialEditorState* state) {
         }
     }
 
-    // ---- 动作表单 ----
+    // --- 动作表单
     //
-    // 三行网格 + 一行提示，标签列统一宽度、控件列共用同一条左边界：
-    //
-    //   16                      fieldX                    684
-    //   类型    [快捷键 ▾]        名称 [___________________]
-    //   目标    [______________________________] [选择…]
-    //   修饰键  [Ctrl ▾] + [z]      例如 C / F4 / Space，仅「快捷键」生效
-    //   （动态提示：这一格现在能做什么、会注入到哪里）
-    //
-    // 原来的排法是「类型 / 名称 / 修饰键」硬拆三段、后面两行各自起头，
-    // 同一个组合键在表格里是 Ctrl+C、在这边被拆成修饰键 Ctrl 与主键 z，
-    // 读起来像四块不相干的东西。现在「修饰键 + 主键」用「+」连成一串，
-    // 与列表「目标」列是同一种读法。
+    // 三行网格 + 一行提示：标签列统一实测宽度、控件列共用左边界 fieldX、
+    // 右边缘对齐 contentRight；「修饰键 + 主键」用「+」连成一串，与列表
+    // 「目标」列是同一种读法。
     const int formTop = kSectorListTop + kSectorListHeight + 16;  // 288
     const int contentRight = kDialogWidth - kMargin;              // 684
 
@@ -1083,18 +1056,16 @@ void createControls(HWND hwnd, RadialEditorState* state) {
                 WS_CHILD | WS_VISIBLE | SS_LEFT, 0, keyHintX, row3 + 4,
                 contentRight - keyHintX, 18, kActionKeyHintId);
 
-    // 第 4 行：动态提示（两行高度）。这里原来在 row3 + 30 处以 36 高摆放，
-    // 底边 430 直接盖住 y=418 的「确定」按钮 —— 现在整体下移到表单之下，
-    // 卡片下沿（446）之前收住。
+    // 第 4 行：动态提示（两行高度），在卡片下沿之前收住，不压底部按钮。
     makeControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,
                 kRightLeft, row3 + kFormRowStep, kRightWidth, 38,
                 kActionStateHintId);
 
-    // ==================== 第 2 页：黑名单 ====================
+    // --- 第 2 页：黑名单
     sink = &state->profilePageControls;
 
-    // 这一页没有「扇区数」那一行，列表就从页签下方起、一直铺到表单上沿
-    // （288 = 扇区动作页的表单起点），两页的动作区最终落在同一条水平线上。
+    // 这一页没有「扇区数」行，列表从页签下方起、一直铺到表单上沿，
+    // 两页的动作区落在同一条水平线上。
     const int blacklistListTop = 48;
     HWND profileList = makeControl(
         WC_LISTVIEWW, L"",
@@ -1201,9 +1172,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
         }
 
         case WM_CTLCOLORSTATIC: {
-            // 说明文字不铺灰底，直接画在白色卡片上。
-            // 提示 / 示例用次要色，与正文字段区分；禁用的控件仍用系统灰字 ——
-            // 否则被禁用的编辑框看起来还像能输入（表单会按动作类型灰掉无关项）。
+            // 说明文字不铺灰底，直接画在白色卡片上；提示用次要色区分，
+            // 禁用的控件仍用系统灰字，否则看起来还像能输入。
             HDC dc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
             SetBkMode(dc, TRANSPARENT);
@@ -1344,7 +1314,7 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
                     if (count != menu->sectorCount) {
                         menu->sectorCount = count;
                         // 不变量：actions.size() == sectorCount。
-                        // resize 保留原有扇区，缩小时被裁掉的那几个直接丢弃。
+                        // resize 保留原有扇区，缩小时直接裁掉多余的。
                         menu->actions.resize(count);
                         state->currentSector = -1;
                         refreshSectorList(hwnd, state);
@@ -1459,7 +1429,7 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam,
 
 }  // namespace
 
-// ---------------------------------------------------------------- 对外入口
+// --- 对外入口
 
 bool showRadialEditorWindow(HWND owner, core::RadialConfig* config) {
     if (config == nullptr) {
@@ -1484,14 +1454,14 @@ bool showRadialEditorWindow(HWND owner, core::RadialConfig* config) {
     RadialEditorState state;
     state.draft = *config;
     // 兜底：动作数量和扇区数对不上时补成 8 扇区骨架（首启、配置被清空、
-    // 手改文件写成 4 扇区却给 8 个动作等）。编辑器本身要求两者恒等。
+    // 手改文件不一致等）。编辑器要求两者恒等。
     if (state.draft.menu.actions.size() != state.draft.menu.sectorCount ||
         state.draft.menu.sectorCount < core::kMinSectors) {
         state.draft.menu.sectorCount = 8;
         state.draft.menu.actions.assign(8, core::RadialAction());
     }
-    // 打开就选中第 1 个扇区：否则列表空选、下面整片表单灰着，用户得先
-    // 猜「要先点一下列表里那一行」才知道能编辑。
+    // 打开就选中第 1 个扇区：否则列表空选、表单整片灰着，用户得先猜
+    // 要先点列表那一行。
     state.currentSector = 0;
 
     RECT desired{0, 0, scaleFor(owner, kDialogWidth),
@@ -1531,8 +1501,8 @@ bool showRadialEditorWindow(HWND owner, core::RadialConfig* config) {
     UpdateWindow(dialog);
     SetForegroundWindow(dialog);
 
-    // 本地模态循环（与设置窗口同一策略：GetMessage + IsDialogMessage，
-    // 用 IsWindow 作退出条件，绝不发 WM_QUIT）
+    // 本地模态循环（GetMessage + IsDialogMessage，IsWindow 作退出条件，
+    // 绝不发 WM_QUIT）
     MSG message{};
     while (IsWindow(dialog) && GetMessageW(&message, nullptr, 0, 0) > 0) {
         if (message.message == kEditorCloseMessage) {

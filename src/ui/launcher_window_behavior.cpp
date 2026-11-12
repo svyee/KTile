@@ -1,7 +1,7 @@
-﻿// KTile - UI 层：启动器窗口 —— 布局、命中测试、显示控制
+﻿// KTile - UI 层：启动器窗口的布局、命中测试与显示控制
 //
-// 本文件与 launcher_window.cpp 共同构成 LauncherWindow 实现。
-// 拆分目的：渲染逻辑与窗口管理逻辑分离，便于各自维护。
+// 与 launcher_window.cpp（渲染）、launcher_window_animation.cpp（拖拽动画）
+// 共同构成 LauncherWindow 实现，本文件负责布局、命中测试与显示控制。
 //
 #include "ui/launcher_window.h"
 
@@ -33,8 +33,7 @@ namespace ktile {
 namespace ui {
 namespace {
 
-// 标签页右键菜单的命令 ID
-//（避开磁贴菜单 3001..3032、空白区菜单 3101..3102）
+// 标签页右键菜单命令 ID（避开磁贴 3001..3032、空白区 3101..3102）
 constexpr UINT kTabMenuNew = 3201;
 constexpr UINT kTabMenuRename = 3202;
 constexpr UINT kTabMenuRemove = 3203;
@@ -62,7 +61,7 @@ RECT workAreaForWindow(HWND hwnd) {
 
 }  // namespace
 
-// ================================================================ DPI
+// --- DPI
 
 float LauncherWindow::dpiScale() const noexcept {
     return static_cast<float>(dpi_) / 96.0F;
@@ -72,8 +71,7 @@ void LauncherWindow::updateDpi() {
     if (hwnd_ == nullptr) {
         return;
     }
-    // GetDpiForWindow 是 Win10 1607+ API，Win7 上不可用。
-    // 使用 GetDeviceCaps 兼容方案。
+    // GetDpiForWindow 是 Win10 1607+ API，Win7 上用 GetDeviceCaps 兼容。
     HDC dc = GetDC(hwnd_);
     if (dc != nullptr) {
         const int dpiX = GetDeviceCaps(dc, LOGPIXELSX);
@@ -88,17 +86,14 @@ void LauncherWindow::updateDpi() {
     dpiChangedForLayout();
 }
 
-// DPI 变化后的布局善后。
-//
-// 标签宽度是按 DIP 文字宽度算的，字号随 DPI 换算成物理像素后
-// 文字实际占的 DIP 宽度也会变（不同 DPI 的字体度量并不线性），
-// 所以缓存必须作废重算；重算后可见页数可能变化，再让活动页回到视野内。
+// DPI 变化后的布局善后：标签宽度按 DIP 文字宽度算，不同 DPI 的字体度量
+// 非线性，缓存必须作废重算；重算后可见页数可能变化，让活动页回到视野内。
 void LauncherWindow::dpiChangedForLayout() {
     invalidateTabLabelWidths();
     ensureActiveTabVisible();
 }
 
-// ================================================================ 布局
+// --- 布局
 
 void LauncherWindow::updateLayout() {
     const auto& items = activeItems();
@@ -111,8 +106,8 @@ void LauncherWindow::updateLayout() {
 
     layout_ = core::calculateTileLayout(request);
 
-    // 文档或布局变化后，可见性掩码必须跟着重建 —— 否则会因为下标错位
-    // 把「匹配」标到别的磁贴上（增删磁贴后最容易出现）。
+    // 布局变化后可见性掩码必须重建，否则下标错位会把「匹配」标到
+    // 别的磁贴上（增删磁贴后最容易出现）。
     rebuildVisibilityMask();
 
     // 选中项若已不存在（被删除）或已被过滤掉，主动清掉，避免画出野框
@@ -122,17 +117,12 @@ void LauncherWindow::updateLayout() {
     }
 }
 
-// 客户区物理尺寸（已按「最大窗口」夹取）。
-//
-// 只由网格配置决定，与「窗口放哪」无关 —— 所以尺寸计算单独拆出来，
-// 定位逻辑（calculateWindowRect）与「只改尺寸不动位置」的
-// applyGridGeometry 共用同一份数字。
+// 客户区物理尺寸（已按最大窗口夹取），只由网格配置决定、与窗口位置无关。
+// 尺寸计算单独拆出，定位逻辑（calculateWindowRect）与「只改尺寸不动位置」
+// 的 applyGridGeometry 共用同一份数字。
 void LauncherWindow::windowSizePixels(int* width, int* height) const {
-    // 窗口客户区 = 完整网格尺寸（gridColumns_ x gridRows_），固定不变。
-    //
-    // 刻意不按「已用行列」收缩：早期实现会根据布局实际占用收缩窗口，
-    // 结果是拖动磁贴到边缘时窗口跟着变大变小，视觉上很不安定，
-    // 也容易让用户误以为磁贴被挤出去了。
+    // 客户区固定为完整网格尺寸，不按「已用行列」收缩：早期按实际占用
+    // 收缩，拖动磁贴到边缘时窗口跟着变大变小，视觉上很不安定。
     const std::uint16_t usedColumns = std::max<std::uint16_t>(gridColumns_, 1);
     const std::uint16_t usedRows = std::max<std::uint16_t>(gridRows_, 1);
 
@@ -143,8 +133,7 @@ void LauncherWindow::windowSizePixels(int* width, int* height) const {
 
     const float clientHeight = metrics_.outerPadding + metrics_.bottomPadding +
         metrics_.headerHeight +
-        // 标签条也占一行高度：窗口高度 = 上内边距 + 标题带 + 标签条 + 网格
-        // + 下内边距。漏掉这一段的话磁贴会被窗口下边缘裁掉。
+        // 标签条也占一行高度，漏掉的话磁贴会被窗口下边缘裁掉
         kTabBarGapTop + kTabBarHeight + kTabBarGapBottom +
         static_cast<float>(usedRows) * metrics_.cellSize +
         static_cast<float>(usedRows > 0 ? usedRows - 1 : 0) * metrics_.cellGap;
@@ -168,10 +157,8 @@ void LauncherWindow::windowSizePixels(int* width, int* height) const {
     }
 }
 
-// 按「窗口出现位置」策略算显示矩形。
-//
-// 所有策略都以**鼠标所在显示器**的工作区为准：用户可能在第二块屏上
-// 按热键唤出，窗口跑到主屏角落会显得莫名其妙。
+// 按「窗口出现位置」策略算显示矩形。所有策略都以鼠标所在显示器的工作区
+// 为准：用户可能在第二块屏上按热键唤出。
 RECT LauncherWindow::calculateWindowRect() const {
     int windowWidth = 0;
     int windowHeight = 0;
@@ -239,7 +226,7 @@ RECT LauncherWindow::calculateWindowRect() const {
             break;
     }
 
-    // 夹进工作区：鼠标贴着屏幕边角唤出时，窗口只可能露出一部分；
+    // 夹进工作区：鼠标贴屏幕边角唤出时窗口只露一部分，
     // 「上一次的位置」也可能来自已拔掉的显示器。
     if (left + windowWidth > work.right) {
         left = work.right - windowWidth;
@@ -262,7 +249,7 @@ RECT LauncherWindow::calculateWindowRect() const {
     return rect;
 }
 
-// ================================================================ 命中测试
+// --- 命中测试
 
 std::optional<std::size_t> LauncherWindow::hitTestItem(const float xDip,
                                                        const float yDip) const {
@@ -278,9 +265,7 @@ std::optional<std::size_t> LauncherWindow::hitTestItem(const float xDip,
             continue;
         }
 
-        // 搜索过滤中：被淡化的磁贴不可点。
-        // 否则会出现「看不见的东西还能点开」的诡异体验 ——
-        // 淡化的是视觉，但命中测试必须与视觉一致。
+        // 搜索过滤中被淡化的磁贴不可点：命中测试必须与视觉一致。
         if (!isItemVisible(placement.itemIndex)) {
             continue;
         }
@@ -300,13 +285,12 @@ std::optional<std::size_t> LauncherWindow::hitTestItem(const float xDip,
     return std::nullopt;
 }
 
-// ================================================================ 数据与配置
+// --- 数据与配置
 
 void LauncherWindow::setDocument(core::ItemsDocument document) {
     document_ = std::move(document);
     // 新文档的页数/页名可能与旧的不同：标签宽度缓存与活动页下标
-    // 都要按新文档重新校准（app 层在「添加/编辑/删除」后都会换上
-    // 一份新文档，漏了这两步就会缓出错位）。
+    // 都要按新文档重新校准（app 层每次改动后都会换上一份新文档）。
     invalidateTabLabelWidths();
     document_.ensureDefaultTab();
     clampActiveTab();
@@ -353,8 +337,8 @@ bool LauncherWindow::setItemLabelMode(const std::size_t itemIndex,
 
     items[itemIndex].labelMode = mode;
 
-    // 只影响标题画不画 —— 不 clearGridPosition，也不重排布局，
-    // 否则用户切一下标题显示方式，磁贴会突然跳位。
+    // 只影响标题画不画：不 clearGridPosition、不重排布局，
+    // 否则切一下标题显示方式磁贴会突然跳位。
     InvalidateRect(hwnd_, nullptr, FALSE);
 
     if (documentChangedHandler_) {
@@ -365,13 +349,12 @@ bool LauncherWindow::setItemLabelMode(const std::size_t itemIndex,
 
 void LauncherWindow::recomputeLayout() {
     updateLayout();
-    // 窗口尺寸固定为网格尺寸（见 calculateWindowRect），因此重排布局
-    // 不需要改窗口大小 —— 只重绘即可。这里刻意不调 SetWindowPos：
-    // 拖拽落定时窗口绝不能跟着变化，否则会看到窗口「弹」一下。
+    // 窗口尺寸固定为网格尺寸，重排布局不需要改窗口大小，只重绘。
+    // 刻意不调 SetWindowPos：拖拽落定时窗口绝不能跟着变化。
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-// ================================================================ 标签页
+// --- 标签页
 
 core::Tab* LauncherWindow::activeTab() {
     if (document_.tabs.empty()) {
@@ -391,11 +374,8 @@ const core::Tab* LauncherWindow::activeTab() const {
     return &document_.tabs[index];
 }
 
-// 活动页的磁贴（可写）。
-//
-// 这里调 ensureDefaultTab：本类早期多个入口（如「添加新项目」）假定
-// 「一定有一页」，而确保这个不变量在这里做最省事 —— 调用方不必
-// 每处都写一遍判空与兜底。
+// 活动页的磁贴（可写）。ensureDefaultTab 在这里统一保证「一定有一页」的
+// 不变量，调用方不必逐处判空兜底。
 std::vector<core::LaunchItem>& LauncherWindow::activeItems() {
     document_.ensureDefaultTab();
     clampActiveTab();
@@ -403,8 +383,8 @@ std::vector<core::LaunchItem>& LauncherWindow::activeItems() {
 }
 
 const std::vector<core::LaunchItem>& LauncherWindow::activeItems() const {
-    // 文档意外为空时返回共享空表：调用方不必到处判空。
-    // 加载器与 core::removeTab 都保证「至少一页」，这里只是兜底。
+    // 文档意外为空时返回共享空表兜底（加载器与 core::removeTab 保证
+    // 至少一页，这里只是防御）。
     static const std::vector<core::LaunchItem> kEmptyItems;
     const core::Tab* tab = activeTab();
     return (tab != nullptr) ? tab->items : kEmptyItems;
@@ -431,11 +411,9 @@ std::string LauncherWindow::activeTabId() const {
     return (tab != nullptr) ? tab->id : std::string();
 }
 
-// 切页时清掉「与旧页下标绑定」的瞬态状态。
-//
-// animations_ / hoveredItem_ / selectedItem_ 全是**按下标索引**的：
-// 换页后同一个下标指向的是另一块磁贴，不清掉就会出现
-// 「刚切过去，某块磁贴自己抖一下」或者「键盘选中框框住了不相干的磁贴」。
+// 切页时清掉与旧页下标绑定的瞬态状态：animations_ / hoveredItem_ /
+// selectedItem_ 都按下标索引，换页后同下标指向另一块磁贴，不清会出现
+// 「刚切过去某块磁贴自己抖一下」或选中框框住不相干磁贴。
 void LauncherWindow::resetTransientForTabSwitch() {
     hoveredItem_.reset();
     pressedItem_.reset();
@@ -463,18 +441,16 @@ void LauncherWindow::setActiveTabIndex(const std::size_t index) {
     activeTabIndex_ = target;
     resetTransientForTabSwitch();
     ensureActiveTabVisible();
-    // 新页的磁贴集合不同 → 布局与搜索可见性掩码都要重算。
-    // 搜索查询刻意保留：用户搜到一半切页，多半就是想找另一页里的东西，
-    // 清空反而要重打一遍。
+    // 新页的磁贴集合不同，布局与可见性掩码都要重算。搜索查询刻意保留：
+    // 用户搜到一半切页，多半就是想找另一页里的东西。
     recomputeLayout();
 
     if (hwnd_ != nullptr) {
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
-    // 注意：切页**不算数据变更**，所以不通知 documentChangedHandler_
-    //（那是 items.json 的落盘信号，而 items 一个字节都没变）。
-    // 只通知「活动页变了」，由 app 层记住位置。
+    // 切页不算数据变更，不通知 documentChangedHandler_（那是 items.json
+    // 的落盘信号，items 没变），只通知「活动页变了」。
     if (activeTabChangedHandler_) {
         activeTabChangedHandler_(activeTabIndex_);
     }
@@ -510,8 +486,7 @@ std::size_t LauncherWindow::createTab(const std::string& rawName) {
     const std::size_t index = core::addTab(
         document_, rawName, infrastructure::i18n::tr("tab.defaultNamePrefix"));
     invalidateTabLabelWidths();
-    // 新建的页立刻切过去：用户刚建它就是为了往里面放东西，
-    // 建完还停在旧页会让他以为「没建成」。
+    // 新建的页立刻切过去：建完还停在旧页会让人以为没建成。
     setActiveTabIndex(index);
     if (hwnd_ != nullptr) {
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -527,8 +502,7 @@ bool LauncherWindow::renameTab(const std::size_t index,
     if (!core::renameTab(document_, index, rawName)) {
         return false;
     }
-    // 页名变了 → 标签宽度也变了，必须作废缓存，否则新名字会被
-    // 按旧宽度截断（或留一大片空白）。
+    // 页名变了标签宽度也变，必须作废缓存，否则新名字按旧宽度截断。
     invalidateTabLabelWidths();
     ensureActiveTabVisible();
     if (hwnd_ != nullptr) {
@@ -545,8 +519,8 @@ bool LauncherWindow::removeTab(const std::size_t index) {
         return false;
     }
     invalidateTabLabelWidths();
-    // 删的若是当前页，activeTabIndex_ 会落在新的末页上（clampActiveTab），
-    // 但绑在旧下标上的瞬态状态必须清掉 —— 不然后面那块磁贴会莫名抖一下。
+    // 删的若是当前页，clampActiveTab 会把 activeTabIndex_ 落到新末页，
+    // 但绑在旧下标上的瞬态状态必须清掉，否则后面那块磁贴会莫名抖一下。
     resetTransientForTabSwitch();
     clampActiveTab();
     ensureActiveTabVisible();
@@ -561,8 +535,8 @@ bool LauncherWindow::moveTab(const std::size_t from, const std::size_t to) {
     if (!core::moveTab(document_, from, to)) {
         return false;
     }
-    // 活动页必须跟着**页本身**走，而不是留在原来的下标上：
-    // 用户左移当前页之后，看到的应该还是同一页内容。
+    // 活动页跟着页本身走，而不是留在原下标上：
+    // 左移当前页之后看到的应该还是同一页内容。
     if (activeTabIndex_ == from) {
         activeTabIndex_ = to;
     } else if (from < activeTabIndex_ && to >= activeTabIndex_) {
@@ -604,11 +578,8 @@ void LauncherWindow::promptRenameTab(const std::size_t tabIndex) {
     (void)renameTab(tabIndex, base::wideToUtf8Lossy(name));
 }
 
-// 标签上右键的页面菜单。
-//
-// 页面管理全部收敛到这一处：新建、改名、删除、调顺序。之所以不放进
-// 设置窗口 —— 那是「全局偏好」，而页面是「当前这块面板的内容结构」，
-// 在页面上右键改它，路径最短。
+// 标签上右键的页面菜单。页面管理（新建、改名、删除、调顺序）收敛到
+// 这一处：页面是当前面板的内容结构，不是全局偏好，右键改它路径最短。
 void LauncherWindow::showTabContextMenu(const std::size_t tabIndex,
                                         const POINT screenPoint) {
     if (tabIndex >= document_.tabs.size()) {
@@ -623,7 +594,7 @@ void LauncherWindow::showTabContextMenu(const std::size_t tabIndex,
         kTabMenuRename, infrastructure::i18n::trw("launcher.tabMenu.rename").c_str()));
     entries.push_back(platform::win32::PopupMenuEntry::separator());
 
-    // 只剩一页时不允许删：删除按钮灰掉并说明原因（比点了没反应清楚）
+    // 只剩一页时不允许删：灰掉并说明原因，比点了没反应清楚
     const bool canRemove = count > 1;
     std::wstring removeText = infrastructure::i18n::trw("launcher.tabMenu.remove");
     if (canRemove) {
@@ -658,8 +629,7 @@ void LauncherWindow::showTabContextMenu(const std::size_t tabIndex,
             if (!canRemove) {
                 break;
             }
-            // 删页会连带删掉页内所有磁贴 —— 必须确认。确认框里带上
-            // 页名与项目数，用户才知道自己在删什么。
+            // 删页连带删掉页内所有磁贴，必须确认；确认框带页名与项目数。
             const std::wstring pageName =
                 base::utf8ToWideLossy(document_.tabs[tabIndex].name);
             std::wstring message = infrastructure::i18n::formatW(
@@ -689,7 +659,7 @@ void LauncherWindow::showTabContextMenu(const std::size_t tabIndex,
     }
 }
 
-// ================================================================ 搜索过滤
+// --- 搜索过滤
 
 void LauncherWindow::setSearchQuery(const std::string& query) {
     const std::string normalized = core::normalizeSearchQuery(query);
@@ -700,16 +670,15 @@ void LauncherWindow::setSearchQuery(const std::string& query) {
     searchQuery_ = normalized;
     rebuildVisibilityMask();
 
-    // 查询变化后，原选中项可能已被过滤掉 —— 自动落到第一个可见项，
+    // 查询变化后原选中项可能已被过滤掉：自动落到第一个可见项，
     // 这样「输入后再按回车」总能启动一个合理的目标。
     if (hasActiveSearch()) {
         selectedItem_ = firstVisibleItem();
     }
     activateSearch();
 
-    // 反向同步到 Edit 控件：处理的情形是「程序主动改查询」
-    // （调试预置查询、clearSearch）。文本相同就不动 ——
-    // 否则每次正常键入都会重置控件的光标位置。
+    // 反向同步到 Edit 控件，处理「程序主动改查询」（调试预置、clearSearch）。
+    // 文本相同就不动，否则每次正常键入都会重置控件的光标位置。
     if (searchEdit_ != nullptr && !searchEditSync_) {
         const std::wstring want = base::utf8ToWideLossy(searchQuery_);
         const int len = GetWindowTextLengthW(searchEdit_);
@@ -777,7 +746,7 @@ std::optional<std::size_t> LauncherWindow::firstVisibleItem() const {
     return std::nullopt;
 }
 
-// ================================================================ 键盘导航
+// --- 键盘导航
 
 void LauncherWindow::moveSelection(const int deltaColumn, const int deltaRow) {
     if (document_.tabs.empty()) {
@@ -803,10 +772,7 @@ void LauncherWindow::moveSelection(const int deltaColumn, const int deltaRow) {
         return;
     }
 
-    // 按网格坐标移动：用布局结果求出当前项的行列，再加 delta 找最近项。
-    //
-    // 为什么不用「数组下标 ±1」：磁贴是二维排布，且大磁贴占多格，
-    // 数组相邻不等于视觉相邻。按坐标算才符合直觉。
+    // 按网格坐标移动而不是下标 ±1：大磁贴占多格，数组相邻不等于视觉相邻。
     const core::TilePlacement* current = nullptr;
     for (const auto& placement : layout_.placements) {
         if (placement.itemIndex == *selectedItem_) {
@@ -823,9 +789,8 @@ void LauncherWindow::moveSelection(const int deltaColumn, const int deltaRow) {
     const int targetRow =
         static_cast<int>(current->row) + static_cast<int>(deltaRow);
 
-    // 在可见项里找「与目标格距离最近」的一块。
-    // 距离用列差 + 行差；方向键只走一格，所以最优解通常就是正对着的那块。
-    // 若该方向没有磁贴（空格），则找该方向上第一个可见磁贴。
+    // 在可见项里找「与目标格距离最近」的一块，距离 = 列差 + 行差；
+    // 方向键只走一格，最优解通常就是正对着的那块。
     std::optional<std::size_t> best;
     long bestDistance = 0;
 
@@ -874,10 +839,9 @@ void LauncherWindow::ensureSelectionVisible() {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-// ================================================================ 按键处理
-//
-// 窗口有焦点时 WM_KEYDOWN 由系统直送。抽成独立方法是为了让
-// 键盘导航与搜索框的编辑键互不干扰（文本编辑由 Edit 控件原生处理）。
+// --- 按键处理
+// 窗口有焦点时 WM_KEYDOWN 由系统直送。抽成独立方法让键盘导航与搜索框的
+// 编辑键互不干扰（文本编辑由 Edit 控件原生处理）。
 
 LRESULT LauncherWindow::handleKeyDown(const UINT virtualKey) {
     if (virtualKey == VK_ESCAPE) {
@@ -903,15 +867,11 @@ LRESULT LauncherWindow::handleKeyDown(const UINT virtualKey) {
         return 0;
     }
 
-    // ---- 搜索模式下的编辑键 ----
-    // （退格/删除等文本编辑由搜索框的 Edit 控件原生处理，这里不再管）
+    // 搜索模式下的编辑键（退格/删除等）由 Edit 控件原生处理，这里不管。
 
-    // ---- 标签页快捷键 ----
-    //
-    // Ctrl+Tab / Ctrl+Shift+Tab：循环切页（与浏览器一致）。
-    // Ctrl+1..9：直接跳到第 N 页。
-    // 这两组键在搜索框有焦点时也要生效 —— 那里由 searchEditProc 转发
-    // 过来（Edit 控件本身不处理 Ctrl+Tab）。
+    // Ctrl+Tab / Ctrl+Shift+Tab 循环切页（与浏览器一致），Ctrl+1..9 跳页。
+    // 搜索框有焦点时也生效：由 searchEditProc 转发过来
+    // （Edit 控件本身不处理 Ctrl+Tab）。
     const bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     if (ctrlDown && virtualKey == VK_TAB) {
         const bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -927,9 +887,8 @@ LRESULT LauncherWindow::handleKeyDown(const UINT virtualKey) {
         return 0;
     }
 
-    // ---- 方向键导航 ----
-    // 搜索状态下方向键同样有效：让「输入 → 方向键选 → 回车启动」
-    // 成为一条无需碰鼠标的完整链路。
+    // 搜索状态下方向键同样有效，让「输入 → 选 → 回车启动」
+    // 成为无需碰鼠标的完整链路。
     switch (virtualKey) {
         case VK_LEFT:
             moveSelection(-1, 0);
@@ -981,17 +940,12 @@ bool LauncherWindow::moveItemToSpot(const std::size_t fromIndex,
         return false;
     }
 
-    // 落点即结果：把避让式布局算出的排布固化成显式坐标。
+    // 落点即结果：把避让布局算出的排布固化成显式坐标。不用「数组抽出
+    // 再插入序号」的旧做法：那会让空位推到右下角、整排磁贴跟着挪。
     //
-    // 之所以不用「从数组里抽出来再插进某个序号」（早期做法）：
-    //   1. 那样等于告诉引擎「重新流式排布」，空位会被推到右下角，
-    //      用户想在中途留个洞是不可能的
-    //   2. 序号位移会让整排磁贴跟着挪，视觉上像整个面板都在动
-    // 改成显式坐标后，只有真正让位的磁贴挪动，其余原地不动。
-    //
-    // 先把「当前屏幕上就是这么摆的」写进数据：避让布局只对**有坐标**的项
-    // 做「冻结原位、冲突才让位」，没有坐标的项会被当成新来的统统挤到落点
-    // 附近重排 —— 整个面板会跟着跳。补齐坐标后，「只动该动的」才成立。
+    // 先把「屏幕上就是这么摆的」写进显式坐标：避让布局只对有坐标的项
+    // 做「冻结原位、冲突才让位」，没有坐标的项会被当成新来的统统挤到
+    // 落点附近重排，整个面板会跟着跳。
     materializeGridPositions(items);
 
     core::AvoidanceRequest request;
@@ -1041,7 +995,7 @@ bool LauncherWindow::moveItemToSpot(const std::size_t fromIndex,
     return true;
 }
 
-// ---------------------------------------------------------------- 新项目安放
+// --- 新项目安放
 
 void LauncherWindow::materializeGridPositions(
     std::vector<core::LaunchItem>& items) const {
@@ -1049,8 +1003,7 @@ void LauncherWindow::materializeGridPositions(
         if (placement.itemIndex >= items.size()) {
             continue;
         }
-        // 屏幕上的位置就是它的坐标 —— 只补没有显式坐标的那些，
-        // 已有坐标的项尊重数据本身（那才是「用户上一次摆在这儿」）。
+        // 只补没有显式坐标的项；已有坐标的尊重数据本身（用户上次的摆放）。
         if (!items[placement.itemIndex].hasGridPosition()) {
             items[placement.itemIndex].setGridPosition(placement.column,
                                                        placement.row);
@@ -1069,8 +1022,7 @@ bool LauncherWindow::insertNewItemsAt(std::vector<core::LaunchItem> newItems,
     }
     auto& items = activeItems();
 
-    // 已有磁贴先固化成「现在就摆在这儿」的显式坐标，
-    // 后面的避让才会只挤该挤的那几块。
+    // 已有磁贴先固化成显式坐标，后面的避让才会只挤该挤的几块。
     materializeGridPositions(items);
 
     // 光标位置换算成客户区坐标：落点解析与预览框共用同一套几何，
@@ -1089,8 +1041,7 @@ bool LauncherWindow::insertNewItemsAt(std::vector<core::LaunchItem> newItems,
     std::size_t added = 0;
     for (core::LaunchItem& item : newItems) {
         std::size_t index = 0;
-        // 加进**当前活动页**：拖到哪一页上就加进哪一页，
-        // 不是永远的第 0 页（多标签页下那是另一页的内容）。
+        // 加进当前活动页：拖到哪一页上就加进哪一页，不是永远的第 0 页。
         if (!core::addItem(document_, activeTabIndex_, std::move(item),
                            &index)) {
             continue;  // 目标为空/id 冲突：跳过这一条，继续处理后面的
@@ -1103,9 +1054,8 @@ bool LauncherWindow::insertNewItemsAt(std::vector<core::LaunchItem> newItems,
             continue;
         }
 
-        // 落点框按「这一项的尺寸」画，所以每一项都按自己的跨度算一次；
-        // 后加进来的压住先加的 → 自然形成「最后放下的就在光标下、
-        // 先前的被挤到旁边」的效果，与一块一块拖进来完全一致。
+        // 落点框按各项自己的尺寸逐项算；后加进来的压住先加的，
+        // 与一块一块拖进来的效果一致。
         const core::Dropspot spot =
             resolveNewItemDropspot(items[index].tileSize, cursor.x, cursor.y);
 
@@ -1129,7 +1079,7 @@ bool LauncherWindow::insertNewItemsAt(std::vector<core::LaunchItem> newItems,
                 }
             }
         }
-        // 布局失败（网格塞满）时不写坐标：交给自动布局把它放到别处，
+        // 布局失败（网格塞满）时不写坐标：交给自动布局放到别处，
         // 总比叠在别人身上好。
     }
 
@@ -1179,7 +1129,7 @@ bool LauncherWindow::moveItem(const std::size_t fromIndex,
     }
 
     // 被拖项自身的跨度（可能与落点磁贴不同：把 2x2 拖到 1x1 上时，
-    // 目标区域按**被拖项**的尺寸算，因为最终是它占在那里）
+    // 目标区域按被拖项的尺寸算，最终是它占在那里）
     for (const auto& placement : layout_.placements) {
         if (placement.itemIndex == fromIndex) {
             spot.spanColumns = placement.spanColumns;
@@ -1195,10 +1145,8 @@ void LauncherWindow::refresh() {
     recomputeLayout();
 }
 
-// 按当前网格尺寸重算窗口大小并立即应用。
-//
-// 与 show() 的区别：**保持窗口当前位置**，只改尺寸 —— 设置窗口里
-// 调网格是「边看边调」，窗口不能每输一个数字就跳回鼠标旁边。
+// 按当前网格尺寸重算窗口大小并立即应用。与 show() 的区别：保持当前位置
+// 只改尺寸，设置窗口里调网格是「边看边调」，不能每输一个数字就跳回鼠标旁。
 // 尺寸没变就不动，避免无意义的 SetWindowPos 抖动。
 void LauncherWindow::applyGridGeometry() {
     if (hwnd_ == nullptr) {
@@ -1252,7 +1200,7 @@ void LauncherWindow::applyWindowPlacement() {
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
-// ================================================================ 显示控制
+// --- 显示控制
 
 void LauncherWindow::show() {
     if (hwnd_ == nullptr) {
@@ -1269,10 +1217,9 @@ void LauncherWindow::show() {
 
     ShowWindow(hwnd_, SW_SHOW);
 
-    // 唤出即把焦点交给搜索框的 Edit 控件：接下来打字直接进查询串
-    // （IME 中文、光标、退格全是系统原生行为），这是「普通输入框」的核心。
-    // 热键唤出（RegisterHotKey）让本进程获得前台许可，SetForegroundWindow
-    // 能成功；即使被系统拒绝（前台锁定），窗口照样显示，用户点一下即可。
+    // 唤出即把焦点交给搜索框的 Edit 控件，打字直接进查询串（IME、光标、
+    // 退格全是系统原生行为）。热键唤出让本进程获得前台许可，
+    // SetForegroundWindow 能成功；被系统拒绝时窗口照样显示。
     SetForegroundWindow(hwnd_);
     if (searchEdit_ != nullptr) {
         SetFocus(searchEdit_);
@@ -1280,12 +1227,12 @@ void LauncherWindow::show() {
         SetFocus(hwnd_);
     }
 
-    // 外部点击监视：显示期间才需要。钩子内部有 200ms 静默期，
-    // 过滤掉「用鼠标点托盘唤出窗口」那次点击的滞留消息。
+    // 外部点击监视只在显示期间需要。钩子内部有 200ms 静默期，过滤掉
+    // 「用鼠标点托盘唤出窗口」那次点击的滞留消息。
     outsideClickMonitor_.start(hwnd_);
 
-    // 面板真正可见了：把「懒加载刷新」交给 app 层。
-    // 放在窗口显示之后调用，保证刷新回投时窗口已存在，可以立即重绘。
+    // 面板真正可见后通知 app 层懒加载刷新，保证刷新回投时窗口已存在，
+    // 可以立即重绘。
     if (panelShownHandler_) {
         panelShownHandler_();
     }
@@ -1293,11 +1240,9 @@ void LauncherWindow::show() {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-// ================================================================ 搜索模式开关
-//
-// searchActive_ 只控制界面视觉（搜索框高亮、光标闪烁）。
-// 输入能力本身由系统焦点决定 —— 窗口有焦点，IME 就跟着窗口走，
-// 不需要这里做任何输入法开关。
+// --- 搜索模式开关
+// searchActive_ 只控制界面视觉（搜索框高亮、光标闪烁）。输入能力由系统
+// 焦点决定：窗口有焦点 IME 就跟着窗口走，不需要输入法开关。
 
 void LauncherWindow::activateSearch() {
     if (!searchActive_) {
@@ -1332,7 +1277,7 @@ void LauncherWindow::hide() {
     fileDropSpot_.reset();
 
     ShowWindow(hwnd_, SW_HIDE);
-    // 隐藏前确保拖拽状态干净 —— 隐藏后布局可能被外部改变，
+    // 隐藏前确保拖拽状态干净：隐藏后布局可能被外部改变，
     // 残留的拖拽状态在新布局下会产生错位绘制。
     dragActive_ = false;
     dragSource_.reset();
@@ -1344,27 +1289,26 @@ void LauncherWindow::hide() {
     // 钉子状态：只清「交互中」标志，pinned_ 本身是用户偏好，保留。
     pinHovered_ = false;
     pinPressed_ = false;
-    // 搜索状态：清空（含编辑框控件里的文本），下次唤出从干净面板开始。
-    // 保留上次的查询会让人困惑（明明是刚打开的窗口，却有磁贴被淡化）。
+    // 搜索状态清空（含编辑框文本），下次唤出从干净面板开始；
+    // 保留上次的查询会让人困惑（刚开的窗口却有磁贴被淡化）。
     clearSearch();
     searchActive_ = false;
     visibleMask_.clear();
 
-    // 面板已隐藏：取消尚未开始的刷新请求（正在跑的请求会跑完并写缓存，
-    // 下次唤出直接命中，这是有意的 —— 中途掐断只会浪费已花掉的网络时间）。
+    // 取消尚未开始的刷新请求。正在跑的请求会跑完并写缓存，下次唤出
+    // 直接命中；中途掐断只会浪费已花掉的时间。
     if (panelHiddenHandler_) {
         panelHiddenHandler_();
     }
 
-    // 隐藏即裁剪工作集：启动器绝大部分时间处于隐藏状态，D2D/DWrite
-    // 的位图与字体缓存在后台用不上，让系统把物理页收回去。下次唤出
-    // 按需换入（首次绘制多几毫秒软页故障，无感）。任务管理器里看到
-    // 的常驻占用会从 ~50MB 掉到个位数 —— 提交内存不变，这是展示层
-    // 的账，但对常驻工具来说这才是用户盯着的数字。
+    // 隐藏即裁剪工作集：启动器绝大部分时间处于隐藏状态，D2D/DWrite 的
+    // 位图与字体缓存在后台用不上，让系统收回物理页，下次唤出按需换入。
+    // 常驻占用从 ~50MB 掉到个位数（提交内存不变），对常驻工具这才是
+    // 用户盯着的数字。
     trimWorkingSet();
 }
 
-// ================================================================ 钉子
+// --- 钉子
 
 void LauncherWindow::setPinned(const bool pinned) {
     if (pinned_ == pinned) {
@@ -1372,8 +1316,8 @@ void LauncherWindow::setPinned(const bool pinned) {
     }
     pinned_ = pinned;
 
-    // 钉住时不应再处于拖拽中途（钉子只会在非拖拽状态被点到），
-    // 但保持防御：万一状态不一致，先收干净再切。
+    // 钉住时不应处于拖拽中途（钉子只在非拖拽状态被点到），这里纯防御：
+    // 万一状态不一致，先收干净再切。
     if (pinned_ && dragActive_) {
         dragActive_ = false;
         dragSource_.reset();
@@ -1395,8 +1339,8 @@ void LauncherWindow::setTilesLocked(const bool locked) {
     }
     tilesLocked_ = locked;
 
-    // 锁定时若已处于拖拽中途：取消本次拖拽、磁贴弹回原位。
-    // （锁只会在非拖拽状态被点到，这里纯防御，与 setPinned 同一策略。）
+    // 锁定时若已处于拖拽中途：取消拖拽、磁贴弹回原位。
+    // 纯防御（锁只在非拖拽状态被点到），与 setPinned 同一策略。
     if (locked && dragActive_) {
         dragActive_ = false;
         dragSource_.reset();
@@ -1424,31 +1368,28 @@ bool LauncherWindow::hideIfUnpinned() {
     return true;
 }
 
-// 模态交互保护：设置窗口打开期间调用 setModalGuard(true)，
-// 关闭时 setModalGuard(false)。只影响「点击外面是否收起」，
+// 模态交互保护：设置窗口等打开期间调用，只影响「点击外面是否收起」，
 // 不碰用户的钉子偏好与钉子图标状态。
 void LauncherWindow::setModalGuard(const bool active) {
     modalGuard_ = active;
     if (!active) {
         return;
     }
-    // 进入保护时收起残留的「外部点击探测」：探测计时器若还在跑，
-    // 它会在几百毫秒后判定「点在外部」并尝试隐藏，白白走一趟。
+    // 进入保护时收起残留的外部点击探测：探测计时器若还在跑，
+    // 几百毫秒后会误判「点在外部」并尝试隐藏。
     KillTimer(hwnd_, kOutsideProbeTimerId);
     outsideProbeActive_ = false;
 }
 
-// ================================================================ 拖入落点预览
+// --- 拖入落点预览
 
 void LauncherWindow::setFileDropTarget(const bool active,
                                        const core::TileSize newItemSize,
                                        const POINTL screenPoint) {
-    // ---- 只在「左键真的按着」时才认这一次拖入 ----
-    //
-    // 真实拖拽必然按着左键；而个别拖拽来源（实测 Directory Opus）在放下
-    // 之后会补发一次 DragEnter、却从不发 DragLeave —— 那一次按键已经松开，
-    // 据此直接忽略，残影根本没有机会出现。松开后仍在按的情形由看门狗
-    // （见 WM_TIMER 的 kFileDropGuardTimerId 分支）每 250ms 兜一次。
+    // 只在「左键真的按着」时才认这次拖入：个别拖拽来源（实测 Directory
+    // Opus）放下后会补发一次 DragEnter、从不发 DragLeave，那一次按键已
+    // 松开，据此忽略可避免残影。松开后仍在按的情形由看门狗计时器
+    // （WM_TIMER 的 kFileDropGuardTimerId 分支）每 250ms 兜底。
     const bool buttonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     applyFileDropTarget(active && buttonDown, newItemSize, screenPoint);
 }
@@ -1514,8 +1455,8 @@ void LauncherWindow::applyFileDropTarget(const bool active,
     fileDropSpot_ = spot;
 
     if (changed) {
-        // 落点格变了 → 重新算「谁要让位」并播让位动画（只动视觉）。
-        // 悬停在同一格上时什么都不做，避免每次 DragOver 都重算一遍。
+    // 落点格变了才重算「谁要让位」并播让位动画（只动视觉），
+    // 悬停在同一格上什么都不做，避免每次 DragOver 都重算。
         previewDropForNewItem(newItemSize, spot);
         if (hwnd_ != nullptr) {
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1538,7 +1479,7 @@ bool LauncherWindow::isVisible() const noexcept {
     return IsWindowVisible(hwnd_) != FALSE;
 }
 
-// ================================================================ 调试辅助
+// --- 调试辅助
 
 void LauncherWindow::debugSetHover(const int clientX, const int clientY) {
     if (clientX < 0 || clientY < 0) {
@@ -1593,8 +1534,8 @@ void LauncherWindow::debugSetDrag(const int sourceX, const int sourceY,
         dragGrabOffsetX_ = dragTileWidth_ / 2.0F;
         dragGrabOffsetY_ = dragTileHeight_ / 2.0F;
 
-        // 计算落点虚线框与挤开预演，并把动画推进到终点 ——
-        // 导出的是定格图，不需要中间帧。
+        // 计算落点虚线框与挤开预演并推进到终点：导出的是定格图，
+        // 不需要中间帧。
         updateDropspotPreview();
         settleAnimations();
         stopAnimationTimer();
@@ -1606,23 +1547,17 @@ void LauncherWindow::debugSetDrag(const int sourceX, const int sourceY,
     }
 }
 
-// 调试辅助：把当前磁贴布局离屏渲染为 PNG。
-//
-// 为什么不截窗口：
-//   - BitBlt 窗口 DC 对 D2D 无效：HwndRenderTarget 走独立 DXGI 后台缓冲，
-//     内容不经 GDI 路径，窗口 DC 上是空的。
-//   - PrintWindow 依赖窗口实现 WM_PRINT，D2D 的 HwndRenderTarget 不实现；
-//     PW_RENDERFULLCONTENT 是 Win8.1+ API，与项目 Win7 目标冲突。
-//
-// 做法：新建一个以 WIC 位图为表面的 D2D 渲染目标，把同一套 paintTiles()
-// 跑一遍。产出的是渲染器的真实输出，且完全不要求窗口可见 —— 这让视觉
-// 回归可以完全自动化。
+// 把当前磁贴布局离屏渲染为 PNG。不截窗口：BitBlt 窗口 DC 对 D2D 无效
+// （HwndRenderTarget 走独立 DXGI 后台缓冲，不经 GDI 路径），PrintWindow
+// 依赖的 WM_PRINT 它也不实现，PW_RENDERFULLCONTENT 是 Win8.1+ API。
+// 做法是新建 WIC 位图表面的 D2D 渲染目标把 paintTiles() 跑一遍，
+// 产出真实渲染输出且不要求窗口可见，视觉回归可完全自动化。
 bool LauncherWindow::debugExportPng(const wchar_t* fileName) {
     if (d2dFactory_.get() == nullptr || dwriteFactory_.get() == nullptr) {
         return false;
     }
 
-    // 尺寸：优先取窗口渲染目标；尚未创建时用客户区兜底
+    // 尺寸：优先取窗口渲染目标，尚未创建时用客户区兜底
     D2D1_SIZE_F windowSize = D2D1::SizeF(0.0F, 0.0F);
     if (renderTarget_ != nullptr) {
         windowSize = renderTarget_->GetSize();
@@ -1672,20 +1607,17 @@ bool LauncherWindow::debugExportPng(const wchar_t* fileName) {
         return false;
     }
 
-    // ---- 切换绘制上下文到离屏目标 ----
-    //
-    // paintTiles() 只依赖 renderTarget_ / 三个画刷 / 悬停状态。把它们
-    // 临时指向离屏的一套，绘制完再还原 —— 比在每个绘制点加条件分支干净。
+    // 临时把绘制上下文切到离屏目标，绘制完还原：
+    // paintTiles() 只依赖 renderTarget_ 与三个画刷，比在每个绘制点加分支干净。
     ID2D1RenderTarget* const savedTarget = renderTarget_;
     const auto savedBrush = brush_;
     const auto savedTextBrush = textBrush_;
     const auto savedBorderBrush = borderBrush_;
     const auto savedIcons = std::move(iconCache_);
 
-    // 离屏渲染目标固定 96 DPI（1 DIP = 1 px），而窗口 DPI 是系统真实值。
-    // clientHeightDip() 会拿 GetClientRect（此处是未缩放的物理像素）除以
-    // dpiScale —— 不把 dpi_ 一并切到 96 的话，高 DPI 机器上底部标签条
-    // 会按 1/scale 上移，截出一张「标签条悬在半空」的失真图。
+    // 离屏渲染目标固定 96 DPI（1 DIP = 1 px）。clientHeightDip() 用
+    // GetClientRect（此处是未缩放物理像素）除以 dpiScale，不把 dpi_ 一并
+    // 切到 96，高 DPI 下底部标签条会按 1/scale 上移，截出失真图。
     const int savedDpi = dpi_;
     dpi_ = 96;
 
@@ -1712,8 +1644,8 @@ bool LauncherWindow::debugExportPng(const wchar_t* fileName) {
     if (created) {
         renderTarget_->BeginDraw();
         renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
-        // 与 render() 的窗口底色保持一致 —— 用当前皮肤的窗口背景，
-        // 截图才能反映真实观感（此前硬编码深灰，亮色皮肤全被拍糊）。
+        // 与 render() 一致用当前皮肤的窗口背景，截图才反映真实观感
+        // （此前硬编码深灰，亮色皮肤全被拍糊）。
         const std::uint32_t bg = theme_.windowBackground;
         D2D1_COLOR_F backgroundColor;
         backgroundColor.a = static_cast<float>((bg >> 24) & 0xFFU) / 255.0F;
@@ -1727,7 +1659,7 @@ bool LauncherWindow::debugExportPng(const wchar_t* fileName) {
         renderTarget_->EndDraw();
     }
 
-    // ---- 还原绘制上下文 ----
+    // 还原绘制上下文
     renderTarget_ = savedTarget;
     brush_ = savedBrush;
     textBrush_ = savedTextBrush;
@@ -1740,11 +1672,8 @@ bool LauncherWindow::debugExportPng(const wchar_t* fileName) {
         return false;
     }
 
-    // ---- 编码为 PNG ----
-    //
-    // 输出到 exe 同级的 debug 子目录：相对路径会落到进程当前工作目录，
-    // 而工作目录在自动化环境下可能被清理，导致产物"写完就没了"。
-    // 这里显式拼接 exe 所在目录，保证产物位置可预期。
+    // 编码为 PNG。输出到 exe 同级目录：相对路径会落到进程当前工作目录，
+    // 自动化环境下可能被清理，产物会「写完就没了」。
     std::wstring outputPath;
     {
         wchar_t exePath[MAX_PATH] = {};

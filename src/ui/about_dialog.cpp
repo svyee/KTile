@@ -45,7 +45,7 @@ constexpr int kCardRight = kClientWidth - 12;
 constexpr int kCardBottom = 196;
 
 // 控件 ID。确定按钮用 IDOK：回车（IsDialogMessageW）与点击同 ID，
-// Esc 发 IDCANCEL —— 对纯展示对话框两者都等于「关闭」。
+// Esc 发 IDCANCEL，对纯展示对话框两者都等于「关闭」。
 constexpr int kTitleId = 2001;
 constexpr int kVersionId = 2002;
 constexpr int kDescId = 2003;
@@ -63,7 +63,7 @@ constexpr const wchar_t* kPanUrl =
     L"https://pan.baidu.com/s/1h7Cs_XQGaGMWqKnO8olbbQ?pwd=p3gf";
 
 // 对话框关闭通知（结束本地模态循环）。与 text_input_dialog 的
-// WM_APP+0x93 区分开，避免两条模态链路互相唤醒看不懂。
+// WM_APP+0x93 区分开，两条模态链路互不干扰。
 constexpr UINT kDialogCloseMessage = WM_APP + 0x94U;
 
 // exe 内嵌的图标资源 ID（与 app.rc 的 101 ICON 对应）。
@@ -99,10 +99,8 @@ int scaled(const double scale, const int value) {
 }
 
 // 系统中是否安装了指定字体族。
-//
-// 为什么用枚举而不是直接 CreateFont：CreateFont 遇到不存在的族名会
-// 静默替换成别的字体，没法判断是否命中；EnumFontFamiliesEx 按族名
-// 过滤，只有字体真实存在时回调才会被调用。
+// 用枚举而非直接 CreateFont：CreateFont 遇到不存在的族名会静默替换，
+// 无法判断是否命中；EnumFontFamiliesEx 只有字体真实存在时回调才触发。
 bool hasFontFamily(const wchar_t* family) {
     const HDC dc = GetDC(nullptr);
     if (dc == nullptr) {
@@ -125,11 +123,9 @@ bool hasFontFamily(const wchar_t* family) {
     return found;
 }
 
-// 关于对话框的界面字体：优先微软雅黑，其次思源黑体；都没装则返回
-// nullptr，调用方回退系统默认字体。
-//
-// Win7 只有「Microsoft YaHei」，带 UI 后缀的版本从 Win8 才有，
-// 所以两个名字都要探测；思源黑体各版本的族名有 SC / CN 两种写法。
+// 关于对话框的界面字体：优先微软雅黑，其次思源黑体；都没装返回
+// nullptr，调用方回退系统默认字体。Win7 只有「Microsoft YaHei」，带 UI
+// 后缀的版本从 Win8 才有，两个名字都要探测；思源黑体族名有 SC/CN 两种写法。
 const wchar_t* pickUiFontFamily() {
     static const wchar_t* const kCandidates[] = {
         L"Microsoft YaHei UI",
@@ -389,7 +385,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
         }
 
         case WM_COMMAND:
-            // 确定 / 取消 / Esc / 标题栏关闭，统统等于关掉。
+            // 确定 / 取消 / Esc / 标题栏关闭，统一等于关掉。
             if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
                 finishDialog(dialog);
             } else if (LOWORD(wParam) == kGithubId) {
@@ -404,7 +400,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
             return 0;
 
         case WM_DESTROY: {
-            // 释放本对话框创建的字体（Stock 字体不归我们释放）。
+            // 释放本对话框创建的字体（Stock 字体不由本模块释放）。
             auto* state = reinterpret_cast<DialogState*>(
                 GetWindowLongPtrW(dialog, GWLP_USERDATA));
             if (state != nullptr) {
@@ -417,8 +413,8 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
                     state->createdTitleFont = nullptr;
                 }
             }
-            // 唤醒模态循环去检查 IsWindow（绝不能 PostQuitMessage，
-            // 会连带杀掉主消息循环 —— 项目早期踩过的坑）。
+            // 唤醒模态循环去检查 IsWindow。绝不能 PostQuitMessage：
+            // 会连带杀掉主消息循环（项目早期踩过的坑）。
             HWND owner = GetWindow(dialog, GW_OWNER);
             if (owner != nullptr) {
                 PostMessageW(owner, kDialogCloseMessage, 0, 0);

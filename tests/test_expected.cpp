@@ -21,25 +21,25 @@ static int g_failures = 0;
         }                                                               \
     } while (false)
 
-// 1) 基础：成功/失败
+// 基础：成功 / 失败
 Expected<int, Err> parsePositive(int v) {
     if (v > 0) return v;
     return makeUnexpected(Err::Bad);
 }
 
-// 2) 非平凡类型
+// 非平凡类型
 Expected<std::string, Err> makeString(bool ok) {
     if (ok) return std::string("hello");
     return makeUnexpected(Err::Worse);
 }
 
-// 3) void 特化
+// void 特化
 Expected<void, Err> doWork(bool ok) {
     if (ok) return {};
     return makeUnexpected(Err::Bad);
 }
 
-// 4) 移动语义
+// 移动语义
 Expected<std::vector<int>, Err> makeVector() {
     std::vector<int> v{1, 2, 3};
     return v;  // 拷贝构造

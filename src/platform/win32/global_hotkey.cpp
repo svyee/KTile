@@ -12,7 +12,7 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// 主键名 -> 虚拟键码映射表（覆盖常用键）
+// 主键名到虚拟键码（查找时不区分大小写）
 struct KeyEntry {
     const char* name;
     UINT virtualKey;
@@ -99,7 +99,7 @@ UINT keyNameToVirtualKey(const std::string& key) noexcept {
         }
     }
 
-    // 表查找（大小写不敏感）
+    // 表查找，大小写不敏感
     for (const auto& entry : kKeyTable) {
         const char* left = entry.name;
         const char* right = key.c_str();
@@ -137,7 +137,7 @@ std::string virtualKeyToKeyName(const UINT virtualKey) {
 }
 
 std::wstring formatHotkey(const core::HotkeyConfig& config) {
-    // 手势优先：选了手势时 modifiers + key 没有意义，显示成手势本身
+    // 手势优先：选了手势就不看 modifiers + key，显示成手势本身
     switch (config.gesture) {
         case core::HotkeyGesture::DoubleCtrl:
             return infrastructure::i18n::trw("hotkey.doubleCtrl");
@@ -163,7 +163,7 @@ std::wstring formatHotkey(const core::HotkeyConfig& config) {
     return text;
 }
 
-// ---------------------------------------------------------------- GlobalHotkey
+// --- GlobalHotkey
 
 GlobalHotkey::~GlobalHotkey() {
     unregister();
@@ -216,26 +216,21 @@ void GlobalHotkey::unregister() {
     hotkeyId_ = 0;
 }
 
-// ---------------------------------------------------------------- GestureHotkey
+// --- GestureHotkey
 namespace {
 
-// 低级键盘钩子回调是 C 函数，拿不到 this —— 只能走文件级单例。
-// 进程内同时只会有一个手势钩子（用户只能选一种唤醒方式），
-// 所以单例不会冲突。
+// 低级键盘钩子回调是 C 函数，拿不到 this，只能走文件级单例。
+// 进程内同时只有一个手势钩子（用户只能选一种唤醒方式），不会冲突。
 GestureHotkey* g_gestureHotkey = nullptr;
 
-// 双击判定窗口。400ms 是「像双击」与「两次无关的 Ctrl」之间的
-// 折中：Windows 默认双击间隔是 500ms，但键盘上连按比鼠标慢，
+// 双击判定窗口。Windows 默认双击间隔 500ms，但键盘连按比鼠标慢，
 // 取 400ms 手感更稳，也不至于把两次独立操作误判成双击。
 constexpr ULONGLONG kDoubleCtrlWindowMs = 400;
 
-// 我们自己补发的按键用这个签名打标（dwExtraInfo 会原样传到钩子）。
-//
-// 为什么要打标而不是看 LLKHF_INJECTED：钩子必须放行**自己**注入的
-// Win 键（否则补发出去又被吞掉，死循环），但不能顺手把别的程序
-// 注入的按键也一起放过 —— 自动化脚本模拟双击 Ctrl 时是真按键，
-// 按 LLKHF_INJECTED 一刀切会让「脚本压不出手势」变成假故障。
-// 只认自己的签名，两种情形都正确。
+// 自己补发的按键用这个签名打标（dwExtraInfo 会原样传到钩子）。
+// 不能按 LLKHF_INJECTED 一刀切：钩子必须放行自己注入的 Win 键，
+// 否则补发出去又被吞掉，死循环；但自动化脚本模拟双击 Ctrl 是真按键，
+// 放过别的程序的注入会让「脚本压不出手势」变成假故障。只认自己的签名。
 constexpr ULONG_PTR kInjectSignature = 0x4B4C4155;  // 'KLAU'
 
 bool isCtrlKey(const DWORD virtualKey) noexcept {
@@ -289,8 +284,8 @@ Win32Status GestureHotkey::install(const HWND notifyWindow, const int hotkeyId,
     notifyWindow_ = notifyWindow;
     hotkeyId_ = hotkeyId;
     gesture_ = gesture;
-    // 「Ctrl+Win 开开始菜单」只在选了单按 Win 时才需要 —— 其它方式下
-    // Win 键本来就归系统管，不需要我们代劳。
+    // Ctrl+Win 开开始菜单只在单按 Win 的手势下才需要代理；
+    // 其它手势下 Win 键本来就归系统管。
     startMenuByWinKey_ = (gesture == core::HotkeyGesture::WinKey);
 
     g_gestureHotkey = this;
@@ -312,9 +307,8 @@ Win32Status GestureHotkey::install(const HWND notifyWindow, const int hotkeyId,
 }
 
 void GestureHotkey::uninstall() {
-    // 结清未配对的注入：Replayed 表示我们向系统补发过「Win 按下」
-    // 而还没补「抬起」。不结清就卸载，系统会一直认为 Win 按着 ——
-    // 之后所有按键都变成 Win+组合键（实测过的严重事故）。
+    // 先结清未配对的注入：Replayed 表示补发过「Win 按下」还没补「抬起」，
+    // 不结清系统会一直认为 Win 按着，之后所有按键都变成 Win+组合键（实测事故）。
     if (winState_ == WinState::Replayed) {
         report("卸载前补发 Win 抬起（结清未配对的注入）");
         injectWinKey(false);
@@ -341,7 +335,7 @@ void GestureHotkey::trigger() const {
     if (notifyWindow_ == nullptr) {
         return;
     }
-    // 与 RegisterHotKey 完全相同的下游：走 WM_HOTKEY，应用层不区分来源。
+    // 与 RegisterHotKey 相同的下游：走 WM_HOTKEY，应用层不区分来源。
     PostMessageW(notifyWindow_, WM_HOTKEY, static_cast<WPARAM>(hotkeyId_), 0);
 }
 
@@ -360,14 +354,10 @@ void GestureHotkey::injectKey(const WORD virtualKey, const bool down) {
 }
 
 void GestureHotkey::reconcileWinState() {
-    // 为什么会不一致：低级键盘钩子的回调由我们的消息线程泵送，
-    // 系统负载高（典型：开机自启后的几分钟）时若某次回调超过
-    // LowLevelHooksTimeout，系统会跳过这次回调 —— 「Win 抬起」事件
-    // 就这样丢了。状态机停在非 Idle：
-    //   Held 卡住     → 单击永远不触发（Win 键「没反应」）
-    //   Replayed 卡住 → 已注入的 Win 按下没有配对抬起，系统认为 Win
-    //                   一直按着，之后所有按键都变成 Win+组合键（事故）
-    // 这里把账结清：Held 按「单击完成」处理，Replayed 补发抬起。
+    // Win 抬起可能丢失：钩子回调由本线程泵送，系统负载高（典型是开机自启后
+    // 几分钟）时单次回调超过 LowLevelHooksTimeout 会被跳过，状态机就停在非 Idle。
+    // Held 卡住则单击永不触发，Replayed 卡住则系统认为 Win 一直按着（按键全变组合键）。
+    // 这里结清：Held 按单击完成处理，Replayed 补发抬起。
     switch (winState_) {
         case WinState::Held:
             report("状态对账：Win 抬起事件丢失，Held 按单击完成处理");
@@ -400,19 +390,18 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
         return false;
     }
 
-    // 事件队列里的 Ctrl 状态：在进入任何手势分支前统一更新。
-    // 不管当前手势用不用得上都跟踪 —— 手势热替换后状态依然正确。
-    // 注意：StartMenu 分支会注入一次 Ctrl keyup，注入事件带签名在
-    // 函数开头就放行了，所以这里只看得到物理事件，状态不会错乱。
+    // 事件队列里的 Ctrl 状态统一在这里更新，不管当前手势用不用得上，
+    // 手势热替换后依然正确。StartMenu 分支注入的 Ctrl keyup 带签名，
+    // 函数开头就放行了，这里只看得到物理事件。
     if (isCtrlKey(event.vkCode)) {
         ctrlPressed_ = isDown;
     }
 
-    // ---------------------------------------------------------- 双击 Ctrl
+    // --- 双击 Ctrl
     if (gesture_ == core::HotkeyGesture::DoubleCtrl) {
         if (isCtrlKey(event.vkCode)) {
             if (isDown) {
-                // 长按产生的重复按下来不算一次新点击，否则按住 Ctrl 就唤醒了
+                // 长按的重复按下不算新点击，否则按住 Ctrl 就唤醒了
                 if (!ctrlHeld_) {
                     ctrlHeld_ = true;
                     const ULONGLONG now = GetTickCount64();
@@ -428,21 +417,20 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
             } else {
                 ctrlHeld_ = false;
             }
-            // Ctrl 本身永远放行：Ctrl+C / Ctrl+点击 这些不能受影响
+            // Ctrl 本身永远放行，Ctrl+C / Ctrl+点击 不能受影响
             return false;
         }
         if (isDown) {
-            // 中间按了别的键 → 这两次 Ctrl 不是一组双击
+            // 中间按了别的键，这两次 Ctrl 不是一组双击
             lastCtrlDownTick_ = 0;
         }
         return false;
     }
 
-    // ---------------------------------------------------------- 单按 Win 键
+    // --- 单按 Win 键
     if (gesture_ == core::HotkeyGesture::WinKey) {
-        // 自愈对账（见 reconcileWinState 的注释）：只要状态机不在 Idle
-        // 而物理 Win 已经松开，说明抬起事件丢了，立刻结账。
-        // GetAsyncKeyState 只在非 Idle 时调用 —— 常态（Idle）零开销。
+        // 自愈对账：状态机不在 Idle 而物理 Win 已松开，说明抬起事件丢了。
+        // GetAsyncKeyState 只在非 Idle 时调用，常态零开销。
         if (winState_ != WinState::Idle &&
             (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
             (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0) {
@@ -452,27 +440,18 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
         if (isWinKey(event.vkCode)) {
             if (isDown) {
                 if (winState_ != WinState::Idle) {
-                    // 物理上不可能「按着再按一次」：上一个抬起丢了，而
-                    // 此刻物理 Win 是按下的，上面的物理对账不会触发，
-                    // 必须在这里强制结清旧账再走正常流程。
+                    // 上一个抬起丢了。此刻物理 Win 是按下的，上面的对账不会触发，
+                    // 必须在这里强制结清旧账。
                     reconcileWinState();
                 }
                 if (winState_ == WinState::Idle) {
                     if (startMenuByWinKey_ && ctrlPressed_) {
-                        // Ctrl+Win：用户约定它仍开开始菜单。原生的组合
-                        // 被我们吞掉了，这里代劳。
-                        //
-                        // 注意不能「补发一个 Win 键」了事 —— Ctrl 还物理
-                        // 按着，系统看到的仍是 Ctrl+Win，仍然不弹菜单
-                        // （实测坐实）。必须先把 Ctrl「松开」（注入 keyup，
-                        // 物理键的抬起随后到来，重复 keyup 无害），
-                        // 再发一次干净的 Win 按下+抬起，由系统自己弹菜单。
-                        // 代价：这一次 Ctrl 的系统状态被提前置为松开，
-                        // 用户继续按住 Ctrl 打字不再算组合键 —— 但这正是
-                        // 「按 Ctrl+Win 开菜单」这个动作的语义终点。
+                        // Ctrl+Win 仍开开始菜单：原生组合被钩子吞了，这里代劳。
+                        // 只补发 Win 不行，Ctrl 还按着，系统看到的仍是 Ctrl+Win
+                        // （实测）。必须先注入 Ctrl 抬起，再发一次干净的 Win
+                        // 按下+抬起。代价是这次 Ctrl 提前置为松开。
                         injectKey(VK_CONTROL, false);
-                        // 系统视角里 Ctrl 已松开，本地状态同步 —— 否则
-                        // 下一次 Win 按下还会被误判成 Ctrl+Win。
+                        // 本地状态同步，否则下一次 Win 按下还会被当成 Ctrl+Win。
                         ctrlPressed_ = false;
                         injectWinKey(true);
                         injectWinKey(false);
@@ -482,9 +461,9 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
                         winState_ = WinState::Held;
                     }
                 }
-                return true;  // 按下先吞，绝不让开始菜单自己弹出来
+                return true;  // 按下先吞，不让开始菜单自己弹出来
             }
-            // ---- 抬起 ----
+            // --- 抬起
             switch (winState_) {
                 case WinState::Held:
                     winState_ = WinState::Idle;
@@ -492,8 +471,7 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
                     trigger();
                     break;
                 case WinState::Replayed:
-                    // 组合键已经放行给系统了，这里必须补一个抬起，
-                    // 否则系统会认为 Win 一直按着
+                    // 组合键已放行给系统，这里必须补抬起，否则系统认为 Win 一直按着
                     injectWinKey(false);
                     winState_ = WinState::Idle;
                     break;
@@ -506,11 +484,11 @@ bool GestureHotkey::handleKeyEvent(const WPARAM message,
             return true;
         }
 
-        // 其它键：Win 还按着时按了别的键 → 判定为 Win+X 组合
+        // 其它键：Win 还按着时按了别的键，判定为 Win+X 组合
         if (isDown && winState_ == WinState::Held) {
             winState_ = WinState::Replayed;
             report("判定为 Win+组合键，补发 Win 按下放行");
-            injectWinKey(true);  // 把「Win 按着」这件事补给系统
+            injectWinKey(true);  // 把「Win 按着」补给系统
         }
         return false;
     }

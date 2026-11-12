@@ -32,33 +32,21 @@ int pixelSizeForHint(const IconSizeHint hint) {
     return 64;
 }
 
-// ---- 应用执行别名（AppExecLink）解引用 ----
+// --- 应用执行别名（AppExecLink）解引用
 //
-// 商店应用（Windows 终端、计算器、截图工具……）在文件系统上的入口是
-// %LOCALAPPDATA%\Microsoft\WindowsApps\ 下的 0 字节「应用执行别名」：
-// 一个 AppExecLink 重解析点，本身既不是 PE 模块也没有图标资源。
-// 直接对它提图标，PrivateExtractIconsW 必然失败，退到 SHGetFileInfo
-// 只能拿到「通用空白程序」图标 —— 铺到磁贴上就是一张白纸。
-//
-// 重解析数据里存着包内真实 exe 的完整路径（实测 Windows Terminal）：
-//   Microsoft.WindowsTerminal_8wekyb3d8bbwe              ← 包族名
-//   Microsoft.WindowsTerminal_8wekyb3d8bbwe!App           ← AUMID
-//   C:\Program Files\WindowsApps\Microsoft.Windows...\wt.exe  ← 要的就是它
-//   Desktop App                                            ← 应用类型
-//
-// 该结构没有官方公开定义（[MS-FSCC] 未收录），也**没有 StringCount 字段**
-// —— 4 字节 Version 之后紧跟着就是 NULL 分隔的宽字符串。若个别系统版本
-// 多塞了一个计数字段，取值会整体错位；所以解析完必须校验「像绝对路径
-// 且文件真实存在」，不成立就换备用偏移再试一次。
-//
-// 顺带处理真正的符号链接（tag 0xA000000C）——开发期手工建的别名走它。
+// 商店应用（终端、计算器、截图工具……）的入口是 WindowsApps 下 0 字节的
+// 重解析点，既不是 PE 也没有图标资源，直接提图标只会得到「通用空白程序」。
+// 重解析数据里存着包内真实 exe 的完整路径（第 2 个字符串）。
+// 该结构没有公开定义：Version 之后就是 NULL 分隔的宽字符串，没有 StringCount，
+// 个别系统版本多塞一个计数字段会让取值整体错位，所以解析后必须校验
+// 「像绝对路径且文件真实存在」，不成立换备用偏移再试。符号链接一并处理。
 constexpr DWORD kFsctlGetReparsePoint = 0x000900A8;
 constexpr ULONG kReparseTagMountPoint = 0xA0000003;
 constexpr ULONG kReparseTagSymlink = 0xA000000C;
 constexpr ULONG kReparseTagAppExecLink = 0x8000001B;
 
-// 绝对路径 + 真实存在的普通文件（WindowsApps 目录不许列举，
-// 但按完整路径访问单个文件是允许的 —— 实测可读）。
+// 绝对路径且真实存在的普通文件。WindowsApps 目录不许列举，
+// 但按完整路径访问单个文件可以。
 bool isAbsoluteExistingFile(const std::wstring& path) {
     if (path.size() < 3) {
         return false;
@@ -74,7 +62,7 @@ bool isAbsoluteExistingFile(const std::wstring& path) {
            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-// 把重解析数据段按「NULL 分隔的宽字符串」切开，取第 index 个。
+// 按 NULL 切分重解析数据里的宽字符串，取第 index 个。
 std::wstring reparseStringAt(const std::vector<unsigned char>& buffer,
                              const std::size_t dataBytes,
                              const std::size_t stringsOffset,
@@ -104,14 +92,14 @@ std::wstring reparseStringAt(const std::vector<unsigned char>& buffer,
     return std::wstring();
 }
 
-// 若 path 是应用执行别名或符号链接，返回它指向的真实文件路径；否则返回空。
+// 若是应用执行别名或符号链接，返回其指向的真实文件路径；否则返回空。
 std::wstring resolveAliasTarget(const std::wstring& path) {
     const HANDLE handle = CreateFileW(
         path.c_str(), GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
         OPEN_EXISTING,
-        // OPEN_REPARSE_POINT：拿到链接本身而不是顺着它走，
-        // 否则 DeviceIoControl 会因为「目标不可访问」而失败。
+        // OPEN_REPARSE_POINT：拿链接本身而不是顺着它走，
+        // 否则 DeviceIoControl 会因为目标不可访问而失败。
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
         return std::wstring();
@@ -130,7 +118,7 @@ std::wstring resolveAliasTarget(const std::wstring& path) {
     const ULONG tag = *reinterpret_cast<const ULONG*>(buffer.data());
 
     if (tag == kReparseTagAppExecLink) {
-        // 第 2 串（0 起算）就是包内 exe 的完整路径
+        // 第 2 个字符串就是包内 exe 的完整路径
         std::wstring executable = reparseStringAt(buffer, returned, 12, 2);
         if (isAbsoluteExistingFile(executable)) {
             return executable;
@@ -152,7 +140,7 @@ std::wstring resolveAliasTarget(const std::wstring& path) {
             reinterpret_cast<const USHORT*>(buffer.data() + kHeaderBytes);
         const std::size_t substituteOffset = fields[0];
         const std::size_t substituteBytes = fields[1];
-        // 符号链接多一个 ULONG Flags，路径缓冲区起点比挂载点晚 4 字节
+        // 符号链接多一个 ULONG Flags，路径缓冲区比挂载点晚 4 字节
         const std::size_t pathStart =
             kHeaderBytes + (tag == kReparseTagSymlink ? 12 : 8);
         if (pathStart + substituteOffset + substituteBytes > returned) {
@@ -175,7 +163,7 @@ std::wstring resolveAliasTarget(const std::wstring& path) {
     return std::wstring();
 }
 
-// 判断扩展名是否为 PE 模块（exe/dll/ico 可直接 ExtractIconEx）
+// 扩展名是否可当 PE 模块直接提取（exe/dll/ico/cpl/scr/ocx）
 bool hasIconBearingExtension(const std::wstring& path) {
     const std::size_t dot = path.find_last_of(L'.');
     if (dot == std::wstring::npos) {
@@ -192,8 +180,8 @@ bool hasIconBearingExtension(const std::wstring& path) {
            extension == L".scr" || extension == L".ocx";
 }
 
-// 用 SHGetFileInfo 取图标（适合文档、文件夹、URL）。
-// 返回的 HICON 由调用方负责销毁。
+// 用 SHGetFileInfo 取图标，适合文档、文件夹、URL。
+// 返回的 HICON 由调用方销毁。
 HICON shellIconForPath(const std::wstring& path, const bool isFolder) {
     SHFILEINFOW info{};
     const UINT flags = SHGFI_ICON | SHGFI_USEFILEATTRIBUTES;
@@ -217,8 +205,7 @@ HICON shellIconForPath(const std::wstring& path, const bool isFolder) {
     return nullptr;
 }
 
-// 从 ImageList（系统图标列表）按索引取指定尺寸的图标。
-// 这是拿到 256px jumbo 图标的唯一可靠方式。
+// 从系统图标 ImageList 按索引取图，唯一能拿到 256px jumbo 的方式。
 HICON iconFromImageListId(const std::wstring& path,
                           const bool isFolder,
                           const int imageListId) {
@@ -243,13 +230,9 @@ HICON iconFromImageListId(const std::wstring& path,
     return icon;
 }
 
-// 测量 HICON 非透明内容占画布的边长比（内容包围盒边长 / 画布边长）。
-// 测量失败（取不到像素）返回 1.0 —— 宁可放过，不可误杀。
-//
-// 存在的意义：系统 jumbo ImageList 有一种退化情形——exe 的图标资源里
-// 没有 256px 帧时，GetIcon 返回的 HICON 是「256x256 画布 + 48x48 小图
-// 贴在左上角」（实测 i_view64.exe / Bandicam 均如此，内容占比仅 3.5%）。
-// 这种图标铺到磁贴上就是一小点。此函数用于识别这种退化。
+// 测量 HICON 非透明内容占画布的边长比；取不到像素返回 1.0，宁可放过。
+// 用于识别 jumbo ImageList 的退化：exe 的图标资源里没有 256px 帧时，GetIcon
+// 给的是「256 画布左上角贴一张 48 小图」（i_view64.exe、Bandicam 均如此）。
 double iconContentRatio(const HICON icon) {
     if (icon == nullptr) {
         return 1.0;
@@ -333,9 +316,8 @@ HICON iconFromSystemImageList(const std::wstring& path,
 
     HICON icon = iconFromImageListId(path, isFolder, imageListId);
 
-    // jumbo 退化兜底：256 画布里只装了 48 小图（见 iconContentRatio 注释）。
-    // 退回 48px 的 EXTRALARGE —— 内容铺满画布，放进磁贴顶多放大发虚，
-    // 远好过缩成一个小点。
+    // jumbo 退化兜底（判定见 iconContentRatio）。退回 48px 的 EXTRALARGE：
+    // 放大发虚好过缩成一个小点。
     if (icon != nullptr && imageListId == SHIL_JUMBO &&
         iconContentRatio(icon) < 0.5) {
         DestroyIcon(icon);
@@ -344,13 +326,11 @@ HICON iconFromSystemImageList(const std::wstring& path,
     return icon;
 }
 
-// 直接从 PE 资源（exe/dll/…）按请求尺寸提取图标。
-//
-// 为什么优先于 ImageList：PrivateExtractIconsW 与资源管理器同源，
-// 会挑图标资源里最接近请求尺寸的帧再缩放到请求尺寸 —— 实测对
-// i_view64.exe / Bandicam 都能拿满 256x256（ImageList 的 jumbo 给的
-// 却是 256 画布装 48 小图），对 notepad/chrome 等则与 jumbo 完全一致。
-// 该 API 自 Windows 2000 起可用，Win7 无兼容问题。
+// 直接从 PE 资源按请求尺寸提取图标。
+// PrivateExtractIconsW 与资源管理器同源，会挑最接近请求尺寸的帧再缩放：
+// i_view64.exe、Bandicam 能拿到真正的 256x256，而 jumbo ImageList 只给
+// 256 画布装 48 小图，notepad/chrome 则两者一致。
+// Windows 2000 起可用，Win7 无兼容问题。
 HICON extractScaledPeIcon(const std::wstring& path, const int desiredSize) {
     HICON icon = nullptr;
     const UINT extracted = PrivateExtractIconsW(
@@ -361,10 +341,9 @@ HICON extractScaledPeIcon(const std::wstring& path, const int desiredSize) {
     return nullptr;
 }
 
-// 判断系统 ImageList 里的图标是否是「通用空白页」——
-// 文件不存在/无关联时，Shell 会返回白页图标，这种图标没有辨识度，
-// 不如退回按名称首字渲染。做法：统计非透明像素中「接近白/灰」的占比，
-// 若几乎全是灰度色调（无彩色）则视为泛型图标。
+// 判断 Shell 给的是否「通用空白页」图标：文件不存在或无关联时 Shell 返回
+// 白页，没有辨识度，不如退回按名称首字渲染。做法是统计非透明像素里
+// 无彩色像素的占比，几乎全灰即判为泛型。
 bool looksGeneric(const std::wstring& path,
                   const bool isFolder,
                   const int desiredSize) {
@@ -424,7 +403,7 @@ bool looksGeneric(const std::wstring& path,
                     ++chromatic;
                 }
             }
-            // 有相当比例的不透明像素、且其中绝大多数无彩色 → 泛型白页图标
+            // 不透明像素足够多、且其中绝大多数无彩色，判为泛型白页
             if (opaque > 64) {
                 const double chromaticRatio =
                     static_cast<double>(chromatic) / static_cast<double>(opaque);
@@ -444,10 +423,7 @@ bool looksGeneric(const std::wstring& path,
 }
 
 // 把解码出的像素（32bpp BGRA，直通 alpha）做成 HICON。
-//
-// 走 DIB + CreateIconIndirect 而不是 CreateIconFromResource：
-// 前者是内存里的位图，与「文件里读出来的像素」天然对口。
-// 掩码位图必须给（哪怕是全 0）—— 32bpp 图标由 alpha 通道决定透明度，
+// 掩码位图必须给，哪怕是全 0：32bpp 图标的透明度由 alpha 决定，
 // 掩码只是历史遗留字段，但 CreateIconIndirect 要求它非空。
 HICON iconFromPixels(const ImagePixels& image) {
     if (!image.valid()) {
@@ -505,8 +481,7 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
         return UniqueHIcon();
     }
 
-    // 应用执行别名 / 符号链接先解到真实文件：
-    // 别名本身是 0 字节重解析点，没有任何图标资源可提（见上方长注释）。
+    // 别名 / 符号链接先解到真实文件：别名本身是 0 字节重解析点，没有图标可提。
     // 解不出来（普通文件、权限不足）就原样用传入路径。
     std::wstring path = resolveAliasTarget(filePath);
     if (path.empty()) {
@@ -515,11 +490,10 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
 
     const int desired = pixelSizeForHint(hint);
 
-    // ---- 方式零：位图文件（png / jpg / jpeg / bmp / gif / tif / ico）----
-    //
-    // 这类文件不在 PE 资源里，ExtractIconEx 拿不到，shell 关联给的又是
-    // 「图片文件」的通用图标 —— 必须自己解码。.ico 也一并交给 WIC：
-    // 它会把多尺寸 ico 里最大的那一帧拿出来，比 ExtractIconEx 的 32px 强。
+    // --- 方式零：位图文件（png / jpg / jpeg / bmp / gif / tif / ico）
+    // 这类文件不在 PE 资源里，ExtractIconEx 拿不到，Shell 给的只是「图片文件」
+    // 的通用图标，必须自己解码。ico 也交给 WIC：它取多尺寸里最大的一帧，
+    // 比 ExtractIconEx 的 32px 强。
     if (isDecodableImageFile(path)) {
         ImagePixels image;
         if (decodeImageFile(path, &image)) {
@@ -528,17 +502,13 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
                 return UniqueHIcon(icon);
             }
         }
-        // 解码失败就往下走通用路径：至少给个「图片文件」关联图标，
-        // 好过完全空白
+        // 解码失败继续走通用路径，至少给个「图片文件」关联图标
     }
 
-    // ---- 方式一：PE 模块直接从资源提取（exe/dll/…）----
-    //
-    // 注意顺序：这里必须排在 ImageList 之前。jumbo ImageList 对「图标
-    // 资源里没有 256px 帧」的 exe 会返回退化的 256 画布装 48 小图
-    // （实测 i_view64.exe 内容占比仅 3.5%，Bandicam 同样中招），
-    // 铺到磁贴上就是一小点。PrivateExtractIconsW 则总能给出铺满画布
-    // 的图标（见 extractScaledPeIcon 注释与验证/目录的 icon_probe 实测）。
+    // --- 方式一：PE 模块直接从资源提取（exe/dll/…）
+    // 必须排在 ImageList 之前：jumbo 对「图标资源里没有 256px 帧」的 exe
+    // 返回退化的 256 画布装 48 小图（i_view64.exe 内容占比 3.5%），
+    // PrivateExtractIconsW 则总能给出铺满画布的图标。
     if (hasIconBearingExtension(path)) {
         HICON peIcon = extractScaledPeIcon(path, desired);
         if (peIcon != nullptr) {
@@ -546,16 +516,15 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
         }
     }
 
-    // ---- 方式二：ImageList（文件夹/文档等非 PE 目标的大图标来源）----
-    //
-    // ExtractIconEx 只能拿到 PE 资源里的「默认」尺寸（通常 32px），
-    // 一旦优先使用，62px/128px 的磁贴会把它放大成模糊噪点。
+    // --- 方式二：ImageList，非 PE 目标（文件夹/文档）的大图标来源
+    // ExtractIconEx 只能拿 PE 资源里的默认尺寸（通常 32px），
+    // 优先用它会让 62px/128px 的磁贴放大成模糊噪点。
     HICON jumbo = iconFromSystemImageList(path, false, desired);
     if (jumbo != nullptr) {
         return UniqueHIcon(jumbo);
     }
 
-    // ---- 方式三：ExtractIconEx（32px 兜底）----
+    // --- 方式三：ExtractIconEx（32px 兜底）
     if (hasIconBearingExtension(path)) {
         HICON largeIcon = nullptr;
         HICON smallIcon = nullptr;
@@ -572,7 +541,7 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
         }
     }
 
-    // ---- 方式四：SHGetFileInfo 通用 ----
+    // --- 方式四：SHGetFileInfo 通用
     HICON shellIcon = shellIconForPath(path, false);
     if (shellIcon != nullptr) {
         return UniqueHIcon(shellIcon);
@@ -582,7 +551,7 @@ UniqueHIcon loadIconFromFile(const std::wstring& filePath,
 }
 
 UniqueHIcon loadDefaultApplicationIcon(const IconSizeHint hint) {
-    // 用 notepad.exe 作为「通用程序」的保险选择（系统必带）
+    // 用 notepad.exe 作「通用程序」保险选择（系统必带）
     const wchar_t* fallback = L"C:\\Windows\\System32\\notepad.exe";
     UniqueHIcon icon = loadIconFromFile(fallback, hint);
     if (icon.valid()) {
@@ -597,17 +566,17 @@ UniqueHIcon loadItemIcon(const std::string& targetUtf8,
                          const bool isFolder,
                          const bool isUrl,
                          const IconSizeHint hint) {
-    // ---- 1. 自定义图标优先 ----
+    // --- 自定义图标优先
     if (!customIconUtf8.empty()) {
-        // item.icon 里存的是相对 data 目录的路径（"res\xx.png"），
-        // 这里解析成绝对路径；老数据里的绝对路径原样通过
+        // item.icon 存的是相对 data 目录的路径（"res\xx.png"），这里解析成
+        // 绝对路径；老数据里的绝对路径原样通过
         const std::wstring customPath = resolveStoredIconPath(
             base::utf8ToWide(customIconUtf8));
         UniqueHIcon icon = loadIconFromFile(customPath, hint);
         if (icon.valid()) {
             return icon;
         }
-        // 自定义图标路径无效时继续尝试 target，不直接失败
+        // 自定义图标无效时继续尝试 target
     }
 
     if (targetUtf8.empty()) {
@@ -615,13 +584,13 @@ UniqueHIcon loadItemIcon(const std::string& targetUtf8,
     }
 
     // 相对 exe 目录的路径（"tools\app.exe"）要先解析成绝对路径，
-    // 否则图标提取会按当前工作目录去找，磁贴变成空白方块。
+    // 否则按当前工作目录去找，磁贴变空白方块。
     const std::wstring target =
         resolveProgramRelativePath(base::utf8ToWide(targetUtf8));
 
-    // ---- 2. URL：用默认浏览器图标 ----
+    // --- URL：用默认浏览器图标
     if (isUrl) {
-        // 取 .html 的关联图标（大多数系统即浏览器图标）
+        // 取 .html 的关联图标，多数系统即浏览器图标
         HICON icon = iconFromSystemImageList(L"index.html", false,
                                             pixelSizeForHint(hint));
         if (icon != nullptr) {
@@ -634,10 +603,10 @@ UniqueHIcon loadItemIcon(const std::string& targetUtf8,
         return loadDefaultApplicationIcon(hint);
     }
 
-    // ---- 3. 文件夹 ----
+    // --- 文件夹
     if (isFolder) {
         const int desired = pixelSizeForHint(hint);
-        // 泛型白页文件夹图标没有辨识度，交给上层按名称首字渲染
+        // 泛型白页文件夹没有辨识度，交给上层按名称首字渲染
         if (!looksGeneric(target, true, desired)) {
             HICON icon = iconFromSystemImageList(target, true, desired);
             if (icon != nullptr) {
@@ -651,13 +620,13 @@ UniqueHIcon loadItemIcon(const std::string& targetUtf8,
         return UniqueHIcon();
     }
 
-    // ---- 4. 普通文件/可执行文件 ----
+    // --- 普通文件 / 可执行文件
     UniqueHIcon icon = loadIconFromFile(target, hint);
     if (icon.valid()) {
         return icon;
     }
 
-    // 文件不存在时，用扩展名取关联图标（用户可能还没创建该文件）
+    // 文件可能还没创建，退到按扩展名取关联图标
     const int desired = pixelSizeForHint(hint);
     if (!looksGeneric(target, false, desired)) {
         HICON associatedIcon = iconFromSystemImageList(target, false, desired);
@@ -666,7 +635,7 @@ UniqueHIcon loadItemIcon(const std::string& targetUtf8,
         }
     }
 
-    // 全部失败：返回空，由 UI 层按名称首字兜底渲染
+    // 全部失败，由 UI 层按名称首字兜底渲染
     return UniqueHIcon();
 }
 

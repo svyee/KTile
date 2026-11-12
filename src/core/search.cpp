@@ -27,10 +27,8 @@ std::string trimAscii(const std::string& value) {
     return value.substr(begin, end - begin);
 }
 
-// 单字节小写化。
-//
-// 只对 ASCII 生效 —— 中文没有大小写概念，多字节序列保持原样才能保证
-// 字节级匹配不会错位（若粗暴地对每个字节做 tolower，会把中文字节改坏）。
+// 单字节小写化。只对 ASCII 生效：中文没有大小写，多字节序列保持原样
+// 才能保证字节级匹配不错位（对每个字节 tolower 会把中文字节改坏）。
 char asciiLower(const char ch) {
     const unsigned char value = static_cast<unsigned char>(ch);
     if (value < 0x80U) {
@@ -40,10 +38,8 @@ char asciiLower(const char ch) {
 }
 
 // 大小写不敏感的 ASCII 子串查找，返回字节偏移（未找到返回 npos）。
-//
-// 为什么不用 std::search + 自定义谓词：这里要的是「位置」，
-// 而且要保持与「不做大小写折叠时」完全相同的字节长度语义
-// （ASCII 折叠不会改变长度，所以位置可以直接用于高亮切片）。
+// 不用 std::search + 谓词：这里要的是位置，且 ASCII 折叠不改变长度，
+// 位置可直接用于高亮切片。
 std::size_t findAsciiInsensitive(const std::string& haystack,
                                  const std::string& needle) {
     if (needle.empty() || haystack.size() < needle.size()) {
@@ -99,7 +95,7 @@ std::vector<SearchMatch> searchItems(const std::vector<LaunchItem>& items,
 
         std::size_t position = findAsciiInsensitive(name, normalized);
 
-        // 名字没命中时再试 target —— 用户可能记得路径片段
+        // 名字没命中时再试 target，用户可能记得路径片段
         std::size_t targetPosition = std::string::npos;
         if (position == std::string::npos && !item.target.empty() &&
             item.target != name) {
@@ -116,8 +112,7 @@ std::vector<SearchMatch> searchItems(const std::vector<LaunchItem>& items,
             match.matchStart = position;
             match.matchLength = normalized.size();
         } else {
-            // 命中在 target 上：名字里没有可高亮的位置，
-            // 但仍要出现在结果里（高亮留给名字为空的情况）
+            // 命中在 target 上：名字里没有可高亮的位置，但仍要出现在结果里
             match.matchStart = std::string::npos;
             match.matchLength = 0;
         }

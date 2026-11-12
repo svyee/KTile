@@ -1,28 +1,14 @@
 // KTile - Win32 平台层：OLE 拖放接收（把文件/文件夹/链接拖进面板）
 //
-// 为什么用 OLE 拖放（RegisterDragDrop + IDropTarget）而不是 WM_DROPFILES：
-//   1. WM_DROPFILES 只在「松开鼠标」时才给一次消息：拖动过程中光标扫过
-//      窗口时，用户看不到任何「这里能放、会放到哪一格」的反馈，
-//      容易以为拖错地方了；IDropTarget 的 DragEnter/DragOver/DragLeave
-//      能让我们实时算出落点格并画出来。
-//   2. DragAcceptFiles 需要在窗口类样式上加 WS_EX_ACCEPTFILES，
-//      而本窗口用的是自绘无边框类，改类样式会牵动焦点与外框行为。
-//   3. 拖动来源不只有资源管理器：浏览器里拖链接/图片过来时给的是
-//      URL 格式或纯文本，CF_HDROP 里什么都没有 —— 只认 WM_DROPFILES
-//      会把这类来源整个漏掉。
-//
-// 注意：Windows 的 UIPI（用户界面特权隔离）不允许**标准权限**进程
-// （资源管理器、浏览器）向**以管理员身份运行**的窗口投放拖放 ——
-// 那种情况下光标会显示「禁止」符号，与目标窗口是否正确注册 IDropTarget
-// 无关。要验证拖放，请以普通权限启动本程序。
-//
-// 代价：必须在启动时 OleInitialize（见 application.cpp），
-// 且窗口销毁前要 RevokeDragDrop。
-//
-// 本文件里的 COM 类是**手写**的：项目在 VS2017 上编译，
-// winrt::implements / ComObjectBase 这类模板基类在多重继承下
-// 有「纯虚函数没被认定被覆盖」的风险（详见 unique_handles.h 的注解），
-// IDropTarget 只有 4 个方法，手写一遍最省事也最稳。
+// 用 OLE（RegisterDragDrop + IDropTarget）而不用 WM_DROPFILES：后者只在
+// 松开时给一次消息，拖动中无法画落点反馈；需要 WS_EX_ACCEPTFILES 类样式，
+// 与自绘无边框窗口冲突；且浏览器拖链接给的是 URL/纯文本，CF_HDROP 里
+// 什么都没有。
+// UIPI 限制：标准权限进程（资源管理器、浏览器）不能向管理员运行的窗口
+// 投放，光标显示禁止符号，与是否注册 IDropTarget 无关。
+// 代价：启动时需 OleInitialize（见 application.cpp），窗口销毁前 RevokeDragDrop。
+// COM 类手写：项目在 VS2017 编译，winrt::implements 等模板基类在多重继承
+// 下有覆盖风险（见 unique_handles.h 注解），IDropTarget 只有 4 个方法。
 //
 #pragma once
 
@@ -51,20 +37,13 @@ struct DroppedSource {
     std::wstring value;
 };
 
-// 这份拖拽数据里有没有我们认识的东西（CF_HDROP / URL / 纯文本）。
-//
-// DragEnter 用它决定显示「可放置」还是「禁止」光标，
-// 也避免了「拖一段无关数据过来，窗口亮起来却什么都加不进去」的假承诺。
+// 这份数据里有没有认识的东西（CF_HDROP / URL / 纯文本）。DragEnter 用它
+// 决定显示可放置还是禁止光标，避免拖无关数据时窗口亮起却加不进去。
 bool canAcceptDrop(IDataObject* dataObject) noexcept;
 
-// 把拖拽数据里的内容抠出来（保持来源顺序）。
-//
-// 解析顺序：
-//   1. CF_HDROP        —— 资源管理器拖文件/文件夹都是它，可含多个
-//   2. UniformResourceLocatorW / UniformResourceLocator / CF_UNICODETEXT
-//                      —— 浏览器地址栏、网页里的链接
-//
-// 数据格式不认识时返回空 vector（调用方据此拒绝这次拖放）。
+// 把拖拽数据里的内容抠出来（保持来源顺序）：先 CF_HDROP（可含多个），
+// 再 UniformResourceLocatorW / UniformResourceLocator / CF_UNICODETEXT
+//（浏览器地址栏、网页链接）。格式不认识时返回空 vector，调用方据此拒绝。
 std::vector<DroppedSource> extractDroppedSources(IDataObject* dataObject);
 
 // 拖拽数据里「可放置的条目数」（CF_HDROP 的文件个数）。
@@ -79,11 +58,9 @@ public:
     // 松手时回调（sources 非空）。point 是屏幕坐标，供调用方判断落点。
     using DropHandler = std::function<void(std::vector<DroppedSource>, POINTL)>;
 
-    // 拖拽悬停状态变化：entered=true 表示有东西拖到了窗口上（应画落点预览），
-    // false 表示离开了/放下了（撤掉预览）。count 是可放置的条目数。
-    //
-    // point 是当前光标的**屏幕坐标** —— 面板靠它算出「新磁贴会落在哪一格」，
-    // 这样拖进来时就能直接看到落点，而不是只有一句「松手即可添加」。
+    // 悬停状态变化：entered=true 表示有东西拖到窗口上（应画落点预览），
+    // false 表示离开/放下（撤掉预览）。count 是可放置条目数，point 是
+    // 光标屏幕坐标，面板靠它算出新磁贴落点。
     using DragStateHandler =
         std::function<void(bool entered, std::size_t count, POINTL point)>;
 
@@ -93,7 +70,7 @@ public:
     DropTarget(const DropTarget&) = delete;
     DropTarget& operator=(const DropTarget&) = delete;
 
-    // 注册拖放。失败（OLE 未初始化 / 已被别的组件占用）返回 false —— 不致命，
+    // 注册拖放。失败（OLE 未初始化 / 已被别的组件占用）返回 false；不致命，
     // 只是拖放这一条入口不可用，其余功能照常。
     bool registerForWindow(HWND window,
                            DropHandler handler,

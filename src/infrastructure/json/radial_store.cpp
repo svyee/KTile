@@ -34,8 +34,8 @@ core::HotkeyModifier hotkeyModifierFromKey(const std::string& key,
     if (key == "shift") return core::HotkeyModifier::Shift;
     if (key == "win")   return core::HotkeyModifier::Win;
     if (key == "alt")   return core::HotkeyModifier::Alt;
-    // 认不出的键名告诉调用方，别默默当成 Alt —— 手写 "ctrl" 曾经会被
-    // 理解成 Alt，用户看到的是「抑制键根本没生效」。
+    // 认不出的键名必须报告给调用方，不能静默当 Alt：静默回落会让用户以为
+    // 抑制键没生效。
     if (recognized) *recognized = false;
     return core::HotkeyModifier::Alt;
 }
@@ -43,8 +43,8 @@ core::HotkeyModifier hotkeyModifierFromKey(const std::string& key,
 // 生成默认的 8 扇区全局轮盘（首次运行用）
 core::RadialConfig makeDefaultConfig() {
     core::RadialConfig config;
-    // 默认菜单名与预置动作名取自语言文件：英文环境首次生成的配置
-    // 就是英文。用户后来改过的名字属于用户数据，不跟着语言切换变。
+    // 默认菜单名与预置动作名取自语言文件，英文环境首次生成的配置就是英文。
+    // 用户改过的名字属于用户数据，不跟随语言切换。
     core::RadialMenu global(
         "default", infrastructure::i18n::tr("radial.defaultMenuName"), 8);
 
@@ -75,7 +75,7 @@ core::RadialConfig makeDefaultConfig() {
 
 }  // namespace
 
-// ================================================================ 序列化
+// --- 序列化
 
 std::string RadialStore::serialize(const core::RadialConfig& config) {
     JsonWriter writer;
@@ -102,8 +102,8 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
     }
     writer.endObject();
 
-    // menu —— 只有一份通用轮盘，所以直接写对象而不是数组。
-    // 老版本（schemaVersion 2）这里是 menus 数组，读的时候兼容。
+    // menu：只有一份通用轮盘，直接写对象而不是数组；schemaVersion 2 是
+    // menus 数组，读取时兼容。
     {
         const auto& menu = config.menu;
         writer.key("menu").beginObject();
@@ -156,7 +156,7 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
     return writer.take();
 }
 
-// ================================================================ 菜单对象解析
+// --- menu 对象解析
 
 void parseRadialMenuJson(const json::JsonValue& m, core::RadialMenu* out) {
     if (out == nullptr) return;
@@ -212,7 +212,7 @@ void parseRadialMenuJson(const json::JsonValue& m, core::RadialMenu* out) {
     }
 }
 
-// ================================================================ 反序列化
+// --- 反序列化
 
 LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text) {
     LoadResult<core::RadialConfig> result;
@@ -237,9 +237,9 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         result.value.trigger.button =
             core::radialTriggerButtonFromKey(trigger.find("button").asString());
 
-        // modifier 缺失（而不是写了个认不出的值）时回落到默认的 Ctrl。
-        // 手写 trigger 忘了这一项的用户想要的多半是「别动我的右键」，
-        // 而 fromKey 对空串给的是 None = 纯右键拖动，会把右键整个吞掉。
+        // modifier 字段缺失（而非写了认不出的值）时回落到默认 Ctrl：
+        // 手写配置漏掉这项的用户多半想保留右键，而 fromKey 对空串给的是
+        // None（纯右键拖动），会把右键整个吞掉。
         const std::string modifierKey = trigger.find("modifier").asString();
         result.value.trigger.modifier =
             modifierKey.empty() ? defaults.modifier
@@ -250,19 +250,15 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         result.value.trigger.cancelRadiusPx = static_cast<std::uint16_t>(
             trigger.find("cancelRadiusPx").asUint32(160));
 
-        // v3 → v4：把还停在旧默认值的阈值抬到新默认值。
-        //
-        // 旧默认 8 像素太窄 —— 拇指按右键时带出几个像素很常见，很多人
-        // 「只想点一下右键」也会把轮盘拽出来。只动**恰好等于旧默认值**的
-        // 配置：用户自己调过（哪怕是别的怪值）一律不碰，判断依据是版本号
-        // 加数值双重命中，不是「猜用户想不想改」。
+        // v3 → v4：把仍等于旧默认 8 像素的激活阈值抬到 15。旧值太窄，拇指
+        // 按右键的抖动就会误弹轮盘。只动恰好等于旧默认值的配置，用户自己
+        // 调过的（哪怕是怪值）一律不碰。
         if (fileVersion < 4 && result.value.trigger.activationThresholdPx == 8) {
             result.value.trigger.activationThresholdPx = 15;
         }
 
-        // 手改过的离谱值夹回可用区间，别让不合法的配置流到 UI 和窗口里。
-        // （阈值 0 会让「按下即呼出」，卡死右键；取消半径小于卡片环外缘
-        //   会把卡片自己判成已甩出，看起来像半个轮盘坏了。）
+        // 手改过的离谱值夹回可用区间：阈值 0 等于按下即呼出，卡死右键；
+        // 取消半径小于卡片环外缘会把卡片判成已甩出，像半个轮盘坏了。
         if (result.value.trigger.activationThresholdPx < 1) {
             result.value.trigger.activationThresholdPx = 1;
         }
@@ -273,11 +269,9 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
             result.value.trigger.cancelRadiusPx = core::kMaxCancelRadiusDip;
         }
 
-        // 抑制键：认不出的名字跳过、重复的去重、与触发修饰键撞车的剔除。
-        //
-        // 撞车那一项选择「静默丢掉抑制项」而不是「整份配置打回默认」：
-        // 用户手写 "alt" 抑制 + Alt 触发，本意多半是「换个触发键」，丢掉
-        // 抑制至少还能用；整份回默认会把辛苦配的扇区全清掉。
+        // 抑制键：认不出的跳过、重复去重、与触发修饰键撞车的剔除。撞车项
+        // 静默丢掉而不是整份配置回默认：丢掉抑制项配置还能用，回默认会把
+        // 用户配好的扇区全清掉。
         const JsonValue& suppressed = trigger.find("suppressWhileHeld");
         if (suppressed.isArray()) {
             for (std::size_t i = 0; i < suppressed.items().size(); ++i) {
@@ -305,10 +299,9 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
     if (menuValue.isObject()) {
         parseRadialMenuJson(menuValue, &result.value.menu);
     } else {
-        // schemaVersion <= 2 的文件：menus 里可能有多份方案，优先取 id 为
-        // "default" 的那份（老版本的全局默认），没有就取第一份。
-        // profiles（按应用白名单）整段丢弃 —— 按应用差异化已经交给 slugin
-        // 插件目录，用户侧只留一份通用轮盘。
+        // schemaVersion <= 2：menus 数组里优先取 id 为 "default" 的那份，
+        // 没有则取第一份。profiles（按应用白名单）整段丢弃，按应用差异化
+        // 已交给插件目录。
         const JsonValue& menus = root.find("menus");
         if (menus.isArray()) {
             const JsonValue* chosen = nullptr;
@@ -352,20 +345,14 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         return result;
     }
 
-    // 读成功就统一盖成当前版本号。
-    //
-    // 迁移函数只在**语义上无法靠默认值补回来**时才写：字段缺失走默认值、认不出
-    // 的枚举值回落到安全项、越界值上面已经夹过，这些老文件本来就能读，所以一直
-    // 没有迁移。目前的唯一一条是 v3 → v4 把激活阈值从旧默认 8 抬到 15 —— 那是个
-    // 「值本来就写对了，但对新版本来说不合适」的情况，读默认值补不了，只能改。
-    //
-    // 版本号必须跟着升：一直停在文件里的旧值，下次保存又会原样写回去，以后真要
-    // 做破坏性变更时就失去判断依据。
+    // 读成功后统一盖成当前版本号。迁移只在默认值补不回来时才写（目前仅
+    // v3→v4 的阈值迁移）；版本号必须跟着升，否则旧值保存后原样写回，
+    // 之后做破坏性变更时失去判断依据。
     result.value.schemaVersion = core::kRadialSchemaVersion;
     return result;
 }
 
-// ================================================================ 文件 I/O
+// --- 文件 I/O
 
 bool RadialStore::readFileText(const std::wstring& path, std::string& out) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,

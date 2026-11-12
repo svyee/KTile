@@ -38,21 +38,11 @@ namespace app {
 inline constexpr const wchar_t* kApplicationName = L"KTile";
 
 // 主窗口标题（任务栏 / Alt-Tab / 关于对话框标题栏显示的名字）。
-// 语言可切换，所以是函数而不是常量 —— 常量会固化成编译期的那一种语言。
+// 语言可切换，所以是函数而不是常量（常量会固化成编译期的那一种语言）。
 const wchar_t* applicationWindowTitle();
 
-// 版本号。
-//   0.9.0 = 功能开发完成、待打包与 Win7 真机验证（M6）；
-//   1.0.0 = 正式版；
-//   1.0.2 = 关于对话框字体优先微软雅黑 / 思源黑体。
-//   1.1.0 = 设置窗口与编辑窗口视觉现代化，设置项拆分为外观 / 行为两页。
-//   1.2.0 = 轮盘菜单（花瓣环形菜单 + 按应用方案 + 设置页与编辑对话框）。
-//   1.3.0 = 多语言（中 / 英）、轮盘插件（按应用换轮盘）、圆盘收敛为一份
-//            通用轮盘 + 进程黑名单、抑制键、扇区自带 SVG 图标。
-//   1.3.1 = 跟随启动（设置里手动添加 + 磁贴右键勾选，按磁贴的参数与权限
-//            启动）、磁贴目标支持相对 exe 目录的路径。
-// 改这里时记得同步 app.rc 里的 VERSIONINFO
-//  （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
+// 版本号。改这里时记得同步 app.rc 里的 VERSIONINFO
+// （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
 inline constexpr const wchar_t* kApplicationVersion = L"1.3.1";
 inline constexpr int kApplicationVersionMajor = 1;
 inline constexpr int kApplicationVersionMinor = 3;
@@ -67,11 +57,8 @@ inline constexpr int kToggleHotkeyId = 1;
 // 托盘回调消息（消息窗口使用）
 inline constexpr UINT WM_TRAYICON_CALLBACK = WM_APP + 100;
 
-// 自动化 / 调试开关集合。
-//
-// 为什么汇总成一个结构体：这些开关都只在自动化里用，正常启动一个都不开。
-// 早先它们是一串位置参数，加一个开关就要动 run() 的签名、动 main.cpp 的
-// 调用点，调用处还会变成「一长串看不出含义的 true/false」。
+// 自动化 / 调试开关集合。只在自动化里用，正常启动一个都不开；
+// 汇总成结构体避免 run() 出现一长串看不出含义的 true/false。
 struct DebugOptions {
     // --debug-shot：渲染导出 PNG 后立刻退出（见 main.cpp 的说明）
     bool shot = false;
@@ -98,32 +85,28 @@ struct DebugOptions {
     // --debug-new-item：打开「添加项目」对话框（新建模式）
     bool newItem = false;
     // --debug-drop=x,y：模拟一次「拖入落点」（客户区坐标，<0 表示不模拟）。
-    // 单独用时点亮落点预览（供截图）；与 --debug-add 同时用时，新项目就
-    // 落在这一格上 —— 走的是与真实拖放完全相同的下游。
+    // 单独用时点亮落点预览（供截图）；与 --debug-add 同用时，新项目落在
+    // 这一格，走与真实拖放完全相同的下游。
     int dropX = -1;
     int dropY = -1;
     // --debug-add=<路径1;路径2;...>：启动后走一次「拖入添加」流程
-    // （与真实拖放共用同一条代码路径，只是不经过 OLE 那条管道）
+    // （与真实拖放共用同一条代码路径，只是不经过 OLE 管道）
     std::vector<std::wstring> addPaths;
-    // --debug-opacity=<50..100>：把主窗口设成指定不透明度（0 = 不改）。
-    // 用于验证「分层窗口 + D2D 渲染目标」在真实窗口上是否成立。
+    // --debug-opacity=<50..100>：主窗口不透明度（0 = 不改），
+    // 验证「分层窗口 + D2D 渲染目标」在真实窗口上是否成立。
     int opacityPercent = 0;
     // --debug-radial：渲染轮盘菜单到 radial-shot.png 后退出（视觉验证）。
-    // 可选 =x,y 指定高亮扇区的相对中心偏移（DIP），如 --debug-radial=0,108
-    // 高亮正下方扇区。
+    // 可选 =x,y 指定高亮扇区的相对中心偏移（DIP），如 --debug-radial=0,108。
     bool radial = false;
     int radialHoverX = 0;
     int radialHoverY = 0;
-    // --debug-radial-plugin=<id>：配合 --debug-radial，改渲染**插件**的菜单
-    // 而不是用户的通用轮盘。没有这个开关，插件自带的图标与扇区布局就只能
-    // 在真实前台应用里肉眼看，自动化无从验证。
+    // --debug-radial-plugin=<id>：配合 --debug-radial 渲染插件的菜单
+    // 而不是用户的通用轮盘。
     std::string radialPluginId;
-    // --debug-radial-scroll=<ms>：配合 --debug-radial，把超宽标签的滚动
-    // 进度拨到指定毫秒。滚动是时间相关的，不钉住相位，导出的截图每次都不一样，
-    // 也就没法自动比对「第一帧是开头、第二帧滚到了尾」。
+    // --debug-radial-scroll=<ms>：配合 --debug-radial，钉住超宽标签的
+    // 滚动相位，否则时间相关的滚动让导出截图无法自动比对。
     int radialScrollMs = 0;
 
-    // 是否有任何开关被打开
     bool any() const noexcept {
         return shot || settings || settingsKeepAlive || radialEditor || about ||
                editor || newItem || !search.empty() || !addPaths.empty() ||
@@ -148,20 +131,14 @@ public:
     void showTrayMenu();
     void handleTrayCommand(UINT commandId);
 
-    // 重装手势钩子（reason 只用于写日志，说明是谁触发的）。
-    //
-    // 为什么需要重装：WH_KEYBOARD_LL 钩子链是 LIFO，Explorer 重启会把
-    // 它的钩子排到我们前面，导致「吞 Win 键」失效；系统负载高时还可能
-    // 静默跳过/卸载超时钩子。TaskbarCreated 广播、休眠恢复、看门狗
-    // 定时器都会调这里把顺序抢回来。
-    // 非手势热键（普通 RegisterHotKey）不受钩子链影响，直接返回。
+    // 重装手势钩子（reason 只用于写日志）。WH_KEYBOARD_LL 钩子链是 LIFO，
+    // Explorer 重启会把它的钩子排到前面使吞 Win 键失效，系统高负载时还会
+    // 静默跳过超时钩子；TaskbarCreated 广播、休眠恢复、看门狗都调这里
+    // 抢回顺序。非手势热键（普通 RegisterHotKey）不受钩子链影响，直接返回。
     void reinstallGestureHotkey(const char* reason);
-    // 重装轮盘鼠标钩子（reason 只用于写日志）。
-    //
-    // 与手势钩子同一套理由：WH_MOUSE_LL 也是 LIFO 链，Explorer 重启、
-    // 休眠恢复、系统静默跳过超时回调都会让它失效，而失效的表现是
-    // 「Ctrl+右键突然没反应了」——用户不会想到要重启程序。
-    // 轮盘正在显示时不重装：重装会重置状态机，手势做到一半会被截断。
+    // 重装轮盘鼠标钩子（reason 只用于写日志）。失效原因同上，表现是
+    // Ctrl+右键突然没反应。轮盘显示期间不重装：重装会重置状态机，
+    // 截断进行中的手势。
     void reinstallRadialHook(const char* reason);
     // 消息窗口定时器回调（日志落盘 / 钩子看门狗）
     void onMessageTimer(UINT_PTR timerId);
@@ -176,8 +153,8 @@ public:
     void onRadialShow(POINT startPoint);
     void onRadialMove(POINT currentPoint);
     void onRadialRelease(POINT currentPoint);
-    // 钩子报「这次手势作废」：把轮盘收掉，但**不**执行任何扇区动作。
-    // 用于抬起事件丢失后的对账（见 radial_mouse_hook.h 里那段说明）。
+    // 钩子报「这次手势作废」：收起轮盘但不执行任何扇区动作，
+    // 用于抬起事件丢失后的对账（见 radial_mouse_hook.h）。
     void onRadialAbort(int reason);
     // 收起轮盘并清理与它绑定的临时状态（动作分发指针、兜底定时器、计时）
     void hideRadialMenu();
@@ -190,11 +167,11 @@ private:
     // 托盘提示文字跟随当前唤醒方式（热键 / 手势）刷新
     void updateTrayTooltip();
 
-    // 运行日志：初始化目录 + 写启动横幅。automation 模式不建会话哨兵
-    //（自动化会并发起多实例，哨兵会误报「上次异常退出」）。
+    // 初始化目录 + 写启动横幅。automation 模式不建会话哨兵
+    //（自动化并发多实例会误报「上次异常退出」）。
     void initializeLogging(bool automation);
-    // 看门狗：手势钩子丢了就重装，每隔一段时间也强制重装一次
-    //（系统会静默跳过超时钩子，没有通知，只能定期抢）。
+    // 看门狗：手势钩子丢失就重装，并按周期强制重装一次
+    //（系统静默跳过超时钩子且无通知，只能定期抢）。
     void onHookWatchdog();
 
     // 持久化：从磁盘加载配置与磁贴数据
@@ -212,25 +189,21 @@ private:
     // 首次运行或数据缺失时植入示例磁贴（便于用户直观看到界面）
     void seedSampleDocument();
 
-    // 跟随启动：把 config_.activation.followLaunch 里的程序逐个拉起。
-    //
-    // 已经在运行（按完整映像路径判定）的跳过 —— 不管是开机自启还是手动
-    // 拉起 KTile，这些程序往往早就开着，再拉一次就是两个实例。
-    // 逐条写日志：这是「为什么我的程序没起来」唯一的线索。
-    //
-    // 条目分两种来源，靠 FollowLaunchEntry::itemId 区分：手动添加的只认
-    // target；从磁贴添加的按 id 取磁贴当前值（参数 / 工作目录 / 管理员
-    // 都跟着磁贴走），磁贴已被删除时退回添加时的快照。
+    // 跟随启动：把 config_.activation.followLaunch 里的程序逐个拉起，
+    // 已在运行（按完整映像路径判定）的跳过，逐条写日志（这是排查
+    // 「为什么我的程序没起来」唯一的线索）。条目靠 FollowLaunchEntry::itemId
+    // 区分来源：手动添加的只认 target；从磁贴添加的按 id 取磁贴当前值
+    //（参数/工作目录/管理员跟着磁贴走），磁贴已删退回添加时的快照。
     void launchFollowStartupItems();
 
     // 某块磁贴是否已在跟随启动清单里（右键菜单据此打勾）
     bool isFollowingStartup(const std::string& itemId) const;
     // 切换磁贴的跟随状态：未添加则加入（带参数/工作目录/管理员快照），
-    // 已添加则移除。落盘但不启动 —— 语义始终是「下次 KTile 启动时」。
+    // 已添加则移除。落盘但不启动，语义始终是「下次 KTile 启动时」。
     void toggleFollowStartup(const core::LaunchItem& item);
-    // 用磁贴当前值刷新跟随清单里的快照（name / target / 参数 / 工作目录 /
-    // 管理员）。磁贴被删的条目原样保留，所以「删磁贴」不会静默清掉
-    // 开机启动项。返回是否真的改动了内容。
+    // 用磁贴当前值刷新跟随清单里的快照（name/target/参数/工作目录/管理员）。
+    // 磁贴被删的条目原样保留，删磁贴不会静默清掉开机启动项。
+    // 返回是否真的改动了内容。
     bool syncFollowLaunchWithTiles();
     // 在全部标签页里按 id 找磁贴；找不到返回 nullptr（指针指向窗口文档，
     // 调用方当次用完即弃，别存）。
@@ -250,8 +223,7 @@ private:
     void hideLauncher();
 
     // 按「当前标签页里最短的 visibleRefreshSeconds」启停前台刷新定时器。
-    // 面板隐藏或没有插件需要前台刷新时，定时器会被关掉 —— 隐藏期间
-    // 完全不刷新正是这条需求的核心。
+    // 面板隐藏或没有插件需要前台刷新时定时器会被关掉。
     void updatePluginVisibleTimer();
 
     // ---- 磁贴右键菜单 ----
@@ -276,10 +248,9 @@ private:
     void applyItemAdd(HWND owner, const std::wstring& initialTarget);
     // 添加一块插件磁贴（插件来自 data/plugins 的清单，不需要编辑对话框）
     void addPluginItem(const std::string& pluginId);
-    // 把拖进来的东西加进面板（文件/文件夹直接建磁贴；链接建成网址项目）
-    // dropPoint = 松手位置的屏幕坐标：新磁贴就落在光标所在那一格，
-    // 压住的已有磁贴按避让规则让位（与拖动磁贴同一套规则）。
-    // 不给坐标（自动化/调试入口）时交给布局引擎找第一个空位。
+    // 把拖进来的东西加进面板（文件/文件夹直接建磁贴；链接建成网址项目）。
+    // dropPoint = 松手位置屏幕坐标，新磁贴落在光标所在格、压住的磁贴按
+    // 避让规则让位；不给坐标（自动化/调试入口）时交给布局引擎找空位。
     void addDroppedSources(std::vector<platform::win32::DroppedSource> sources,
                            std::optional<POINTL> dropPoint);
     // 删除（弹确认框 + 落盘）
@@ -316,10 +287,10 @@ private:
 
     std::unique_ptr<ui::LauncherWindow> launcherWindow_;
 
-    // 插件发现 / 懒加载刷新 / 缓存。没有插件时它只是空转，不占后台资源。
+    // 插件发现 / 懒加载刷新 / 缓存。没有插件时只是空转。
     PluginController pluginController_;
-    // 前台刷新定时器当前生效的秒数（0 = 未启用）。避免每次显示/切页
-    // 都 KillTimer + SetTimer 一遍，也不会在隐藏后留下空转定时器。
+    // 前台刷新定时器当前生效的秒数（0 = 未启用），
+    // 避免每次显示/切页都 KillTimer + SetTimer 一遍。
     int pluginVisibleTimerSeconds_ = 0;
 
     // 便携路径与持久化
@@ -328,7 +299,7 @@ private:
     bool pathsReady_ = false;
 
     // OLE 是否由本对象初始化（OleInitialize 成功才在析构里 OleUninitialize）。
-    // 拖放（RegisterDragDrop）依赖 OLE，因此启动时必须先初始化。
+    // 拖放（RegisterDragDrop）依赖 OLE，启动时必须先初始化。
     bool oleInitialized_ = false;
 
     // 运行日志是否已初始化（析构时据此决定是否 shutdown 日志模块）
@@ -340,16 +311,15 @@ private:
     core::ApplicationConfig config_;
     core::ItemsDocument document_;
 
-    // 本次启动实际生效的界面语言（"zh-Hans" / "en"）。
-    // config_.language 可能是 "auto"，这里是解析后的结果 —— 日志要记的是
-    // 真正用了哪个语言，不是配置值。
+    // 本次启动实际生效的界面语言（"zh-Hans" / "en"）。config_.language
+    // 可能是 "auto"，日志要记的是解析后的结果，不是配置值。
     std::string effectiveLanguage_;
 
     // ---- 轮盘菜单 ----
     core::RadialConfig radialConfig_;
     infrastructure::RadialStore radialStore_;
     // slugin/<id>/radial.json 提供的按应用轮盘。只读，启动时（以及用户点
-    // 「重新扫描」时）加载一次；插件里的 menu 地址在下次扫描前保持稳定。
+    // 「重新扫描」时）加载一次。
     infrastructure::RadialPluginStore radialPluginStore_;
     platform::win32::RadialMouseHook radialHook_;
     std::unique_ptr<ui::RadialMenuWindow> radialWindow_;

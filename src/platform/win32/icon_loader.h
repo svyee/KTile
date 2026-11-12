@@ -1,23 +1,12 @@
 // KTile - Win32 平台层：图标提取
 //
-// 从启动目标中提取高质量图标，供磁贴渲染使用。
-//
-// 提取策略（按优先级）：
-//   1. 若 item.icon 指定了图标文件，从该文件提取：
-//        - 位图文件（png/jpg/jpeg/bmp/gif/tif/ico）走 WIC 解码
-//        - exe/dll/cpl 等 PE 模块走 shell 图标提取
-//        - 相对 data 目录的路径（"res\xx.png"）会自动解析成绝对路径，
-//          绝对路径原样使用（兼容老数据）
-//   2. 从 target 可执行文件提取（PE 模块用 PrivateExtractIconsW 按请求
-//      尺寸直接提取；exe 之外的大图标走系统 ImageList 的 jumbo 档，
-//      并有「大画布装小图」退化检测兜底）
-//   3. 从文件关联取图标（SHGetFileInfo，适合文档/文件夹/URL）
-//   4. 全部失败时返回空（调用方用默认色块兜底）
-//
-// 尺寸说明：
-//   - 小磁贴 64x64 需要 64px 源图；大磁贴 128x128 需要 128px 源图
-//   - 优先请求 256x256（Vista+ 的 jumbo 图标），降采样质量最好
-//   - Win7 完整支持 SHIL_JUMBO，无需额外判断
+// 从启动目标提取高质量图标供磁贴渲染，优先级：item.icon 指定的图标文件
+//（位图 png/jpg/bmp/gif/tif/ico 走 WIC 解码，exe/dll/cpl 走 shell 提取；
+// 相对 data 目录的路径解析成绝对路径，绝对路径原样兼容老数据）→ target
+// 可执行文件（PE 用 PrivateExtractIconsW 按请求尺寸直接提取，exe 之外的
+// 大图标走 ImageList jumbo 档，带大画布装小图退化检测）→ 文件关联图标
+//（SHGetFileInfo，适合文档/文件夹/URL）→ 全部失败返回空，调用方用默认
+// 色块兜底。优先请求 256x256（jumbo）源图，降采样质量最好。
 //
 #pragma once
 

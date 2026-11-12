@@ -25,33 +25,30 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// ---- 常量 ------------------------------------------------------------
-//
-// 图标画布 128x128；「蓝底白线框」是内置项的统一视觉。
-// 蓝色取晨光皮肤的 accent（#2B6CE6）：这个蓝在深/浅两种主题的磁贴上
-// 都有足够对比度，也和 Windows 系统图标体系不打架。
+// --- 常量
+
+// 图标画布 128x128；蓝底白线框是内置项统一视觉。蓝取晨光皮肤 accent
+//（#2B6CE6），深浅主题对比度都够，也不与系统图标体系冲突。
 constexpr UINT kIconSize = 128;
 constexpr float kBackdropInset = 16.0F;   // 蓝底到画布边的距离
 constexpr float kBackdropRadius = 26.0F;  // 圆角
-// Lucide 图形本身是 24x24：放大 3.5 倍 = 84 画布单位，居中后留 22 的边。
-// 图形实际占 20/24（Lucide 的图元都内缩 2），画出来约 70px，落在 96px
-// 的圆角底内，四周留白均匀。
+// Lucide 图形本身是 24x24，按比例放大居中；图形实际占 20/24（图元内缩
+// 2），画出来约 70px，落在 96px 圆角底内，四周留白均匀。
 constexpr float kGlyphBox = 84.0F;
 constexpr float kGlyphScale = kGlyphBox / 24.0F;
 constexpr float kGlyphOffset = (kIconSize - kGlyphBox) / 2.0F;
 // Lucide 原版线宽 2（24 单位），按同一比例放大
 constexpr float kStrokeWidth = 2.0F * kGlyphScale;
 
-// 系统图标的内容盒：128 画布上占 96，四周留 16 透明边。
-// 与 Lucide 图形（24 里画 20 → 视觉约 70/96 底）的重量对齐 ——
-// 系统图标本来多是「铺满外框」的，不再内缩会显得比邻居胖一圈。
+// 系统图标内容盒：128 画布上占 96，四周 16 透明边，与 Lucide 图形的视觉
+// 重量对齐（系统图标多铺满外框，不再内缩会显得比邻居胖一圈）。
 constexpr UINT kShellBox = 96;
 
-// 蓝底 / 白线框（#2B6CE6）。D2D1::ColorF 的构造函数可静态初始化。
+// 蓝底 / 白线框（#2B6CE6），构造函数可静态初始化。
 const D2D1::ColorF kBackdropColor(0.169F, 0.424F, 0.902F, 1.0F);
 const D2D1::ColorF kGlyphColor(1.0F, 1.0F, 1.0F, 1.0F);
 
-// ---- 小工具 -----------------------------------------------------------
+// --- 小工具
 
 bool createD2dFactory(ID2D1Factory** factory) {
     return SUCCEEDED(D2D1CreateFactory(
@@ -81,9 +78,8 @@ bool createDirectoryIfMissing(const std::wstring& directory) {
            GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-// 把 32bpp BGRA（直通 alpha）像素编码成 PNG 写到磁盘。
-// 与 icon_store::importCustomIcon 的保存段同一做法 —— 那边是文件进
-// 文件出，这里像素已经在内存里，少一段解码/缩放。
+// 把 32bpp BGRA（直通 alpha）像素编码成 PNG 写盘，做法与
+// icon_store::importCustomIcon 的保存段一致（那边多一段解码/缩放）。
 bool writePng(IWICImagingFactory* factory,
               const std::vector<std::uint32_t>& pixels,
               const UINT width, const UINT height,
@@ -135,19 +131,16 @@ bool writePng(IWICImagingFactory* factory,
     return true;
 }
 
-// ---- 系统图标：从真实 shell 对象取图 ----------------------------------
+// --- 系统图标：从真实 shell 对象取图
 //
-// 「系统位置」组（此电脑/回收站/控制面板/计算器…）直接显示系统自己的
-// 图标 —— 用户要的就是「它本来长什么样」，计算器的图标就该是计算器。
-// 代价是样式随系统版本变化，但这组本来就是"系统里已有的东西"，
-// 跟着系统走反而更自然；功能命令（锁屏/音量/关机）仍用 Lucide 线框，
-// 因为它们没有系统图标可言。
+// 系统位置组（此电脑/回收站/控制面板/计算器…）直接显示系统自己的图标，
+// 用户要的就是它本来长什么样；样式随系统版本变化，但这组本就是系统里
+// 已有的东西。功能命令（锁屏/音量/关机）没有系统图标，仍用 Lucide 线框。
 
-// 把表里的来源解析成 shell 认得的路径：
-//   "shell:startup" → CSIDL_STARTUP 的真实目录
-//   裸 exe 名（"calc.exe"）→ 完整路径（SearchPathW 能处理重定向与
-//     App Paths；失败再拼 GetSystemDirectoryW —— 上一版裸名提取失败
-//     就是因为它把 "calc.exe" 当成相对路径去解析了）
+// 把表里的来源解析成 shell 认得的路径："shell:startup" → CSIDL_STARTUP
+// 真实目录；裸 exe 名（"calc.exe"）→ 完整路径，走 SearchPathW（能处理
+// 重定向与 App Paths），失败再拼 GetSystemDirectoryW，裸名当相对路径
+// 解析会失败。
 std::wstring resolveIconSource(const std::wstring& source) {
     if (source.empty()) {
         return std::wstring();
@@ -179,9 +172,8 @@ std::wstring resolveIconSource(const std::wstring& source) {
     return source;
 }
 
-// 取系统图标，尺寸尽量大：
-//   SHIL_JUMBO（256px，Vista+）→ SHIL_EXTRALARGE（48px）→ SHGFI_ICON 的 32px。
-// 16/32px 放大到磁贴上会糊成一片，所以三级都要试。
+// 取系统图标，尺寸尽量大：SHIL_JUMBO（256px，Vista+）→ SHIL_EXTRALARGE
+//（48px）→ SHGFI_ICON 的 32px。16/32px 放大到磁贴上会糊，三级都要试。
 HICON loadShellIcon(const std::wstring& source) {
     const std::wstring path = resolveIconSource(source);
     if (path.empty()) {
@@ -234,8 +226,8 @@ HICON loadShellIcon(const std::wstring& source) {
     return icon;
 }
 
-// HICON → 128 画布上的直通 BGRA（图标缩进 96 的内容盒、居中、四周透明）。
-// 背景透明是刻意的：磁贴自己会衬底，多画一层底色会跟主题打架。
+// HICON → 128 画布上的直通 BGRA（缩进 96 内容盒、居中、四周透明）。
+// 背景保持透明：磁贴自己会衬底，多画一层底色会跟主题打架。
 bool renderShellIcon(const core::BuiltinItem& item,
                      std::vector<std::uint32_t>* pixels) {
     if (item.iconSource == nullptr) {
@@ -304,7 +296,7 @@ bool renderShellIcon(const core::BuiltinItem& item,
     return true;
 }
 
-// ---- 图标渲染：蓝底 + Lucide 白线框 -----------------------------------
+// --- 图标渲染：蓝底 + Lucide 白线框
 
 bool renderLucideIcon(const std::wstring& id,
                       std::vector<std::uint32_t>* pixels) {
@@ -441,7 +433,7 @@ std::wstring ensureBuiltinIcon(const core::BuiltinItem& item,
 
     std::vector<std::uint32_t> pixels;
     // 系统位置项取真实系统图标；取不到（老系统/异常 shell 状态）就退回
-    // 同 id 的 Lucide 矢量图 —— 宁可样式不统一，也不能出现空白磁贴。
+    // 同 id 的 Lucide 矢量图；宁可样式不统一，也不能出现空白磁贴。
     const bool shellIcon = item.iconSource != nullptr &&
                            renderShellIcon(item, &pixels);
     if (!shellIcon && !renderLucideIcon(item.id, &pixels)) {

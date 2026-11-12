@@ -1,17 +1,9 @@
 // KTile - C++17 兼容层：Expected<T, E>
 //
-// 替代 C++23 的 std::expected。VS2017 (MSVC 19.16) 不支持 std::expected。
-//
-// 设计要点：
-//  - 语义对齐 std::expected 的常用子集，未来若升级到 C++23 可平滑替换
-//  - 支持 void 特化（Expected<void, E>）
-//  - 不使用任何 C++17 之后的特性
-//  - 不抛异常（noexcept 移动/析构），适配 /EHsc 下的确定性行为
-//
-// 用法：
-//    Expected<int, MyError> f();
-//    auto r = f();
-//    if (r) { use(*r); } else { use(r.error()); }
+// 替代 C++23 std::expected（VS2017 不支持），语义为其常用子集，升级后可平滑替换。
+// 支持 void 特化；不抛异常（noexcept 移动/析构），适配 /EHsc。用法：
+//   Expected<int, MyError> f();
+//   auto r = f(); if (r) { use(*r); } else { use(r.error()); }
 //
 #pragma once
 
@@ -23,7 +15,7 @@
 namespace ktile {
 namespace base {
 
-// ---------------------------------------------------------------- 错误包装
+// --- 错误包装
 // 与 std::unexpected 对应，用于构造错误态。
 template <typename E>
 class Unexpected {
@@ -45,7 +37,7 @@ Unexpected<typename std::decay<E>::type> makeUnexpected(E&& error) {
     return Unexpected<typename std::decay<E>::type>(std::forward<E>(error));
 }
 
-// ---------------------------------------------------------------- Expected
+// --- Expected
 template <typename T, typename E>
 class Expected {
 public:
@@ -178,7 +170,7 @@ private:
     bool hasValue_;
 };
 
-// ---------------------------------------------------------------- void 特化
+// --- void 特化
 template <typename E>
 class Expected<void, E> {
 public:
@@ -265,7 +257,6 @@ private:
     bool hasValue_;
 };
 
-// 便捷别名：无错误信息的成功/失败
 inline constexpr bool kOk = true;
 
 }  // namespace base

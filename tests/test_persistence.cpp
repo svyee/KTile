@@ -1,13 +1,8 @@
 // KTile - 持久化层测试
 //
-// 覆盖：
-//   1. JsonWriter 输出格式（转义、嵌套、空容器）
-//   2. JsonParser 解析（对象、数组、转义、数字、错误处理）
-//   3. ItemsDocument 序列化 -> 反序列化 往返一致性
-//   4. ApplicationConfig 往返一致性
-//   5. 容错：非法 JSON、缺失字段、越界值
-//   6. RadialConfig 往返一致性 + 触发参数越界夹取
-//   7. 轮盘插件扫描、坏插件隔离、随包插件（slugin/）是否都还能加载
+// 覆盖 JsonWriter / JsonParser 基本行为、ItemsDocument / ApplicationConfig /
+// RadialConfig 往返一致性、非法与缺失字段的容错夹取、轮盘插件扫描与坏插件
+// 隔离、随包插件（slugin/）可加载。
 //
 #include "core/data_model.h"
 #include "infrastructure/json/config_store.h"
@@ -63,7 +58,7 @@ void checkEq(long long actual, long long expected, int line) {
 #define CHECK_STREQ(a, b) checkEq((a), (b), __LINE__)
 #define CHECK_EQ(a, b) checkEq((a), (b), __LINE__)
 
-// ---------------------------------------------------------------- JsonWriter
+// --- JsonWriter
 
 void testWriterBasics() {
     JsonWriter writer;
@@ -137,7 +132,7 @@ void testWriterEmptyContainers() {
     CHECK(parsed.root.find("emptyObject").isObject());
 }
 
-// ---------------------------------------------------------------- JsonParser
+// --- JsonParser
 
 void testParserBasics() {
     const auto result = parseJson(
@@ -208,7 +203,7 @@ void testParserMissingKeyReturnsNull() {
     CHECK(result.root.find("a").at(0).isNull());
 }
 
-// ---------------------------------------------------------------- 往返一致性
+// --- 往返一致性
 
 core::ItemsDocument makeSampleDocument() {
     core::ItemsDocument document;
@@ -264,7 +259,6 @@ void testItemsRoundTrip() {
     const auto original = makeSampleDocument();
     const std::string text = ConfigStore::serializeItems(original);
 
-    // 输出应能被解析
     const auto parsed = parseJson(text);
     CHECK(parsed.ok);
 
@@ -296,7 +290,7 @@ void testItemsRoundTrip() {
     CHECK_EQ(static_cast<long long>(item0.launchCount), 7);
     CHECK(item0.lastLaunchedAt.has_value());
     CHECK_STREQ(*item0.lastLaunchedAt, "2026-10-14T09:00:00");
-    // 没设过的项默认跟随全局 —— 保证「不改就是升级前的样子」
+    // 没设过的项默认跟随全局：不改就是升级前的样子
     CHECK(item0.labelMode == core::TileLabelMode::FollowGlobal);
 
     // Wide（含参数、工作目录、管理员、显式坐标）
@@ -350,8 +344,8 @@ void testConfigRoundTrip() {
     original.appearance.accentColor = 0xFF00AAFFu;
     original.activation.startWithWindows = true;
     original.activation.screenEdgeEnabled = true;
-    // 跟随启动：绝对路径与相对路径各一条（相对写法是这次新增的语义，
-    // 存盘 / 读回时不能被悄悄改成绝对路径 —— 那样「整个目录搬走」就废了）
+    // 跟随启动：绝对路径与相对路径各一条。相对写法存盘读回不能被
+    // 悄悄改成绝对路径，否则整个目录搬走就废了
     core::FollowLaunchEntry absoluteEntry;
     absoluteEntry.name = "微信";
     absoluteEntry.target = "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe";
@@ -431,7 +425,7 @@ void testConfigRoundTrip() {
     CHECK_STREQ(config.activation.hotkey.key, "K");
 }
 
-// ---------------------------------------------------------------- 容错
+// --- 容错
 
 void testCorruptJsonIsRejected() {
     const auto result = ConfigStore::deserializeItems("{ not valid json ");
@@ -449,27 +443,20 @@ void testMissingFieldsUseDefaults() {
     CHECK_EQ(static_cast<long long>(result.value.appearance.gridRows),
              core::kDefaultGridRows);
     CHECK(result.value.appearance.defaultTileSize == core::TileSize::Small);
-    // 老配置里没有 alwaysShowTileLabels —— 必须按「标题常驻」升级，
-    // 而不是让老用户升级后标题突然全都不见了
+    // 老配置里没有 alwaysShowTileLabels：按「标题常驻」升级，不能让
+    // 老用户升级后标题突然全消失
     CHECK(result.value.appearance.showTileLabels);
     CHECK(result.value.appearance.alwaysShowTileLabels);
     CHECK(result.value.activation.hotkey.enabled);
     CHECK_STREQ(result.value.activation.hotkey.key, "Space");
-    // 老配置里没有 followLaunch —— 空表，不能凭空冒出几条
+    // 老配置里没有 followLaunch：空表，不能凭空冒出几条
     CHECK(result.value.activation.followLaunch.empty());
 }
 
-// 跟随启动清单的容错：没 target 的行丢掉、超过上限截断。
-//
-// 这两条都不是假想：清单是用户手改 config.json 时最容易改坏的一块
-// （粘一长串路径、删掉 target 只留 name），而它的消费方是「启动时拉起
-// 一批进程」—— 不设上限的话，配置写坏一次就是一开机几十个窗口。
-// v3 的老条目（只有 name/target）必须原样读成「手动条目」：
-// 凭空长出一个 itemId 会让升级后的条目被当成磁贴来源去找磁贴，
-// 找不到再退回快照 —— 结果一样，但语义绕了一圈。
-//
-// 顺带钉住另一条：手动条目手写 arguments / workingDirectory /
-// runAsAdministrator 也读得进（启动时两种来源走同一段代码）。
+// 跟随启动清单容错：没 target 的行丢掉、超上限截断（清单是用户手改
+// config.json 最易改坏的一块，不设上限一次写坏就是开机几十个窗口）。
+// v3 老条目（只有 name/target）必须读成手动条目，不能凭空长 itemId；
+// 手写 arguments / workingDirectory / runAsAdministrator 也要读得进。
 void testFollowLaunchLegacyAndManualArguments() {
     const std::string text =
         "{\"activation\": {\"followLaunch\": ["
@@ -502,7 +489,7 @@ void testFollowLaunchLegacyAndManualArguments() {
     CHECK(tuned.workingDirectory.has_value());
     CHECK(tuned.runAsAdministrator);
 
-    // 再存一遍：这些字段要能活下来，不能因为「不是磁贴条目」被丢掉
+    // 再存一遍：手动条目的这些字段不能被丢掉
     const std::string again = ConfigStore::serializeConfig(result.value);
     const auto reloaded = ConfigStore::deserializeConfig(again);
     CHECK(reloaded.ok);
@@ -600,7 +587,6 @@ void testLabelModeRoundTripAndFallback() {
     // 老数据根本没有这个键 → 也是跟随全局，升级后显示行为不变
     CHECK(items[3].labelMode == core::TileLabelMode::FollowGlobal);
 
-    // 写出去再读回来必须一致
     const std::string serialized = ConfigStore::serializeItems(result.value);
     const auto again = ConfigStore::deserializeItems(serialized);
     CHECK(again.ok);
@@ -613,7 +599,7 @@ void testLabelModeRoundTripAndFallback() {
 }
 
 // 插件磁贴：pluginId + 参数表必须原样往返。
-// 参数顺序也要保留 —— 缓存文件名按参数哈希，顺序变了会读不到旧缓存。
+// 参数顺序也要保留：缓存文件名按参数哈希，顺序变了读不到旧缓存。
 void testPluginItemRoundTrip() {
     core::ItemsDocument document;
     document.tabs.clear();
@@ -649,10 +635,8 @@ void testPluginItemRoundTrip() {
     CHECK(item.pluginParam("missing").empty());
 }
 
-// 轮盘配置：多方案 + 按应用规则 + 各种动作类型必须原样往返。
-//
-// 最容易坏的是「空槽位」：actions 长度必须始终等于 sectorCount，少存一个
-// 空动作，读回来所有扇区就整体错位，用户配的动作会跑到别的方向上去。
+// 轮盘配置：多方案 + 按应用规则 + 各动作类型原样往返。空槽位最容易坏：
+// actions 长度必须始终等于 sectorCount，少一个空动作整个扇区就错位。
 void testRadialConfigRoundTrip() {
     core::RadialConfig config;
     config.menu = core::RadialMenu("default", "通用", 8);
@@ -742,8 +726,8 @@ void testRadialLegacyMenusArrayMigrated() {
              static_cast<long long>(core::kRadialSchemaVersion));
 }
 
-// 手改过的 JSON：离谱值必须夹回可用区间，且不能因为校验失败就把整份配置
-// 丢掉换默认（用户配的几十个动作不能因为一个滑杆值就没了）。
+// 手改过的 JSON：离谱值夹回可用区间，不能因校验失败整份换默认，
+// 用户配的几十个动作不能因一个滑杆值全丢。
 void testRadialTriggerValuesClamped() {
     const std::string text =
         "{\"schemaVersion\": 2,"
@@ -791,8 +775,8 @@ void testRadialSuppressionRoundTrip() {
     CHECK(loaded.value.trigger.suppressWhileHeld[1] == core::HotkeyModifier::Win);
 }
 
-// 手写配置的容错：撞车项、重复项、认不出的名字都要在加载期剔除，
-// 而不是把整份配置打回默认（那会把用户辛苦配的扇区全清掉）。
+// 手写配置的容错：撞车、重复、认不出的抑制键在加载期剔除，
+// 不能整份打回默认（用户配的扇区会全清掉）。
 void testRadialSuppressionFilteredOnLoad() {
     const std::string json =
         "{"
@@ -810,8 +794,8 @@ void testRadialSuppressionFilteredOnLoad() {
     if (!loaded.ok) {
         return;
     }
-    // alt 保留、重复的 alt 去掉、control 与触发修饰键撞车剔除、
-    // bogus 认不出剔除、shift 保留 —— 只剩两项且顺序按文件顺序。
+    // alt 保留、重复去掉、control 与触发修饰键撞车剔除、bogus 剔除、
+    // shift 保留，只剩两项且顺序按文件顺序
     const auto& held = loaded.value.trigger.suppressWhileHeld;
     CHECK_EQ(static_cast<long long>(held.size()), 2);
     if (held.size() == 2) {
@@ -820,10 +804,9 @@ void testRadialSuppressionFilteredOnLoad() {
     }
 }
 
-// 没有迁移函数是有意的：字段缺失走默认值、认不出的枚举回落、越界值夹取，
-// 老文件本来就能读。但版本号得跟着升，否则下次保存又原样写回旧值，
-// 以后真要做破坏性变更时就没有判断依据了。
-// （唯一的例外是 v3 → v4 的阈值抬升，见 testRadialThresholdMigration。）
+// 没有迁移函数是有意的：字段缺失走默认值、认不出的枚举回落、越界夹取，
+// 老文件本来就能读。但版本号必须升到当前值，否则下次保存又写回旧值，
+// 以后做破坏性变更就没有判断依据。例外是 v3 → v4 阈值抬升，见下。
 void testRadialSchemaVersionStamped() {
     const std::string text =
         "{\"schemaVersion\": 1,"
@@ -884,7 +867,7 @@ void testRadialThresholdMigration() {
     }
 }
 
-// ---------------------------------------------------------------- 轮盘插件扫描
+// --- 轮盘插件扫描
 //
 // 这一段真的碰磁盘：接口语义（相对图标路径在加载期变绝对、坏插件只跳过自己、
 // 没有 radial.json 的目录不算插件）没法用纯字符串测出来。
@@ -1005,15 +988,10 @@ void testRadialPluginRejectsFutureSchema() {
     std::filesystem::remove_all(root, error);
 }
 
-// 随包提供的插件（`slugin/`）必须全部能加载、图标一个不缺。
-//
-// 为什么值得单测：手写 JSON 和手写 SVG 的错法都很安静。少一个逗号，整个插件被
-// 跳过、轮盘静默回落成通用那份；图标名打错，那张卡片静默换成内置符号。两者都
-// 不影响编译、不报错，只有真机在浏览器里划出来才看得见。测试里兜住三件事：
-//   - 清单合法（valid：扇区数 4~8、动作数与扇区数一致、processes 非空）
-//   - 每个动作都有名字（空标签在轮盘上就是一块白板）
-//   - 每个 icon 指向的文件真的存在
-// 找不到 slugin 目录就跳过——只拿到 src/ 的人不该因此红一片。
+// 随包插件（slugin/）必须全部能加载、图标一个不缺。手写 JSON / SVG 的
+// 错法很安静：清单坏则插件被静默跳过，图标名错则卡片换内置符号，只有
+// 真机才看得见。兜住三件事：清单合法（valid）、每个动作有名字、每个
+// icon 指向的文件存在。找不到 slugin 目录就跳过，只拿 src/ 的人不该红一片。
 std::filesystem::path findBundledPluginRoot() {
     std::error_code error;
     if (std::filesystem::is_directory(L"slugin", error)) {

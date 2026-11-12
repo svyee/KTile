@@ -17,7 +17,7 @@ static int g_failures = 0;
         }                                                        \
     } while (false)
 
-// ---------------------------------------------------------------- 辅助
+// --- 辅助
 
 static ItemsDocument makeDocument() {
     ItemsDocument document;
@@ -43,13 +43,12 @@ static ItemsDocument makeDocument() {
     return document;
 }
 
-// ---------------------------------------------------------------- 改名
+// --- 改名
 
 static void testRenameBasic() {
     ItemsDocument document = makeDocument();
     CHECK(renameItem(document, 0, 0, "新名字"));
     CHECK(document.tabs[0].items[0].name == "新名字");
-    // 其他项不受影响
     CHECK(document.tabs[0].items[1].name == "计算器");
 }
 
@@ -61,7 +60,6 @@ static void testRenameTrimsWhitespace() {
 
 static void testRenameRejectsBlank() {
     ItemsDocument document = makeDocument();
-    // 纯空白 → 拒绝，保持原名
     CHECK(!renameItem(document, 0, 0, "    "));
     CHECK(document.tabs[0].items[0].name == "记事本");
 
@@ -74,7 +72,6 @@ static void testRenameRejectsBlank() {
 
 static void testRenameSameValueReturnsFalse() {
     ItemsDocument document = makeDocument();
-    // 与原名相同（含空白差异）→ 视为未变化
     CHECK(!renameItem(document, 0, 0, "记事本"));
     CHECK(!renameItem(document, 0, 0, "  记事本  "));
 }
@@ -101,8 +98,8 @@ static void testRenameTruncatesOnUtf8Boundary() {
     CHECK(result.size() <= kMaximumNameLength);
     CHECK(!result.empty());
 
-    // 校验结果是**完整**的 UTF-8 序列：按 UTF-8 规则逐字符前进，
-    // 必须恰好走到结尾（中途断开就会越界或走不完）。
+    // 校验结果是完整的 UTF-8 序列：按 UTF-8 规则逐字符前进，
+    // 必须恰好走到结尾
     std::size_t pos = 0;
     bool valid = true;
     while (pos < result.size()) {
@@ -146,32 +143,27 @@ static void testRenameInvalidIndex() {
     CHECK(!renameItem(document, 5, 0, "x"));   // tab 越界
 }
 
-// ---------------------------------------------------------------- 尺寸
+// --- 尺寸
 
 static void testResizeChangesSizeAndClearsPosition() {
     ItemsDocument document = makeDocument();
-    // 第 0 项是 Small at (0,0)，改成 Large
     CHECK(setItemTileSize(document, 0, 0, TileSize::Large));
     CHECK(document.tabs[0].items[0].tileSize == TileSize::Large);
-    // 关键：坐标必须被清掉，否则 Large 会与邻居重叠
+    // 坐标必须被清掉，否则 Large 会与邻居重叠
     CHECK(!document.tabs[0].items[0].hasGridPosition());
 
-    // 其他项的坐标不受影响
     CHECK(document.tabs[0].items[1].hasGridPosition());
     CHECK(*document.tabs[0].items[1].gridColumn == 3);
 }
 
 static void testResizeSameValueReturnsFalse() {
     ItemsDocument document = makeDocument();
-    // 第 0 项本来就是 Small
     CHECK(!setItemTileSize(document, 0, 0, TileSize::Small));
-    // 坐标不该被动过
     CHECK(document.tabs[0].items[0].hasGridPosition());
 }
 
 static void testResizeAllSizes() {
-    // 第 0 项原本是 Small，因此改 Small 会返回 false（无变化），
-    // 这里只验证「改成不同尺寸」的三种情况。
+    // 第 0 项原本是 Small，只验证改成不同尺寸的三种情况
     const TileSize sizes[] = {TileSize::Wide, TileSize::Tall, TileSize::Large};
     for (const auto size : sizes) {
         ItemsDocument document = makeDocument();
@@ -191,7 +183,7 @@ static void testResizeInvalidIndex() {
     CHECK(!setItemTileSize(document, 3, 0, TileSize::Large));
 }
 
-// ---------------------------------------------------------------- 删除
+// --- 删除
 
 static void testRemoveItem() {
     ItemsDocument document = makeDocument();
@@ -206,7 +198,7 @@ static void testRemoveItem() {
 static void testRemoveItemKeepsOthersPosition() {
     ItemsDocument document = makeDocument();
     CHECK(removeItem(document, 0, 1));
-    // 其余磁贴坐标不变（不重排）—— 避免「删一块全体位移」的跳变
+    // 其余磁贴坐标不变：删一块不能全体位移跳变
     CHECK(*document.tabs[0].items[0].gridColumn == 0);
     CHECK(*document.tabs[0].items[0].gridRow == 0);
     CHECK(*document.tabs[0].items[1].gridColumn == 6);
@@ -229,7 +221,7 @@ static void testRemoveAllItems() {
     CHECK(!removeItem(document, 0, 0));
 }
 
-// ---------------------------------------------------------------- 编辑
+// --- 编辑
 
 static void testEditUpdatesAllFields() {
     ItemsDocument document = makeDocument();
@@ -257,7 +249,6 @@ static void testEditUpdatesAllFields() {
     CHECK(item.icon.has_value() && *item.icon == "D:\\icons\\web.ico");
     CHECK(item.runAsAdministrator);
 
-    // 磁贴属性不受编辑影响
     CHECK(item.tileSize == TileSize::Small);
     CHECK(item.hasGridPosition());
 }
@@ -267,7 +258,7 @@ static void testEditRejectsEmptyTarget() {
     const std::string originalTarget = document.tabs[0].items[0].target;
 
     ItemEditFields fields;
-    fields.target = "   ";   // 全空白
+    fields.target = "   ";
     CHECK(!editItem(document, 0, 0, fields));
     CHECK(document.tabs[0].items[0].target == originalTarget);
 }
@@ -291,7 +282,7 @@ static void testEditEmptyOptionalClearsThem() {
 
     ItemEditFields fields;
     fields.name = "记事本";
-    fields.target = "C:\\notepad.exe";   // 其余全空
+    fields.target = "C:\\notepad.exe";
 
     CHECK(editItem(document, 0, 0, fields));
     CHECK(!document.tabs[0].items[0].workingDirectory.has_value());
@@ -302,7 +293,6 @@ static void testEditEmptyOptionalClearsThem() {
 static void testEditNoChangeReturnsFalse() {
     ItemsDocument document = makeDocument();
 
-    // 填入与现值完全一致的字段 → false
     ItemEditFields fields;
     const LaunchItem& item = document.tabs[0].items[2];  // 文档（Folder）
     fields.name = item.name;
@@ -311,7 +301,7 @@ static void testEditNoChangeReturnsFalse() {
     CHECK(!editItem(document, 0, 2, fields));
 }
 
-// 编辑对话框里的「磁贴大小」下拉：改尺寸必须清坐标（否则可能与邻座重叠）
+// 编辑对话框改尺寸必须清坐标，否则可能与邻座重叠
 static void testEditTileSizeChangesAndClearsPosition() {
     ItemsDocument document = makeDocument();
 
@@ -326,7 +316,7 @@ static void testEditTileSizeChangesAndClearsPosition() {
     CHECK(!item.hasGridPosition());   // 坐标被清掉，等布局引擎重排
 }
 
-// 尺寸没变时不该动坐标 —— 「只改名字」不能顺手把磁贴挪走
+// 尺寸没变时不动坐标：只改名字不能顺手挪磁贴
 static void testEditSameTileSizeKeepsPosition() {
     ItemsDocument document = makeDocument();
 
@@ -335,9 +325,9 @@ static void testEditSameTileSizeKeepsPosition() {
     fields.name = before.name;
     fields.type = before.type;
     fields.target = before.target;
-    fields.tileSize = before.tileSize;  // 与现值相同
+    fields.tileSize = before.tileSize;
 
-    CHECK(!editItem(document, 0, 2, fields));   // 全无变化 → false
+    CHECK(!editItem(document, 0, 2, fields));
     const LaunchItem& item = document.tabs[0].items[2];
     CHECK(item.tileSize == TileSize::Tall);
     CHECK(item.hasGridPosition());
@@ -372,10 +362,8 @@ static void testEditLabelModeChanges() {
     CHECK(editItem(document, 0, 1, fields));
     const LaunchItem& item = document.tabs[0].items[1];
     CHECK(item.labelMode == TileLabelMode::OnHover);
-    // 只改标题显示方式 → 位置和尺寸都该原封不动
     CHECK(item.hasGridPosition());
     CHECK(item.tileSize == TileSize::Large);
-    // 其他磁贴不受影响
     CHECK(document.tabs[0].items[0].labelMode == TileLabelMode::FollowGlobal);
 }
 
@@ -394,8 +382,7 @@ static void testEditAllLabelModes() {
         fields.target = before.target;
         fields.labelMode = mode;
 
-        // 第一次一定变（默认是 FollowGlobal，三种里两种不同）；
-        // 第二次同值应返回 false
+        // 默认 FollowGlobal，第一次一定变；第二次同值应返回 false
         const bool first = editItem(document, 0, 0, fields);
         CHECK(document.tabs[0].items[0].labelMode == mode);
         if (mode != TileLabelMode::FollowGlobal) {
@@ -421,9 +408,8 @@ static void testEditWithoutLabelModeLeavesItAlone() {
     CHECK(document.tabs[0].items[1].labelMode == TileLabelMode::OnHover);
 }
 
-// 「每块磁贴自定义背景色」：三层语义（不改 / 清除 / 指定）都要成立。
-// 外层 optional 表达「这次编辑是否处理颜色」，内层 optional 才是值本身 ——
-// 少了这层，「清除自定义色」与「没动过」就无法区分。
+// 磁贴自定义背景色：外层 optional 表达是否处理颜色，内层是值本身，
+// 少了这层「清除自定义色」与「没动过」无法区分。
 static void testEditTileColorSetAndClear() {
     ItemsDocument document = makeDocument();
 
@@ -440,7 +426,6 @@ static void testEditTileColorSetAndClear() {
     CHECK(document.tabs[0].items[1].tileColor.has_value());
     CHECK(*document.tabs[0].items[1].tileColor == 0xFF112233U);
 
-    // 同值再提交 → 无变化
     CHECK(!editItem(document, 0, 1, fields));
 
     // 清除（回到全局默认 / 皮肤）
@@ -477,13 +462,13 @@ static void testEditInvalidIndex() {
     CHECK(!editItem(document, 7, 0, fields));
 }
 
-// ---------------------------------------------------------------- 新增
+// --- 新增
 
 static void testAddItemAppendsAndClearsPosition() {
     ItemsDocument document = makeDocument();
 
     LaunchItem item("9", ItemType::Application, "画图", "C:\\mspaint.exe");
-    // 故意带上坐标：新增必须无视它（否则从别处抄来的坐标会叠在别人身上）
+    // 故意带坐标：新增必须无视，否则会叠在别人身上
     item.setGridPosition(4, 4);
     item.tileSize = TileSize::Wide;
 
@@ -540,7 +525,7 @@ static void testAddItemRejectsDuplicateId() {
     LaunchItem sameTab("1", ItemType::Application, "重名", "C:\\x.exe");
     CHECK(!addItem(document, 0, sameTab));
 
-    // 与**别的页面**已有项撞 id 也不行 —— id 是跨页面唯一标识
+    // 与别的页面已有项撞 id 也不行：id 是跨页面唯一标识
     document.tabs.push_back(Tab("tools", "工具"));
     LaunchItem otherTab("1", ItemType::Application, "另一个页面", "C:\\y.exe");
     CHECK(!addItem(document, 1, otherTab));
@@ -575,7 +560,7 @@ static void testAddItemKeepsExistingItemsUntouched() {
     ItemsDocument document = makeDocument();
     CHECK(addItem(document, 0, LaunchItem("21", ItemType::Application, "新的",
                                           "C:\\new.exe")));
-    // 老磁贴的坐标与顺序都不动 —— 新增不该把用户摆好的布局弄乱
+    // 老磁贴坐标与顺序都不动：新增不能弄乱用户摆好的布局
     CHECK(*document.tabs[0].items[0].gridColumn == 0);
     CHECK(*document.tabs[0].items[0].gridRow == 0);
     CHECK(*document.tabs[0].items[1].gridColumn == 3);

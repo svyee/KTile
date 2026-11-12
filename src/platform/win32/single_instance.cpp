@@ -41,12 +41,11 @@ bool SingleInstance::tryAcquire(const std::wstring& mutexName) {
 void SingleInstance::activateExistingInstance(
     const std::wstring& messageWindowClass, const std::wstring& windowTitle,
     const UINT activationMessage, const WPARAM activationParam) {
-    // ---- 首选：让已有实例自己「唤出面板」----
-    //
-    // 与热键走同一条通路（见 application.cpp 里 WM_HOTKEY 的处理）：
-    // 面板会正常 show()，键盘钩子、前台窗口关系、动画都照旧。
-    // 直接对主窗口 ShowWindow 做不到这些 —— 那样窗口是「露出来」了，
-    // 但它自己以为还隐藏着，输入与自动收起都会错乱。
+    // 首选：让已有实例自己「唤出面板」。
+    // 与热键走同一条通路（见 application.cpp 的 WM_HOTKEY 处理），面板
+    // 正常 show()，键盘钩子、前台窗口关系、动画都照旧。直接 ShowWindow
+    // 主窗口做不到这些：窗口露出来了，但它自己以为还隐藏着，输入与
+    // 自动收起都会错乱。
     if (!messageWindowClass.empty()) {
         const HWND messageWindow = findWindowByClass(messageWindowClass);
         if (messageWindow != nullptr &&
@@ -56,7 +55,7 @@ void SingleInstance::activateExistingInstance(
         }
     }
 
-    // ---- 兜底：按标题找主窗口，抢到前台 ----
+    // 兜底：按标题找主窗口，抢到前台
     HWND window = findWindowByTitle(windowTitle);
     if (window == nullptr) {
         return;
@@ -66,8 +65,7 @@ void SingleInstance::activateExistingInstance(
         ShowWindow(window, SW_RESTORE);
     }
 
-    // SetForegroundWindow 有前台锁定限制：后台进程调用可能被系统拒绝。
-    // 这里配合 AllowSetForegroundWindow 的常见规避手法：
+    // SetForegroundWindow 有前台锁定限制，后台进程调用可能被系统拒绝。
     // 先尝试普通激活，失败则用附加线程输入的方式强制激活。
     if (SetForegroundWindow(window) != FALSE) {
         return;

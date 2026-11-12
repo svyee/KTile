@@ -1,12 +1,7 @@
 // KTile - Win32 平台层：开机自启动
 //
 // 通过注册表 HKCU\Software\Microsoft\Windows\CurrentVersion\Run 实现。
-//
-// 选择 HKCU 而非 HKLM 的原因：
-//  1. 无需管理员权限
-//  2. 绿色便携软件不应该污染全局配置
-//
-// Win7 兼容：RegCreateKeyExW / RegSetValueExW 均为古老 API。
+// 选 HKCU 而非 HKLM：无需管理员权限，也不污染全局配置。
 //
 #pragma once
 

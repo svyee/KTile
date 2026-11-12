@@ -30,12 +30,11 @@ public:
 
     // 让已有实例把面板唤出来。
     //
-    // 首选：给已有实例的**消息窗口**（按类名找）投一条唤出消息。这条通路
-    // 与热键完全一致 —— 面板会照常走 show()，一并装好键盘钩子、处理前台
-    // 窗口关系；把它当成「按标题找主窗口再 ShowWindow」是两回事，后者会
-    // 留下一个没装钩子、内部状态也认为自己是隐藏的窗口。
+    // 首选：给已有实例的消息窗口（按类名找）投唤出消息，通路与热键一致，
+    // 面板照常 show() 并装好键盘钩子。直接 ShowWindow 主窗口是两回事，
+    // 会留下没装钩子、内部状态仍认为自己是隐藏的窗口。
     //
-    // 兜底：找不到消息窗口时，按窗口标题找主窗口，ShowWindow 抢到前台。
+    // 兜底：找不到消息窗口时，按标题找主窗口，ShowWindow 抢到前台。
     static void activateExistingInstance(const std::wstring& messageWindowClass,
                                          const std::wstring& windowTitle,
                                          const UINT activationMessage,

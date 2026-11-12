@@ -13,17 +13,15 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// 取词（宽字符拷贝）。
-//
-// 语言表里的值存在字典里，指针在下次切换语言前一直有效；但这边的
-// 结果会被 return 出去，所以立刻拷成 std::wstring，不留指针。
+// 取词并立刻拷成 std::wstring：语言表的指针在下次切换语言前有效，
+// 不能带出函数。
 std::wstring W(const char* key) {
     return std::wstring(infrastructure::i18n::trw(key));
 }
 
-// ExitWindowsEx 的 EWX_SHUTDOWN / EWX_REBOOT 需要 SE_SHUTDOWN_NAME 特权。
-// 普通用户进程默认没有，必须先自己打开 token 把它启用 —— 不启用时
-// API 直接失败并返回 ERROR_NOT_READY 这类含糊的错误码，很难排查。
+// ExitWindowsEx 的 EWX_SHUTDOWN / EWX_REBOOT 需要 SE_SHUTDOWN_NAME 特权，
+// 普通用户进程默认没有，须先开 token 启用；否则 API 直接失败并返回
+// ERROR_NOT_READY 这类含糊错误码，很难排查。
 bool enableShutdownPrivilege() {
     HANDLE token = nullptr;
     if (OpenProcessToken(GetCurrentProcess(),
@@ -49,8 +47,8 @@ bool enableShutdownPrivilege() {
 
 // 把系统错误码转成「动作 + 详情」的可读描述（与 item_launcher 风格一致）。
 //
-// actionKey 是动作名（"action.lock" 这种），不带「失败」二字 —— 失败
-// 由 error.actionFailed 统一补，避免拼出「锁定失败失败（错误码 5）」。
+// actionKey 是动作名（"action.lock" 这种），不带「失败」二字：失败由
+// error.actionFailed 统一补，避免拼出「锁定失败失败（错误码 5）」。
 std::wstring lastErrorText(const char* actionKey) {
     const DWORD code = GetLastError();
     wchar_t* buffer = nullptr;
@@ -117,7 +115,7 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
 
     if (id == L"shutdown" || id == L"restart" || id == L"logoff") {
         if (!enableShutdownPrivilege()) {
-            // 注销不需要特权也能成功 —— 权限启用失败只影响关机/重启，
+            // 注销不需要特权也能成功，权限启用失败只影响关机/重启；
             // 但统一先报出来，比「点了没反应」强。
             result.error = W("error.shutdownPrivilege");
             if (id == L"logoff") {
@@ -144,10 +142,9 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
         return result;
     }
 
-    // 睡眠 / 休眠 / 关闭显示器按用户要求移除：
-    //   - 休眠在 Windows 上经常被 powercfg 关掉，点了没反应像程序坏了；
-    //   - 关显示器是「看不见的状态」，误点后很难判断到底生效没有。
-    // 这里不留半死的分支 —— 命令表里也不再有这些 id。
+    // 睡眠 / 休眠 / 关闭显示器已移除：休眠常被 powercfg 关掉（点了没反应
+    // 像程序坏了），关显示器是看不见的状态，误点后难判断生效与否。
+    // 命令表里也不再有这些 id，不留半死分支。
 
     if (id == L"volume-up") {
         return sendVirtualKey(VK_VOLUME_UP, 2);
@@ -169,9 +166,9 @@ LaunchResult runBuiltinAction(const std::wstring& id) {
     }
 
     if (id == L"hosts") {
-        // hosts 是无扩展名文件，直接启动会弹「选择打开方式」；
-        // 固定用记事本打开 —— 与 Maye 的行为一致，也符合「手改配置」
-        // 的使用场景。修改保存需要管理员权限，由记事本自己提示。
+        // hosts 是无扩展名文件，直接启动会弹「选择打开方式」，固定用
+        // 记事本打开（与 Maye 一致，也符合手改配置的场景）。保存所需的
+        // 管理员权限由记事本自己提示。
         wchar_t systemDirectory[MAX_PATH] = {};
         UINT length = GetSystemDirectoryW(systemDirectory, MAX_PATH);
         if (length == 0 || length >= MAX_PATH) {

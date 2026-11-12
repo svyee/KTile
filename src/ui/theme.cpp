@@ -103,7 +103,7 @@ std::string fnv1a64Hex(std::uint64_t hash) {
 
 }  // namespace
 
-// ================================================================ 颜色文本
+// --- 颜色文本
 
 bool parseHexColor(const std::string& text, std::uint32_t* out) {
     if (out == nullptr) {
@@ -140,7 +140,7 @@ std::string formatHexColor(std::uint32_t argb) {
     return out;
 }
 
-// ================================================================ 目录
+// --- 目录
 
 void setThemesRoot(const std::wstring& dataDirectory) {
     g_dataRoot = dataDirectory;
@@ -159,7 +159,7 @@ std::wstring backgroundsDirectory() {
     return dir.empty() ? std::wstring() : dir + L"\\backgrounds";
 }
 
-// ================================================================ 读写
+// --- 读写
 
 bool loadThemeFile(const std::wstring& path, ThemeColors* out,
                    std::wstring* displayName) {
@@ -240,7 +240,7 @@ bool saveThemeFile(const std::wstring& path, const ThemeColors& theme,
     return writeTextFileUtf8(path, writer.take() + "\n");
 }
 
-// ================================================================ 预置
+// --- 预置
 
 // 内置皮肤。
 //
@@ -279,11 +279,9 @@ const std::vector<std::pair<std::wstring, ThemeColors>>& builtinPresets() {
              t.text = 0xFFF2F0FF;
              return t;
          }()},
-        // 晨光：亮色方案。底不用纯白（刺眼且没有层次），浅冷灰打底、
-        // 磁贴用半透明白卡片 + 淡描边；强调色压深一档，保证白底上的对比度。
-        // 磁贴底从「不透明白」改成 35% 白：不透明白卡片会把背景图整块
-        // 盖死，观感生硬 —— 半透明白让背景隐约透出来，与深色皮肤的
-        // 「玻璃底」观感对齐。
+        // 晨光：亮色方案。底用浅冷灰不用纯白（刺眼且没有层次）；
+        // 磁贴用 35% 半透明白卡片 + 淡描边，不透明白会把背景图整块盖死；
+        // 强调色压深一档，保证白底上的对比度。
         {L"晨光",
          [] {
              ThemeColors t;
@@ -365,7 +363,7 @@ bool loadThemeByName(const std::wstring& displayName, ThemeColors* out) {
     return false;
 }
 
-// ---------------------------------------------------------------- 皮肤显示名
+// --- 皮肤显示名
 
 // 规范名 → 语言 key。表里没有的名字（用户自定义皮肤）原样显示。
 struct ThemeNameKey {
@@ -400,7 +398,7 @@ std::wstring canonicalThemeName(const std::wstring& displayName) {
     return displayName;
 }
 
-// ================================================================ 背景图
+// --- 背景图
 
 std::wstring importBackgroundImage(const std::wstring& sourcePath,
                                    std::wstring* error) {

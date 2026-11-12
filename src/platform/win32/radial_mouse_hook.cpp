@@ -36,8 +36,7 @@ bool RadialMouseHook::install(HWND notifyWindow,
         uninstall();
         return true;
     }
-    // 先把上一份配置的线程收干净：状态机、配置、黑名单都靠「重新 install」
-    // 生效，两代同时活着会互相抢事件。
+    // 先收掉上一份配置的钩子线程：配置靠重新 install 生效，两代并存会抢事件。
     uninstall();
 
     notifyWindow_ = notifyWindow;
@@ -46,8 +45,8 @@ bool RadialMouseHook::install(HWND notifyWindow,
     state_.store(State::Idle, std::memory_order_relaxed);
     armedTick_ = 0;
     wheelShownThisGesture_ = false;
-    // 全新的一次安装：窗口可见性由应用层随后回灌，这里先按「没亮」算。
-    // 如果轮盘这时其实还亮着，应用层下一次 setWheelVisible 会纠正回来。
+    // 窗口可见性由应用层随后回灌，先按「没亮」算；若轮盘实际还亮着，
+    // 下一次 setWheelVisible 会纠正回来。
     wheelVisible_.store(false, std::memory_order_relaxed);
     stop_.store(false, std::memory_order_relaxed);
     threadId_.store(0, std::memory_order_relaxed);
@@ -71,7 +70,7 @@ bool RadialMouseHook::install(HWND notifyWindow,
         ok = ready && startOk_;
     }
     if (!ok) {
-        // 线程没起来（或超时）：把它收掉，别留一个半死不活的线程
+        // 线程没起来（或超时）：收掉，不留半死线程
         stop_.store(true, std::memory_order_relaxed);
         const DWORD tid = threadId_.load(std::memory_order_acquire);
         if (tid != 0) {
@@ -94,8 +93,8 @@ void RadialMouseHook::uninstall() noexcept {
         PostThreadMessageW(tid, WM_QUIT, 0, 0);
     }
     if (thread_.joinable()) {
-        // 有界等待：钩子线程正常情况下收到 WM_QUIT 立刻退出；万一它卡在某个
-        // 系统调用里，也不能把 UI 线程（本函数从 UI 线程调用）一起拖死。
+        // 有界等待：钩子线程收到 WM_QUIT 应立刻退出；万一卡在系统调用里，
+        // 也不能拖死本函数所在的 UI 线程。
         const HANDLE handle = static_cast<HANDLE>(thread_.native_handle());
         if (WaitForSingleObject(handle, 2000) == WAIT_OBJECT_0) {
             thread_.join();
@@ -115,14 +114,14 @@ void RadialMouseHook::uninstall() noexcept {
 }
 
 void RadialMouseHook::threadMain() {
-    // 先建好本线程的消息队列：否则 install() 收尾时 PostThreadMessage(WM_QUIT)
-    // 会因为「队列还不存在」而直接失败，线程就会一直卡在 GetMessage 里。
+    // 先建本线程消息队列：否则 PostThreadMessage(WM_QUIT) 因队列不存在
+    // 而失败，线程会卡死在 GetMessage 里。
     MSG probe{};
     PeekMessageW(&probe, nullptr, 0, 0, PM_NOREMOVE);
 
     const DWORD tid = GetCurrentThreadId();
     threadId_.store(tid, std::memory_order_release);
-    // 比 UI 线程略高一点：事件必须在系统超时之前被取走，绘制晚几毫秒无所谓。
+    // 略高于 UI 线程：事件须在系统超时前取走，绘制晚几毫秒无所谓。
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
     hook_ = SetWindowsHookExW(WH_MOUSE_LL, &mouseHookProc, nullptr, 0);
@@ -148,8 +147,8 @@ void RadialMouseHook::threadMain() {
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        // 线程消息（无窗口）自己处理：补发点击必须回到消息循环里做，
-        // 不能在钩子回调里调 SendInput（会死锁）。见头文件说明。
+        // 线程消息（无窗口）自己处理：补发点击须回消息循环做，不能在钩子
+        // 回调里调 SendInput（会死锁），见头文件说明。
         if (msg.hwnd == nullptr && msg.message == kReinjectMessage) {
             reinjectClick();
             continue;
@@ -236,13 +235,12 @@ bool RadialMouseHook::modifierSatisfied() const noexcept {
 }
 
 bool RadialMouseHook::suppressionActive() const noexcept {
-    // 选了触发修饰键，抑制键就没有意义（见 core::suppressionApplies）。
-    // 设置页在那种情况下会把抑制键整组灰掉，这里必须同步 —— 界面灰了却
-    // 偷偷生效，是最难排查的那类问题。
+    // 选了触发修饰键时抑制键无意义（见 core::suppressionApplies），设置页
+    // 此时灰掉抑制键，这里必须同步，避免界面灰了却偷偷生效。
     if (!core::suppressionApplies(trigger_.modifier)) {
         return false;
     }
-    // 见头文件说明：抑制键是键盘键，没被我们吞过，GetAsyncKeyState 可信。
+    // 抑制键是键盘键，未被吞过，GetAsyncKeyState 可信。
     for (core::HotkeyModifier modifier : trigger_.suppressWhileHeld) {
         int vk = 0;
         switch (modifier) {
@@ -321,15 +319,13 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
         if (!matchesTriggerButton(event)) {
             return false;  // 另一个侧键：放行给目标窗口
         }
-        // 黑名单进程：整条放行。必须在这里判，不能等窗口显示时再判 ——
-        // 那时按下事件已经被吞掉，原生右键菜单弹不出来，用户会觉得
-        // 「这个应用里右键坏了」。
+        // 黑名单进程：整条放行。必须在吞事件前判，等窗口显示时再判的话
+        // 按下事件已被吞，原生右键菜单弹不出来，用户会以为右键坏了。
         if (foregroundBlocked()) {
             return false;
         }
-        // 抑制键按着：整段放行，连状态机都不进。
-        // 用户此刻大概率在做 Alt+Tab / Alt+方向 这类操作，顺手拖了下右键，
-        // 我们既不该吞事件，也不该冒出一个轮盘挡在半路上。
+        // 抑制键按着：整段放行，连状态机都不进。此时用户多半在做
+        // Alt+Tab 这类操作，不该吞事件，也不该冒出轮盘挡路。
         if (suppressionActive()) {
             return false;
         }
@@ -338,12 +334,9 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
             // 修饰键不满足：放行，让 MouseInc 等处理
             return false;
         }
-        // 满足条件：吞掉事件，进入跟踪
-        //
-        // 先对账：如果上一次手势还「在跑」，或者轮盘还亮着，说明那一次
-        // 抬起到我们手上的路断了（见头文件「为什么用专用线程」）。
-        // 让主线程把残影收掉，再当作全新的一次按下 —— 否则状态机会带着
-        // 上一次的起点继续跑，窗口也会留在屏幕上跟着鼠标走。
+        // 满足条件：吞掉事件，进入跟踪。先对账：上一次手势还在跑或轮盘
+        // 还亮着，说明那一次的抬起早丢了（见头文件），让主线程收残影，
+        // 再当作全新按下，否则状态机带着旧起点继续跑，窗口留在屏幕上。
         if (state != State::Idle || wheelVisible_.load(std::memory_order_relaxed)) {
             PostMessageW(notifyWindow_, kRadialAbortMessage,
                          static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
@@ -380,8 +373,8 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
                     // 超过阈值：显示轮盘
                     next = State::Shown;
                     state_.store(next, std::memory_order_relaxed);
-                    // 从这一刻起，这一次按下的结果就交给轮盘了：抬起必须吞掉，
-                    // 即使随后状态机被 abort / 过期打回 Idle 也一样。
+                    // 从现在起抬起必须吞掉，即使状态机随后被 abort /
+                    // 过期打回 Idle。
                     wheelShownThisGesture_ = true;
                     PostMessageW(notifyWindow_, kRadialShowMessage,
                                  static_cast<WPARAM>(startPoint_.x),
@@ -393,21 +386,17 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
                              static_cast<WPARAM>(currentPoint_.x),
                              static_cast<LPARAM>(currentPoint_.y));
             }
-            // 移动事件必须放行：低级鼠标钩子吞掉 WM_MOUSEMOVE 会导致系统
-            // 不再更新光标位置，用户会感觉鼠标"卡死"。我们只旁路观察位置，
-            // 不修改事件流。
+            // 移动事件必须放行：吞掉 WM_MOUSEMOVE 会让系统不再更新光标
+            // 位置，用户感觉鼠标"卡死"。只旁路观察，不改事件流。
             return false;
         }
     }
 
-    // 抬起单独处理，不放在 `state != Idle` 里面。
-    //
-    // 为什么：状态机随时可能被 abort、被过期判定、被重装钩子打回 Idle，
-    // 而这一次按下确实唤出过轮盘（wheelShownThisGesture_）。那时抬起落到
-    // 「不在跟踪中」那一支上会原样放行 —— 前台窗口收到一个没有配对按下的
-    // 右键抬起，Explorer 这类程序照样弹上下文菜单。用户看到的就是
-    // 「轮盘刚消失，右键菜单又冒出来」，而且时有时无，全看那一次有没有被
-    // 打回 Idle。只要轮盘亮过，抬起就一律吞掉。
+    // 抬起单独处理，不放在 `state != Idle` 里面：状态机随时可能被 abort、
+    // 过期、重装钩子打回 Idle，而这次按下确实唤出过轮盘
+    // （wheelShownThisGesture_）。落到「不在跟踪中」分支会原样放行，前台
+    // 窗口收到无配对按下的抬起照样弹菜单（Explorer 等），症状是轮盘刚
+    // 消失右键菜单又冒出来，且时有时无。只要轮盘亮过，抬起一律吞掉。
     if (message == upMsg && matchesTriggerButton(event)) {
         currentPoint_ = event.pt;
         const bool shownNow = state == State::Shown;
@@ -421,20 +410,17 @@ bool RadialMouseHook::handleMouseEvent(WPARAM message, const MSLLHOOKSTRUCT& eve
                          static_cast<WPARAM>(currentPoint_.x),
                          static_cast<LPARAM>(currentPoint_.y));
         } else if (wheelWasUp) {
-            // 轮盘亮过，但状态机已经回了 Idle（中间被 abort / 重装钩子
-            // 重置过）。让主线程收掉残影，绝不注入原生点击 —— 用户做的是
-            // 一次轮盘操作，再弹一个右键菜单等于凭空多一次点击。
+            // 轮盘亮过但状态机已回 Idle（被 abort / 重装钩子重置）：让主
+            // 线程收残影，不注入原生点击，避免凭空多弹一次右键菜单。
             PostMessageW(notifyWindow_, kRadialAbortMessage,
                          static_cast<WPARAM>(RadialAbortReason::LostRelease), 0);
         } else if (state == State::Idle) {
-            // 既没在跟踪、轮盘也没亮过：这不是我们管的那一次手势，放行。
-            // （函数开头已经拦掉自身注入的事件，这里不会自激。）
+            // 没在跟踪且轮盘没亮过：不是本次手势，放行。开头已拦自身
+            // 注入的事件，这里不会自激。
             return false;
         } else {
-            // 未超阈值：恢复原生点击。
-            // 不在这里直接 SendInput：SendInput 在低级钩子回调里调用有
-            // 死锁风险（原始输入线程正等着我们这个回调返回）。给自己投
-            // 个消息，回到消息循环里再补。
+            // 未超阈值：恢复原生点击。SendInput 在低级钩子回调里有死锁
+            // 风险（原始输入线程正等回调返回），投消息回消息循环再补。
             if (trigger_.modifier == core::RadialTriggerModifier::None) {
                 requestReinjectClick();
             }

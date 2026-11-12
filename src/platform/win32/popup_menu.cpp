@@ -5,10 +5,8 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// 递归构建菜单。
-//
-// 注意所有权：子菜单挂到父菜单后，由父菜单负责销毁（DestroyMenu 会递归释放），
-// 因此这里用 release() 把所有权交出去，不能再用 RAII 包装。
+// 递归构建菜单。子菜单挂到父菜单后由父菜单销毁（DestroyMenu 递归释放），
+// 因此用 release() 交出所有权，不能用 RAII 包装。
 void appendEntries(HMENU menu, const std::vector<PopupMenuEntry>& entries) {
     for (const auto& entry : entries) {
         if (entry.isSeparator) {
@@ -31,8 +29,7 @@ void appendEntries(HMENU menu, const std::vector<PopupMenuEntry>& entries) {
         if (!entry.enabled) {
             flags |= MF_GRAYED;
         }
-        // MF_CHECKED 配合单选语义使用（Win32 没有真正的 radio 标记，
-        // 但勾选标记在视觉上足够表达「当前生效项」）
+        // Win32 没有真正的 radio 标记，勾选标记足够表达「当前生效项」
         if (entry.isChecked) {
             flags |= MF_CHECKED;
         }
@@ -56,9 +53,8 @@ UINT showPopupMenu(HWND owner,
     }
     appendEntries(menu.get(), entries);
 
-    // 关键：先把 owner 设为前台窗口，菜单才会在点击外部时自动关闭。
-    // 这是 TrackPopupMenu 的既有行为（不是 bug）—— 菜单归属于前台窗口的
-    // 消息队列，没有前台归属就无法收到「点击外部」的通知。
+    // 先把 owner 设为前台窗口，菜单才会在点击外部时自动关闭：TrackPopupMenu
+    // 的菜单归属于前台窗口的消息队列，没有前台归属就收不到「点击外部」通知。
     SetForegroundWindow(owner);
 
     const UINT baseFlags =

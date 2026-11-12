@@ -1,9 +1,7 @@
 // KTile - Win32 平台层：通用类型与错误处理
 //
-// 设计原则：
-//  1. Win7 兼容 —— 只使用 Win7 SP1 已存在的 API
-//  2. 错误使用 Expected<T, Win32Error> 而非异常
-//  3. RAII 管理句柄（不引入 WIL，自己写轻量封装）
+// 设计原则：只用 Win7 SP1 已存在的 API；错误用 Expected<T, Win32Error>
+// 而非异常；RAII 管理句柄（不引入 WIL，自己写轻量封装）。
 //
 #pragma once
 
@@ -17,7 +15,7 @@ namespace ktile {
 namespace platform {
 namespace win32 {
 
-// ---------------------------------------------------------------- 错误类型
+// --- 错误类型
 
 struct Win32Error {
     DWORD code = ERROR_SUCCESS;
@@ -47,7 +45,7 @@ using Win32Result = base::Expected<T, Win32Error>;
 
 using Win32Status = base::Expected<void, Win32Error>;
 
-// ---------------------------------------------------------------- 通用结果
+// --- 通用结果
 
 // 把 bool 返回值 + GetLastError 转成 Win32Status
 inline Win32Status statusFromBool(BOOL result, std::string message) {

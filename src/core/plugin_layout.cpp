@@ -12,14 +12,11 @@ namespace {
 constexpr float kPadding = 5.0F;
 constexpr float kGap = 3.0F;
 constexpr float kMeterHeight = 5.0F;
-// 单行文本占用的高度 = 字号 × 该系数。
-//
-// 不能取 1.15 / 1.25 这种「刚好等于字母高度」的值：中文字体的行盒
-// （ascent + descent ≈ 1.3em）比字母本身高，绘制端又是垂直居中对齐，
-// 行盒高于矩形时上下都会被裁掉 —— 表现就是「今天/明天」只画出半截。
+// 单行文本占用的高度 = 字号 × 该系数。不能取 1.15 / 1.25 这类恰好等于
+// 字母高度的值：中文行盒约 1.3em，绘制端又垂直居中，行盒高于矩形会上下
+// 裁掉半截字。
 constexpr float kTextLineHeight = 1.35F;
-// 字号下限。绘制端会把字号夹到 7 以上，这里必须保持一致，
-// 否则布局按 6.5 算高度、实际却按 7 画，仍然会裁切。
+// 字号下限，须与绘制端（夹到 7）一致，否则布局算高与实际绘制不符仍会裁切。
 constexpr float kMinFontSize = 7.0F;
 constexpr int kMaxDepth = 4;
 constexpr int kMaxArrayRepeat = 4;
@@ -134,8 +131,8 @@ void paintLeaf(const PluginManifest& manifest,
             iconId = rawIcon;
         }
     }
-    // 注意：manifest.icon 只在「无数据/加载中」的占位视图里使用。
-    // 叶子没写 icon 槽就是明确不想画图标，不能偷偷补一个。
+    // manifest.icon 只用于无数据/加载中的占位视图；叶子没写 icon 槽就是
+    // 明确不想画图标，不能偷偷补一个。
 
     std::string meterLabel;
     float meterFraction = -1.0F;
@@ -154,9 +151,8 @@ void paintLeaf(const PluginManifest& manifest,
     }
 
     // ---- 字号 / 图标尺寸 ----
-    //
     // 每项同时受宽高约束：large / wide 的一列只有六十几 DIP 宽，
-    // 只按高度算出来的字号会明显超出列宽。
+    // 只按高度算出的字号会明显超出列宽。
     const bool hasIcon = !iconId.empty();
     const bool hasMain = !mainText.empty();
     const bool hasSub = !subText.empty();
@@ -164,15 +160,10 @@ void paintLeaf(const PluginManifest& manifest,
     const bool hasMeter = meterFraction >= 0.0F;
     const bool hasMeterLabel = hasMeter && !meterLabel.empty();
 
-    // 一组尺寸 + 它们堆叠后的总高度。
-    //
-    // scale 用于「内容比格子高」时整体缩小：wide / large 的列宽只有
-    // 六十几 DIP，图标 + 最高温 + 最低温 + 日期四行按基准字号一定放不下，
-    // 不缩就会把最后一行顶到磁贴外面（用户看到的「今天/明天越界」）。
-    //
-    // withFooter / withSub 用于「怎么缩都放不下」时逐步丢弃信息量最低的行。
-    // 字号有下限（绘制端会把字号夹到 7），光靠缩放在小格子里可能永远差一点，
-    // 必须允许少显示一行，否则内容仍会溢出。
+    // 一组尺寸及其堆叠总高度。scale 用于内容比格子高时整体缩小（wide/large
+    // 的列宽只有六十几 DIP，图标加三行文本按基准字号放不下，不缩会顶出
+    // 磁贴）；withFooter / withSub 用于怎么缩都放不下时逐步丢弃信息量最低
+    // 的行。字号有下限，光靠缩放可能永远差一点，必须允许少显示一行。
     struct BlockMetrics {
         float iconSize = 0.0F;
         float mainSize = 0.0F;
@@ -233,12 +224,10 @@ void paintLeaf(const PluginManifest& manifest,
         return m;
     };
 
-    // 在 [0, 1] 上二分找「还能塞进 height 的最大缩放系数」。
-    //
-    // 不能像以前那样按 height / total 乘一次：各字号缩到下限（7 / 7.5）
-    // 后总高度不再线性下降，几次乘法迭代可能一直停在刚好差一点的位置，
-    // 结果页脚要么被误丢弃，要么被画到磁贴外。二分对这种「带下限」的
-    // 单调函数是确定性的，也能一次找到最大可读字号。
+    // 在 [0, 1] 上二分找「塞进 height 的最大缩放系数」。不能按 height /
+    // total 乘一次：各字号缩到下限后总高度不再线性下降，可能停在刚好差
+    // 一点的位置，页脚要么被误丢弃、要么画到磁贴外；二分对带下限的单调
+    // 函数是确定的。
     auto fitBlock = [&](const bool withFooter, const bool withSub,
                         BlockMetrics* chosen) {
         const BlockMetrics full = measureBlock(1.0F, withFooter, withSub);
@@ -267,8 +256,8 @@ void paintLeaf(const PluginManifest& manifest,
         }
     };
 
-    // 优先保留完整内容；实在放不下再依次丢弃页脚、副文本。
-    // 宁可少显示一行，也不能把内容画到磁贴外面。
+    // 优先保留完整内容，实在放不下再依次丢弃页脚、副文本；
+    // 宁可少显示一行，也不把内容画到磁贴外面。
     BlockMetrics metrics;
     bool showFooter = hasFooter;
     bool showSub = hasSub;
@@ -297,9 +286,8 @@ void paintLeaf(const PluginManifest& manifest,
         command.right = iconLeft + metrics.iconSize;
         command.bottom = cursorY + metrics.iconSize;
         command.icon = iconId;
-        // 数据驱动的图标（例如天气 code "149"）可能不在 iconMap 里，
-        // 或插件作者删掉了某个映射。兜底到 manifest.icon，避免磁贴
-        // 留下一个没有图形的空槽。
+        // 数据驱动图标可能不在 iconMap，或作者删掉了某条映射，
+        // 兜底到 manifest.icon，避免磁贴留下没有图形的空槽。
         command.iconFallback = manifest.icon;
         list->commands.push_back(std::move(command));
         cursorY += metrics.iconSize + metrics.gap;

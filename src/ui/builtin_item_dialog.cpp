@@ -16,7 +16,7 @@ namespace ktile {
 namespace ui {
 namespace {
 
-// ---- 布局常量（96 DPI 逻辑像素，scaleFor 统一缩放）--------------------
+// --- 布局常量（96 DPI 逻辑像素，scaleFor 统一缩放）
 
 constexpr int kMargin = 20;
 constexpr int kCellWidth = 78;    // 单个条目按钮
@@ -26,9 +26,8 @@ constexpr int kColumns = 6;
 constexpr int kSectionHeaderHeight = 24;
 constexpr int kSectionGap = 8;
 constexpr int kIconSize = 64;     // 按钮内的图标绘制尺寸。
-                                  // 注意 PNG 自带 12.5% 透明内边距（128 画布
-                                  // 里内容只占 96），可见图形约 48 —— 别只看
-                                  // 这个数判断视觉大小。
+                                  // PNG 自带 12.5% 透明内边距（128 画布
+                                  // 里内容约占 96），别只看这个数判断视觉大小。
 constexpr int kIconTop = 4;       // 图标上边距
 constexpr int kLabelHeight = 26;  // 名字区高度（贴按钮底部，紧挨图标）
 
@@ -73,11 +72,8 @@ HWND addControl(const HWND parent, const wchar_t* className,
     return control;
 }
 
-// ---- 布局：先算好每一格的位置，再照着建控件 ---------------------------
-//
-// 之前控件位置和窗口高度是两处写死的常量，加/删内置项后高度公式
-// 必须手工重算（上一版就是按「5 行」硬编码的）。现在只有这一份
-// 算法：建控件和算窗口尺寸都从这里取，条目增减自动跟上。
+// --- 布局：先算好每一格的位置，再照着建控件。
+// 建控件与算窗口尺寸都从这里取值，条目增减自动跟上，窗口高度不写死。
 struct CellEntry {
     const core::BuiltinItem* item = nullptr;  // nullptr = 分组标题
     std::wstring text;                        // 标题文字（item 为空时用）
@@ -146,7 +142,7 @@ DialogLayout computeLayout() {
 }
 
 // 为一个内置项准备图标位图（预乘 DIB，可直接给 AlphaBlend）。
-// 失败返回 nullptr —— 条目仍会显示，只是没有图标。
+// 失败返回 nullptr：条目仍会显示，只是没有图标。
 HBITMAP prepareIconBitmap(const core::BuiltinItem& item) {
     std::wstring error;
     const std::wstring stored =
@@ -192,7 +188,7 @@ HBITMAP prepareIconBitmap(const core::BuiltinItem& item) {
     return bitmap;
 }
 
-// ---- 窗口过程 ---------------------------------------------------------
+// --- 窗口过程
 
 struct BuiltinDialogState {
     BuiltinPickResult* out = nullptr;
@@ -219,7 +215,6 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             state->font = dialogFont();
 
-            // 按钮计数器：控件 ID 从 2001 递增
             int nextId = 2001;
 
             for (const CellEntry& entry : computeLayout().entries) {
@@ -230,8 +225,7 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
                 }
                 const core::BuiltinItem& item = *entry.item;
 
-                // owner-draw 按钮：WM_DRAWITEM 里画图标与名字
-                // 按钮文字 = 显示名，WM_DRAWITEM 直接读回它来画
+                // owner-draw 按钮：文字存显示名，WM_DRAWITEM 直接读回来画
                 HWND button = addControl(
                     hwnd, L"BUTTON", builtinItemDisplayName(item).c_str(),
                     BS_OWNERDRAW, entry.x, entry.y, kCellWidth, kCellHeight,
@@ -242,13 +236,11 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
                 }
                 HBITMAP bitmap = prepareIconBitmap(item);
                 if (bitmap != nullptr) {
-                    // 位图挂在按钮属性上，WM_DRAWITEM 里取用，
-                    // WM_NCDESTROY 统一删除
+                    // 位图挂在按钮属性上，WM_DRAWITEM 取用，WM_NCDESTROY 统一删除
                     SetPropW(button, kPropIconBitmap, bitmap);
                 }
-                // 按钮与内置项的对应关系用属性存。属性值是 HANDLE，
-                // 静态表里的 wchar_t* 转过去、取出时转回来 —— 指向
-                // 的条目与进程同生命周期，没有悬垂问题。
+                // 内置项信息用属性存：属性值是 HANDLE，静态表的 wchar_t*
+                // 转过去、取出时转回来；条目与进程同生命周期，无悬垂。
                 SetPropW(button, L"KTileBuiltinId",
                          reinterpret_cast<HANDLE>(const_cast<wchar_t*>(item.id)));
                 SetPropW(button, L"KTileBuiltinTarget",
@@ -267,10 +259,8 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
             HDC dc = draw->hDC;
             const RECT& rect = draw->rcItem;
 
-            // rcItem 是物理像素，布局常量是 96 DPI 逻辑值 —— 必须换算。
-            // 之前直接用逻辑值当物理值，高 DPI 下图标比设计小了一圈
-            //（150% 时 64 逻辑只画了约 43 逻辑），图标和文字之间
-            // 看起来空出一大截就是这个原因。
+            // rcItem 是物理像素，布局常量是 96 DPI 逻辑值，必须换算，
+            // 否则高 DPI 下图标会明显偏小。
             const int iconSize = scaleFor(draw->hwndItem, kIconSize);
             const int iconTop = scaleFor(draw->hwndItem, kIconTop);
             const int labelHeight = scaleFor(draw->hwndItem, kLabelHeight);
@@ -285,8 +275,8 @@ LRESULT CALLBACK builtinDialogProc(HWND hwnd, UINT message, WPARAM wParam,
             }
 
             // 图标（预乘 DIB，AlphaBlend 走 per-pixel alpha）。
-            // 源矩形必须是**整张位图**（生成的是 128x128）—— 上一版把
-            // 目标尺寸 40 顺手当成了源尺寸，结果每格只显示原图左上角。
+            // 源矩形必须是整张位图（生成的是 128x128），误用目标尺寸的话
+            // 每格只显示原图左上角。
             HBITMAP bitmap = static_cast<HBITMAP>(
                 GetPropW(draw->hwndItem, kPropIconBitmap));
             if (bitmap != nullptr) {

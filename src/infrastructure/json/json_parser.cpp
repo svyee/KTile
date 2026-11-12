@@ -336,7 +336,7 @@ private:
 
 }  // namespace
 
-// ================================================================ JsonValue
+// --- JsonValue
 
 bool JsonValue::asBool(const bool fallback) const noexcept {
     if (type_ == Type::Bool) {
@@ -469,7 +469,7 @@ void JsonValue::setMember(std::string name, JsonValue item) {
     object_.emplace_back(std::move(name), std::move(item));
 }
 
-// ================================================================ 入口
+// --- 入口
 
 ParseResult parseJson(const std::string& text) {
     Parser parser(text);

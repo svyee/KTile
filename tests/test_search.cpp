@@ -17,7 +17,7 @@ static int g_failures = 0;
         }                                                        \
     } while (false)
 
-// ---------------------------------------------------------------- 辅助
+// --- 辅助
 
 static std::vector<LaunchItem> makeItems() {
     std::vector<LaunchItem> items;
@@ -44,7 +44,7 @@ static bool contains(const std::vector<SearchMatch>& results,
     return false;
 }
 
-// ---------------------------------------------------------------- 基础
+// --- 基础
 
 static void testEmptyQueryReturnsAll() {
     const auto items = makeItems();
@@ -66,7 +66,6 @@ static void testWhitespaceQueryIsEmpty() {
 
 static void testSubstringMatch() {
     const auto items = makeItems();
-    // "记" 命中「记事本」
     const auto results = searchItems(items, "记");
     CHECK(results.size() == 1);
     CHECK(results[0].itemIndex == 0);
@@ -76,7 +75,7 @@ static void testSubstringMatch() {
 
 static void testChineseSubstringNotAtStart() {
     const auto items = makeItems();
-    // "本" 在「记事本」的第 3 个字符位置（UTF-8 下第 6 字节）
+    // "本" 在第 3 个字符位置（UTF-8 下第 6 字节）
     const auto results = searchItems(items, "本");
     CHECK(results.size() == 1);
     CHECK(results[0].itemIndex == 0);
@@ -148,7 +147,6 @@ static void testEmptyItems() {
 
 static void testMatchHighlightsCorrectRange() {
     const auto items = makeItems();
-    // "Visual" 在 "Visual Studio Code" 的开头
     const auto results = searchItems(items, "Visual");
     CHECK(contains(results, 4));
     for (const auto& match : results) {

@@ -20,7 +20,7 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// ---------------------------------------------------------------- 仿射变换
+// --- 仿射变换
 // D2D 用行向量约定：p' = p * M，因此 x' = x*m11 + y*m21 + dx。
 struct Affine {
     float m11 = 1.0F;
@@ -52,7 +52,7 @@ Affine compose(const Affine& outer, const Affine& inner) {
     return result;
 }
 
-// ---------------------------------------------------------------- 词法
+// --- 词法
 bool isSeparator(const wchar_t c) {
     return c == L' ' || c == L',' || c == L'\t' || c == L'\n' || c == L'\r';
 }
@@ -82,10 +82,9 @@ bool readNumber(const wchar_t** cursor, float* out) {
     return true;
 }
 
-// ---------------------------------------------------------------- 写入器
-// 把一个 SVG 图元的命令序列写进 D2D 几何接收器。
-// 坐标一律以「SVG 用户单位」传入，由内部按仿射矩阵映射到目标画布 ——
-// 这样解析器可以完全不关心缩放。
+// --- 写入器
+// 把一个 SVG 图元的命令序列写进 D2D 几何接收器。坐标一律以 SVG 用户单位
+// 传入，内部按仿射矩阵映射到目标画布，解析器不关心缩放。
 class PathWriter {
 public:
     PathWriter(ID2D1GeometrySink* sink, const Affine& transform,
@@ -193,9 +192,8 @@ public:
     bool hasBounds() const { return hasBounds_; }
     D2D1_RECT_F bounds() const { return bounds_; }
 
-    // 弧长加权质心（描边图元的视觉中心近似）。
-    // 剪刀左重右轻、撤销箭头尾重头轻这类不对称形状，用包围盒中心会
-    // 把视觉重心甩到一边；用沿路径长度加权的质心更接近人眼看到的中心。
+    // 弧长加权质心（描边图元的视觉中心近似）。剪刀、箭头这类不对称形状
+    // 用包围盒中心会偏，沿路径长度加权的质心更接近视觉中心。
     bool hasCentroid() const { return totalLength_ > 0.0F; }
     D2D1_POINT_2F centroid() const {
         return D2D1::Point2F(weightedCx_ / totalLength_,
@@ -306,9 +304,9 @@ private:
     float weightedCy_ = 0.0F;
 };
 
-// ---------------------------------------------------------------- 路径数据
+// --- 路径数据
 // 支持 M L H V C S Q T A Z（大小写 = 相对/绝对）。返回 false 表示数据有
-// 语法错误 —— 交给调用方决定是否降级，而不是静默画出半个图标。
+// 语法错误，交给调用方决定是否降级，而不是静默画出半个图标。
 bool parsePathData(const wchar_t* data, PathWriter* writer) {
     const wchar_t* p = data;
     wchar_t command = L'\0';
@@ -513,7 +511,7 @@ bool parsePathData(const wchar_t* data, PathWriter* writer) {
     return true;
 }
 
-// ---------------------------------------------------------------- 形状图元
+// --- 形状图元
 void emitRect(PathWriter* writer, float x, float y, float width, float height,
               float rx, float ry) {
     if (width <= 0.0F || height <= 0.0F) {
@@ -569,7 +567,7 @@ void emitPolyline(PathWriter* writer, const wchar_t* points, const bool close) {
     }
 }
 
-// ---------------------------------------------------------------- 属性
+// --- 属性
 using Attributes = std::vector<std::pair<std::wstring, std::wstring>>;
 
 const wchar_t* findAttribute(const Attributes& attributes, const wchar_t* name) {
@@ -678,7 +676,7 @@ Affine parseTransform(const wchar_t* text) {
 
 }  // namespace
 
-// ---------------------------------------------------------------- 对外接口
+// --- 对外接口
 
 bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
                    const float scale, const float dx, const float dy,
@@ -932,9 +930,9 @@ bool buildSvgGlyph(ID2D1Factory* factory, const wchar_t* markup,
     out->strokeGeometry = strokeGeometry;
     out->fillGeometry = fillGeometry;
 
-    // 包围盒由 PathWriter 在写入时同步累计（见 PathWriter::expandBounds），
-    // 不依赖 ID2D1Geometry::GetBounds——实测在某些 D2D 运行时下 GetBounds
-    // 对空心图元返回 inf，导致居中失效。
+    // 包围盒由 PathWriter 写入时同步累计（见 expandBounds），不依赖
+    // ID2D1Geometry::GetBounds：某些 D2D 运行时对空心图元返回 inf，
+    // 会导致居中失效。
     out->bounds = combinedBounds_;
 
     // 弧长加权质心：描边图元的光学中心。

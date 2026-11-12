@@ -1,23 +1,12 @@
-// KTile - 内置项目表
+// KTile - 内置项目表：「添加项目 → 系统项…」对话框里的系统功能磁贴。
 //
-// 「添加项目 → 系统项…」对话框里可选的系统功能磁贴。
-//
-// 两类存储方式：
-//   1. 功能命令（电源/媒体/音量/hosts）：target = "ktile:<id>"，
-//      启动时由 item_launcher 分派到 system_actions 执行 —— 这类动作
-//      没有对应的文件/协议，只有程序自己知道怎么执行；
-//   2. 系统位置（此电脑/回收站/...）：target 直接存 shell 路径或 exe 名，
-//      走现有的 ShellExecuteW 通路，**零新代码**。
-//
-// 图标分两套，由 iconSource 决定：
-//   nullptr  → Lucide 线框 + 蓝圆角底（功能命令用：锁屏/关机/音量…）
-//   非 nullptr → 从真实 shell 对象提取系统图标（系统位置项用：此电脑、
-//     回收站、控制面板、计算器…）。用户要的就是「它本来长什么样」——
-//     计算器的图标就是计算器，比统一成线框更好认。
-//
-// 取舍记录：不做「禁止/允许息屏」这类状态开关（它不是一次性动作，磁贴
-// 还得显示当前状态，交互语义完全不同）；睡眠/休眠也已移除 —— Windows
-// 上休眠常被 powercfg 禁用，点了没反应会被当成程序坏了，不如不提供。
+// 功能命令（电源/媒体/音量/hosts）target 为 "ktile:<id>"，启动时由
+// item_launcher 分派到 system_actions；系统位置（此电脑/回收站等）target
+// 直接存 shell 路径或 exe 名，走 ShellExecuteW 通路。图标由 iconSource
+// 决定：nullptr 用 Lucide 线框 + 蓝圆角底，非 nullptr 从真实 shell 对象
+// 提取系统图标，比统一线框更好认。不做「禁止/允许息屏」这类状态开关
+// （交互语义不同）；睡眠/休眠已移除，休眠常被 powercfg 禁用，点了没反应
+// 会被当成程序坏了。
 #pragma once
 
 #include <string>
@@ -59,9 +48,8 @@ inline const std::vector<BuiltinItem>& builtinItems() {
          nullptr},
 
         // ---- 系统位置 ----
-        // target 直接是 shell 路径 / exe 名：ShellExecuteW 认识它们；
-        // iconSource 与 target 多数相同，hosts 例外（target 是"用记事本
-        // 打开 hosts"的命令，图标借用记事本 —— 比一个空白文档图标好认）。
+        // target 为 shell 路径 / exe 名，ShellExecuteW 直接认识；
+        // iconSource 与 target 相同。
         {L"this-pc",      L"此电脑",     L"系统位置",
          L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
          L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"},
@@ -84,9 +72,8 @@ inline const std::vector<BuiltinItem>& builtinItems() {
          L"notepad.exe"},
         {L"mspaint",      L"画板",       L"系统位置", L"mspaint.exe",
          L"mspaint.exe"},
-        // hosts 用编辑器打开（系统盘 etc 下的无扩展名文件，直接启动
-        // 会弹「选择打开方式」），所以是功能命令而非路径。图标不用
-        // 记事本 —— 会和上面的「记事本」磁贴撞脸，保留 Lucide 文档图标。
+        // hosts 是功能命令而非路径：无扩展名文件直接启动会弹「选择打开方式」。
+        // 图标不用记事本，避免与上面的磁贴撞脸，保留 Lucide 文档图标。
         {L"hosts",        L"Hosts",      L"系统位置", L"ktile:hosts",
          nullptr},
     };
@@ -94,7 +81,7 @@ inline const std::vector<BuiltinItem>& builtinItems() {
 }
 
 // target 是否是内置功能命令（"ktile:<id>" 形式）。
-// 系统位置项返回空 —— 它们走普通启动通路。
+// 系统位置项返回空，它们走普通启动通路。
 inline std::wstring builtinIdFromTarget(const std::wstring& target) {
     const std::wstring prefix = L"ktile:";
     if (target.size() <= prefix.size() ||

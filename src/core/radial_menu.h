@@ -1,12 +1,8 @@
 // KTile - 核心数据模型：轮盘菜单
 //
-// 设计原则：
-//  1. 与 LaunchItem 解耦：轮盘动作只存「怎么执行」，不复用磁贴的数据结构，
-//     因为轮盘需要 Shortcut（注入组合键）这种磁贴没有的动作类型。
-//  2. 扇区数与动作向量长度一致：空槽位用默认 RadialAction 占位，
-//     绘制和命中测试时跳过 type 为默认值且 name 为空的项。
-//  3. 仅依赖标准库，不引入任何平台/JSON 细节（保持领域层纯净）。
-//  4. 几何计算（角度→扇区、命中测试）是纯函数，可单测。
+// 与 LaunchItem 解耦：轮盘需要 Shortcut（注入组合键）这类磁贴没有的动作。
+// 扇区数与 actions.size() 恒等，空槽位用默认 RadialAction 占位，绘制和
+// 命中测试跳过空槽位。仅依赖标准库；几何计算是纯函数，可单测。
 //
 #pragma once
 
@@ -20,13 +16,10 @@
 namespace ktile {
 namespace core {
 
-// ================================================================ 轮盘动作类型
+// --- 轮盘动作类型
 //
-// 两类执行机制：
-//   - Application/File/Folder/Url：用 ShellExecuteW 直接拉起/打开
-//   - Shortcut：用 SendInput 向当前前台窗口注入组合键（如复制=Ctrl+C）
-//   - Builtin：内置系统命令（锁屏/音量等），走 system_actions
-//
+// 执行机制：Application/File/Folder/Url 用 ShellExecuteW 直接拉起/打开；
+// Shortcut 用 SendInput 向前台窗口注入组合键；Builtin 走 system_actions。
 enum class RadialActionType : std::uint8_t {
     Application = 0,
     File        = 1,
@@ -61,7 +54,7 @@ inline RadialActionType radialActionTypeFromKey(const std::string& key,
     return RadialActionType::Application;
 }
 
-// ================================================================ 轮盘动作
+// --- 轮盘动作
 
 struct RadialAction {
     RadialActionType type = RadialActionType::Application;
@@ -82,7 +75,7 @@ struct RadialAction {
     }
 };
 
-// ================================================================ 轮盘方案
+// --- 轮盘方案
 
 // 支持的扇区数
 inline constexpr std::uint8_t kMinSectors = 4;
@@ -100,7 +93,7 @@ struct RadialMenu {
           sectorCount(sectors), actions(sectors) {}
 };
 
-// ================================================================ 触发配置
+// --- 触发配置
 
 enum class RadialTriggerButton : std::uint8_t {
     Right  = 0,
@@ -154,72 +147,51 @@ struct RadialTriggerConfig {
     bool enabled = true;
     RadialTriggerButton button = RadialTriggerButton::Right;
     RadialTriggerModifier modifier = RadialTriggerModifier::Ctrl;  // 默认 Ctrl+右键
-    // 拖动超过此距离才呼出轮盘（物理像素）。
-    //
-    // 15 而不是 8：每个人按右键的手感差别很大，拇指一压就带出几个像素很常见；
-    // 8 像素的窗口太窄，很多人「只想点一下右键」也会把轮盘拽出来。15 仍远小于
-    // 卡片环内半径（47 DIP），正常选择动作完全不受影响。
+    // 拖动超过此距离才呼出轮盘（物理像素）。15 而不是 8：按右键带出几个
+    // 像素很常见，8 的窗口太窄，普通单击也会拽出轮盘；15 仍远小于卡片环
+    // 内半径（47 DIP），正常选择不受影响。
     std::uint16_t activationThresholdPx = 15;
     std::uint16_t cancelRadiusPx = 160;        // 拖出此半径外松手 = 取消
 
-    // 抑制键：按住其中任意一个键时，轮盘不弹出，鼠标事件原样放行给目标窗口。
-    // 用途是给 Alt+Tab、Alt+方向这类组合键让路 —— 用户正按着 Alt 操作，
-    // 顺手拖了下右键不该被我们吞掉。空列表 = 不抑制。
+    // 抑制键：按住其中任意一个时轮盘不弹出，事件原样放行，给 Alt+Tab
+    // 这类组合键让路。空列表 = 不抑制。
     std::vector<HotkeyModifier> suppressWhileHeld;
 };
 
-// 抑制键是否与触发修饰键撞车。
-//
-// 同一个键既要求按住（触发）又要求不按住（抑制）等于永远不触发，
-// 这种配置在界面上要拦住，从文件里读到时剔除冲突项而不是整份打回默认。
+// 抑制键是否与触发修饰键撞车：同一个键既必须按又必须不按，永远不触发。
+// 界面上要拦住这种配置；从文件读到时剔除冲突项而不是整份打回默认。
 bool suppressionConflictsTrigger(const RadialTriggerConfig& trigger) noexcept;
 
-// 单个修饰键是否就是触发修饰键（判断的是同一个物理键）。
-//
-// 分开暴露是因为加载期要「逐项剔除」冲突的抑制键，而界面保存前只要一个
-// 「整体有没有冲突」的是非答案 —— 两处共用这一条判断，避免各写一遍。
+// 单个修饰键是否就是触发修饰键（同一个物理键）。
+// 加载期逐项剔除冲突抑制键、界面保存前判整体冲突，两处共用这一条判断。
 bool modifierIsTriggerModifier(HotkeyModifier held,
                                RadialTriggerModifier trigger) noexcept;
 
-// 抑制键在什么情况下才参与判断：只有触发修饰键为「无」时。
-//
-// 选了修饰键，那么「不按修饰键」本身就是不触发 —— 再叠一层抑制规则，等于让
-// 同一个键既必须按、又必须不按。所以设置页在选了修饰键时把抑制键整组灰掉，
-// 钩子那边也必须按同一条规则忽略它；只让界面灰掉而运行期照旧生效，会变成
-// 「看不见却起作用」，是最难排查的那类问题。
+// 抑制键只有触发修饰键为「无」时才参与判断：选了修饰键，不按它本身就是
+// 不触发，再叠抑制键等于同一个键必须按又必须不按。设置页灰掉抑制键与
+// 钩子运行期忽略它必须走同一条规则，否则会出现看不见却生效的抑制。
 bool suppressionApplies(RadialTriggerModifier trigger) noexcept;
 
-// 外甩取消半径的可用区间（DIP，逻辑像素）。
-//
-// 下限 142 就是卡片环的外缘：比它更小的半径会把卡片自己判成「已甩出去」，
-// 用户会觉得有半个轮盘是坏的。上限只是防呆，别让配置写成一个永远取消不了
-// 的天文数字。
+// 外甩取消半径的可用区间（DIP）。下限 142 是卡片环外缘：更小的半径会把
+// 卡片自己判成「已甩出去」，半个轮盘看起来是坏的。上限只是防呆。
 inline constexpr std::uint16_t kMinCancelRadiusDip = 142;
 inline constexpr std::uint16_t kMaxCancelRadiusDip = 600;
 
-// ================================================================ 轮盘总配置
+// --- 轮盘总配置
 
-// radial.json 的 schema 版本。
-//
-// 刻意**不复用** data_model.h 的 kCurrentSchemaVersion：那个是 items.json /
-// config.json 的版本，两者结构毫无关系。共用同一个常量意味着给轮盘加字段
-// 会把磁贴配置的版本号一起推上去，下次真要按版本做迁移时就分不清是谁变了。
-// 轮盘自己一条版本线：1 = 初版，2 = 多方案 + 按应用白名单，
-// 3 = 通用项 + 进程黑名单（按应用差异化交给 slugin 插件），
+// radial.json 的 schema 版本，刻意不复用 data_model.h 的 kCurrentSchemaVersion：
+// 两者结构无关，共用常量会分不清哪边推进了版本。
+// 1 = 初版，2 = 多方案 + 按应用白名单，3 = 通用项 + 进程黑名单，
 // 4 = 激活阈值默认值 8 → 15（见 radial_store 里那条唯一的迁移）。
 inline constexpr std::uint32_t kRadialSchemaVersion = 4;
 
-// 进程名是否命中黑名单（大小写不敏感）。
-//
-// 抽成自由函数是为了让钩子层也能用：鼠标钩子在「按下」那一瞬间就要决定
-// 吞不吞事件，那时手里只有一份黑名单，没有完整的 RadialConfig。
+// 进程名是否命中黑名单（大小写不敏感）。抽成自由函数供钩子层用：
+// 钩子在按下瞬间就要决定吞不吞事件，手里只有黑名单，没有完整 RadialConfig。
 bool isProcessBlockedBy(const std::vector<std::string>& blacklist,
                         const std::string& processName) noexcept;
 
-// 两个进程名是否相等（大小写不敏感）。
-//
-// 单独暴露是给界面判重用的：黑名单里加第二遍 "Chrome.exe" 应当被拦住，
-// 但用户看不出 "chrome.exe" 和 "Chrome.exe" 是一回事，得由代码替他判断。
+// 两个进程名是否相等（大小写不敏感）。界面判重用：
+// 黑名单里加第二遍 "Chrome.exe" 要拦住，用户看不出大小写是同一回事。
 bool processNameEquals(const std::string& left,
                        const std::string& right) noexcept;
 
@@ -228,52 +200,37 @@ struct RadialConfig {
     RadialTriggerConfig trigger;
 
     // 通用轮盘：所有应用共用这一份。按应用差异化交给 slugin 插件目录，
-    // 用户侧不再有多方案概念 —— 设置界面只呈现「一份通用配置」。
+    // 设置界面只呈现「一份通用配置」。
     RadialMenu menu;
 
-    // 进程黑名单：命中即不弹轮盘（事件全部放行）。只比进程名、大小写不敏感，
-    // 刻意不支持通配符 —— `*app*.exe` 这种写法误伤面太大，用户很难预估。
+    // 进程黑名单：命中即不弹轮盘，事件全部放行。只比进程名、大小写不敏感，
+    // 不支持通配符（`*app*.exe` 误伤面大，用户难预估）。
     std::vector<std::string> blacklist;
 
-    // 该进程是否被拉黑。空串（拿不到进程名）不算命中：宁可弹一次，
-    // 也别让「查不到进程名」这种异常情况把功能变成静默失效。
+    // 该进程是否被拉黑。空串（拿不到进程名）不算命中：宁可多弹一次，
+    // 不让功能静默失效。
     bool isProcessBlocked(const std::string& processName) const noexcept;
 };
 
-// ================================================================ 几何计算（纯函数）
+// --- 几何计算（纯函数）
 
-// 角度（度）→ 扇区索引。
-//
-// 约定：0° = 正上方（12 点钟方向），顺时针递增。
-// sectorCount 为 4/6/8，扇区 0 的中心在 0°，其余均分 360°。
-// 返回值范围 [0, sectorCount)。
-//
-// 为什么用度数而不是弧度：扇区边界需要 360/N 的精确等分，
-// 度数在整数除法和边界判断上更直观，避免浮点弧度的累积误差。
+// 角度（度）→ 扇区索引。0° = 正上方，顺时针递增；sectorCount 为 4/6/8，
+// 扇区 0 中心在 0°，其余均分 360°，返回值在 [0, sectorCount)。
+// 用度数不用弧度：扇区边界要 360/N 的精确等分，整数除法与边界判断更直观，
+// 避免浮点弧度的累积误差。
 std::uint8_t sectorFromAngle(float angleDeg, std::uint8_t sectorCount) noexcept;
 
-// 命中测试：给定相对轮盘中心的位移 (dx, dy)，返回命中的扇区索引。
-//
-// - dx/dy 为 DIP 单位，+y 向下（屏幕坐标）。
-// - 位移在内圈半径内（中心核圆区域）返回 nullopt。
-// - 位移在外圈半径外返回 nullopt（外甩取消区域）。
-// - 否则按角度映射到扇区。
-//
-// 返回 nullopt 表示「不触发任何扇区」（中心核圆或外甩取消）。
+// 命中测试：相对轮盘中心的位移 (dx, dy) → 扇区索引。dx/dy 为 DIP，
+// +y 向下（屏幕坐标）。位移在内圈半径内（中心核圆）或外圈半径外
+// （外甩取消区）返回 nullopt，即不触发任何扇区；否则按角度映射到扇区。
 std::optional<std::uint8_t> hitTestSector(float dx, float dy,
                                            float innerRadius, float outerRadius,
                                            std::uint8_t sectorCount) noexcept;
 
-// 花瓣卡片里一行水平文字可用多宽（DIP）。
-//
-// 卡片按「宽 cardWidth 沿切向、高 cardHeight 沿径向、圆角 corner」摆放，并像
-// 花瓣一样沿径向旋转 angleDeg；卡片里的文字却是水平的。于是同一段文字在不同
-// 角度能占的宽度并不一样 —— 正上方最宽（等于卡片宽），斜下方最窄（卡片斜
-// 着，短边在挡路）。这个函数返回「文字带（相对卡片中心偏移 bandCenterOffset、
-// 高 bandHeight 的水平条）里每一行都完整落在卡片内」的最大宽度。
-//
-// 用途是给绘制层一个硬边界：文字在这个宽度内排版/滚动，就绝不会画到卡片外。
-// 返回 0 表示放不下任何东西（参数非法时也是 0，调用方按「没有窗口」处理）。
+// 花瓣卡片里一行水平文字可用多宽（DIP）。卡片沿径向旋转而文字水平，
+// 可占宽度随角度变化（正上方最宽，斜下方最窄）。返回偏移 bandCenterOffset、
+// 高 bandHeight 的文字带内每行都完整落在卡片内的最大宽度，供绘制层当硬边界；
+// 返回 0 表示放不下任何东西（参数非法也是 0）。
 float radialLabelWindowWidth(float cardWidth, float cardHeight, float corner,
                              float angleDeg, float bandCenterOffset,
                              float bandHeight) noexcept;

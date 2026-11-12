@@ -1,12 +1,9 @@
 // KTile - UI 层：内置项的本地化名字
 //
-// 为什么放在 UI 层而不是 core：
-// core 只到 base，不允许依赖 infrastructure（i18n 在 infrastructure）。
-// 所以 core 里的 BuiltinItem 保留规范名（中文），显示时才查语言文件。
-//
-// key 由 id 派生（"lock" → "builtin.lock"），表里不必逐条写 key ——
-// 新增内置项只要在语言文件里补一条同名条目，漏补也只是回退到 key，
-// 一眼能看出漏在哪儿。
+// 放在 UI 层而非 core：core 不允许依赖 infrastructure（i18n 在那里），
+// BuiltinItem 只保留规范名（中文），显示时才查语言文件。
+// key 由 id 派生（"lock" → "builtin.lock"），新增内置项只要在语言文件
+// 里补同名条目，漏补回退到 key，一眼能看出漏在哪儿。
 //
 #pragma once
 

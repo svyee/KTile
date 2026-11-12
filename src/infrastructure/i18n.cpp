@@ -1,15 +1,7 @@
 // KTile - 基础设施层：多语言实现
 //
-// 文件格式（lang/<code>.json，UTF-8）：
-//   {
-//     "code": "zh-Hans",
-//     "name": "简体中文",
-//     "strings": {
-//       "settings.title": "设置",
-//       "common.ok": "确定"
-//     }
-//   }
-//
+// 语言文件 lang/<code>.json（UTF-8）：
+//   {"code": "zh-Hans", "name": "简体中文", "strings": {"key": "文本"}}
 // 扁平 key 而不是嵌套对象：查表只做一次哈希，不用逐层 find；
 // 漏词时在 JSON 里按字母/前缀排一下就能看出哪一段没翻。
 //
@@ -65,7 +57,7 @@ State& state() {
     return instance;
 }
 
-// 读整个文件为 UTF-8 文本。跳过 UTF-8 BOM —— 用户手工编辑语言文件时
+// 读整个文件为 UTF-8 文本。跳过 UTF-8 BOM，用户手工编辑语言文件时
 // 记事本大概率会加 BOM，而项目里的 JSON 解析器不认它。
 bool readTextFile(const fs::path& path, std::string& out) {
     std::ifstream stream(path, std::ios::binary);
@@ -168,8 +160,8 @@ std::string systemLanguageCode() {
     const LANGID language = GetUserDefaultUILanguage();
     if (PRIMARYLANGID(language) == LANG_CHINESE) {
         const WORD sub = SUBLANGID(language);
-        // 只有「简体中文」（大陆 / 新加坡）走中文，其余一律英语 ——
-        // 繁中的用词与简中差得远，硬套过去比英语还别扭。
+        // 只有简体中文（大陆/新加坡）走中文，其余一律英语：繁中用词与
+        // 简中差得远，硬套过去比英语还别扭。
         if (sub == SUBLANG_CHINESE_SIMPLIFIED ||
             sub == SUBLANG_CHINESE_SINGAPORE) {
             return kSimplifiedChinese;
@@ -288,8 +280,8 @@ const std::wstring& trw(const char* key) {
         .first->second;
 }
 
-// 把 {0} / {1} 换成 args 里的对应项。找不到的序号原样保留 ——
-// 翻译漏了参数时界面上会露出 "{1}"，比静默吞掉更好排查。
+// 把 {0} / {1} 换成 args 里的对应项。找不到的序号原样保留：翻译漏了
+// 参数时界面露出 "{1}"，比静默吞掉好排查。
 template <typename Char>
 std::basic_string<Char> substitute(const std::basic_string<Char>& text,
                                    const std::vector<std::basic_string<Char>>& args) {

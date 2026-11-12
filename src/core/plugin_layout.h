@@ -1,14 +1,9 @@
 #pragma once
 
-// 插件布局引擎
-//
-// 输入是 manifest 的受限布局树 + 插件数据，输出一串与渲染后端无关的
-// 绘制指令（DIP 坐标）。这样排版逻辑可以脱离 D2D 单测；UI 只需要把
-// Text/Icon/Meter 指令翻译成 D2D/DWrite 调用。
-//
-// 被否决的方案：
-//   - 让插件直接返回像素坐标：不同 DPI / 磁贴尺寸下必然错位。
-//   - 在 UI 层写一套排版：无法覆盖 large 的 3 天预报等动态结构，也不能单测。
+// 插件布局引擎：输入 manifest 的受限布局树 + 插件数据，输出与渲染后端
+// 无关的绘制指令（DIP 坐标），排版逻辑可脱离 D2D 单测，UI 只需把指令
+// 翻译成 D2D/DWrite 调用。否决过两个方案：插件直接返回像素坐标（不同
+// DPI / 磁贴尺寸下必然错位）、UI 层排版（覆盖不了动态结构也无法单测）。
 
 #include <cstdint>
 #include <functional>
@@ -48,9 +43,8 @@ struct PluginDrawCommand {
     bool centered = true;
     std::string text;
 
-    // Icon
-    //   icon         —— 首选图标（相对插件目录的文件路径，如 icons/sun）
-    //   iconFallback —— 首选无法解析时使用的兜底（manifest.icon 可为空）
+    // Icon：icon 为首选图标（相对插件目录的路径，如 icons/sun），
+    // iconFallback 为首选无法解析时的兜底（manifest.icon 可为空）。
     std::string icon;
     std::string iconFallback;
 

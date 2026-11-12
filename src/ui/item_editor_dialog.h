@@ -1,27 +1,8 @@
-// KTile - UI 层：项目编辑对话框（「修改项目」/「添加新项目」共用）
+// KTile - UI 层：项目编辑对话框（修改/添加项目共用同一窗口）
 //
-// 参考自 HLaunch 的 item_editor_dialog（同仓库 参考/hlaunch-0.1.22），
-// 但按 KTile 的约定重新实现：
-//   - 不带 .rc 资源，控件全部代码生成（与重命名/设置窗口同一套路）
-//   - 不用 DialogBoxParam 模板 + DWLP_USER，用自注册窗口类 + GWLP_USERDATA
-//   - 布局为「左侧图标/磁贴预览 + 右侧字段」的 620x430 客户区
-//
-// 同一个窗口承担两种用途（见 ItemEditorMode）：
-//   「修改项目」从磁贴右键进，字段预填该磁贴的现值；
-//   「添加新项目」从空白处右键进，字段全空、尺寸取默认值。
-//
-// 几处刻意的「简化」：
-//   1. 没有「类型」下拉框 —— 类型由目标路径推断（ui::inferItemType）。
-//      用户不需要理解「应用/文件/文件夹/网址」的差别，程序自己判断。
-//   2. 没有图标路径输入框 —— 顶部就是图标预览，点一下即可换图；
-//      选中的图片按原比例缩放到最长边 128 存进 data\res
-//      （见 platform/win32/icon_store），磁贴上会整块铺满。
-//   3. 磁贴大小改成下拉 + 实时预览，改完保存即生效（不必再回右键菜单）。
-//   4. 标题显示方式也是下拉：跟随全局 / 始终显示 / 移入时显示 ——
-//      每块磁贴自己说了算，因为小磁贴和大磁贴的最优解常常不一样。
-//
-// 主窗口保持可见：对话框以主窗口为 owner，OutsideClickMonitor 的
-// owner 链判定会把点在对话框上的点击当作「窗口内」，不会隐藏主窗口。
+// 不用 .rc 模板，控件全部代码生成（自注册窗口类 + GWLP_USERDATA）。
+// 布局为左侧图标/磁贴预览 + 右侧字段的 620x430 客户区。
+// 以主窗口为 owner：主窗口保持可见，点击对话框不会被判定为窗口外。
 //
 #pragma once
 
@@ -38,8 +19,7 @@
 namespace ktile {
 namespace ui {
 
-// 对话框提交的字段集合（宽字符版本，直接对接 UI；
-// Application 层负责转 UTF-8 后交给 core::editItem）。
+// 对话框提交的字段集合（宽字符，Application 层转 UTF-8 后交给 core::editItem）。
 struct ItemEditorFields {
     std::wstring name;                 // 允许为空（空 = 用目标名推导）
 
@@ -50,8 +30,7 @@ struct ItemEditorFields {
     std::vector<std::wstring> arguments;  // 每行一条
     std::wstring workingDirectory;     // 允许为空
 
-    // 自定义图标。存的是相对 data 目录的路径（"res\xx.png"），
-    // 空 = 使用目标自身的图标。
+    // 自定义图标：相对 data 目录的路径（"res\xx.png"），空 = 用目标自身图标。
     std::wstring icon;
 
     bool runAsAdministrator = false;
@@ -69,38 +48,17 @@ struct ItemEditorFields {
     std::optional<std::uint32_t> tileColor;
 };
 
-// 对话框用途。
-//
-// 「添加新项目」与「修改项目」是同一批字段、同一套校验、同一个预览，
-// 唯一差别是标题与确认按钮的文案（外加保存后是插入还是改写）。
-// 因此不另做一个窗口 —— 两份几乎一样的窗口代码必然各自演化，
-// 改了一边忘了另一边，用户就会看到「同一个界面对话框，两处规则不一致」。
+// 对话框用途。两种模式共用同一批字段、校验与预览，只差标题与按钮文案，
+// 不另做一个窗口（两份窗口代码必然各自演化、规则不一致）。
 enum class ItemEditorMode : std::uint8_t {
     Edit = 0,    // 修改已有项目
     Create = 1,  // 新建项目
 };
 
-// 弹出「编辑项目」对话框。
-//
-// tabNames   ：所有页面的显示名（下拉框内容）
-// initialTab ：当前磁贴所在的页面索引
-// initial    ：现有字段值（新建时全空，名称/目标留空即可）
-// globalAlwaysShowLabels ：设置里的「默认显示标题」当前值。
-//                          预览要按它来决定画不画标题 —— 选了
-//                          「跟随全局设置」时，只有知道全局值才能
-//                          预览出真实效果。
-// globalIconScale        ：设置里的「图标大小」当前值（%）。
-//                          勾选框选「按统一设置」时，滑块显示它作参照。
-// globalTileColor        ：设置里的全局默认磁贴底色（可空）。
-//                          本项未单独选色时，预览与颜色选择器的初始值
-//                          都按它来，才能如实画出「跟随默认」的效果。
-// outResult  ：用户点「保存」时写出新值
-// mode       ：新建 / 修改，只影响标题与按钮文案（见 ItemEditorMode）
-// pluginPreview ：插件磁贴的预览渲染回调（dc + 磁贴像素矩形 + 当前尺寸）。
-//                 非插件项目传空即可；由 app 层绑定主窗口的插件渲染路径，
-//                 保证预览与磁贴真实效果一致（含数据、图标、进度条）。
-//
-// 返回 true 表示用户确认；取消/关闭返回 false。
+// 弹出「编辑项目」对话框，用户确认时把新值写入 outResult 并返回 true
+// （取消/关闭返回 false）。三个全局设置值供「跟随全局」档位的预览使用：
+// 不知道全局值画不出真实效果。pluginPreview 是插件磁贴的预览渲染回调
+// （app 层绑定主窗口渲染路径，保证与磁贴真实效果一致），非插件传空。
 // 期间主窗口保持可见（owner 关系保证点击判定）。
 using PluginPreviewRenderer =
     std::function<bool(HDC, const RECT&, core::TileSize)>;
@@ -116,20 +74,10 @@ bool showItemEditorDialog(HWND owner,
                           ItemEditorMode mode = ItemEditorMode::Edit,
                           PluginPreviewRenderer pluginPreview = nullptr);
 
-// 目标路径 → 类型推断。
-//
-// 返回 nullopt 表示「根据目标判断不出来」—— 调用方应保留原类型，
-// 否则「只想改个名字」会把类型改坏。
-//
-// 判断依据（按优先级）：
-//   - URL（带 http:// 等协议前缀）        → Url
-//   - 存在的目录                          → Folder
-//   - .exe/.com/.bat/.cmd/.lnk            → Application
-//   - 存在的文件                          → File
-//   - 不像路径（无分隔符/无盘符）且判断不出 → nullopt
-//     （例如 "notepad"、"office.farxin.cn" —— 可能是裸命令、域名或
-//       待创建的文件，硬猜会改坏右键菜单文案与图标）
-//   - 其余（像路径但不存在的文件）          → File
+// 目标路径 → 类型推断。返回 nullopt 表示判断不出，调用方应保留原类型，
+// 否则「只改个名字」可能把类型改坏。优先级：URL（带协议前缀）→ 存在的
+// 目录 → .exe/.com/.bat/.cmd/.lnk → 存在的文件 → 像路径但不存在的文件。
+// 不像路径（无分隔符/无盘符）又判断不出的（裸命令、域名）也返回 nullopt。
 std::optional<core::ItemType> inferItemType(const std::wstring& target);
 
 // 类型的中文名（预览提示行用）

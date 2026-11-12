@@ -1,14 +1,9 @@
 #pragma once
 
-// 插件刷新控制器
-//
-// 生命周期设计（与「面板唤出才刷新」的定位一致）：
-//   - 只有一个常驻工作线程，但空闲时不持有网络/进程资源。
-//   - 面板 show 时把当前标签页的插件磁贴入队；同一插件（含相同参数）只刷一次。
-//   - 命中缓存且未过期时直接画缓存，不入队。
-//   - 面板 hide 时清空队列；已在执行的请求无法中断（WinHTTP 同步请求），
-//     但结果仍会写回缓存，下次唤出直接命中。
-//   - 没有定时器、没有后台轮询。
+// 插件刷新控制器：单个常驻工作线程，无定时器、无后台轮询，空闲时不持有
+// 网络/进程资源。面板 show 时把当前标签页的插件磁贴入队，同插件同参数只刷
+// 一次；命中缓存且未过期时直接画缓存。面板 hide 时清空队列，正在执行的
+// WinHTTP 同步请求无法中断，结果仍写回缓存，下次唤出直接命中。
 
 #include <condition_variable>
 #include <cstdint>
@@ -50,9 +45,8 @@ public:
     const infrastructure::PluginStore& store() const noexcept { return store_; }
     std::vector<core::PluginCatalogEntry> catalog() const;
 
-    // ---- 插件管理（设置窗口）----
-    // 从用户选择的 plugin.json 安装：复制其所在目录到
-    // <pluginDirectory>\<id>\，然后重新扫描。
+    // --- 插件管理（设置窗口）：从用户选择的 plugin.json 安装，复制其所在
+    // 目录到 <pluginDirectory>\<id>\，然后重新扫描。
     bool installPlugin(const std::wstring& manifestPath, std::string* error);
     // 删除整个插件目录（只允许删除 pluginDirectory 下的直接子目录）。
     bool removePlugin(const std::string& id, std::string* error);
@@ -65,9 +59,9 @@ public:
     // UI 线程调用；返回的 PluginView 里的 shared_ptr 在帧内稳定。
     core::PluginView viewFor(const core::LaunchItem& item) const;
 
-    // 面板 show：只处理 Plugin 类型；force=true 时忽略 TTL（点击磁贴手动刷新）。
-    // visible=true 表示「面板正开着」的高频刷新：命中清单配置
-    // visibleRefreshSeconds 的插件改用这个更短的 TTL。
+    // 面板 show 调用，只处理 Plugin 类型；force=true 忽略 TTL（手动刷新）。
+    // visible=true 表示面板正开着：配置了 visibleRefreshSeconds 的插件改用
+    // 这个更短的 TTL。
     void refreshItems(const std::vector<core::LaunchItem>& items, bool force,
                       bool visible = false);
     void requestRefresh(const core::LaunchItem& item, bool force);

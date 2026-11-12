@@ -39,9 +39,9 @@
 namespace ktile {
 namespace app {
 
-// 主窗口标题：走语言文件，切语言后新创建的窗口/对话框即用新名字。
-// 定义放在匿名 namespace 之外 —— 否则会和头里的声明构成两个不同实体，
-// 在匿名 namespace 内部调用时出现重载歧义。
+// 主窗口标题：走语言文件，切语言后新建的窗口/对话框即用新名字。
+// 定义放在匿名 namespace 之外，否则会与头文件声明构成两个不同实体，
+// 调用时出现重载歧义。
 const wchar_t* applicationWindowTitle() {
     return infrastructure::i18n::trw("app.windowTitle").c_str();
 }
@@ -66,15 +66,14 @@ constexpr UINT kTrayMenuStartup = 2002;
 constexpr UINT kTrayMenuExit = 2003;
 constexpr UINT kTrayMenuSettings = 2004;
 
-// 磁贴菜单「移动/复制到其他页面」子菜单的最大条目数。
-// 必须与 tile_context_menu.cpp 的 kMaxTabMenuEntries 一致 ——
-// app 层按「基址 + 这么多条」解码命令 ID 区间。
+// 磁贴菜单「移动/复制到其他页面」子菜单的最大条目数。必须与
+// tile_context_menu.cpp 的 kMaxTabMenuEntries 一致：app 层按
+// 「基址 + 这么多条」解码命令 ID 区间。
 constexpr std::size_t kTileMenuTabEntries = 32;
 constexpr UINT kTrayMenuAbout = 2005;
 
-// 插件刷新完成消息（工作线程 → 主线程）。
-// 用 WM_APP 段避免与系统消息冲突；消息只带一个「有更新」信号，
-// 具体数据由主线程再向 PluginController 取（快照本身就是线程安全的）。
+// 插件刷新完成消息（工作线程 → 主线程），WM_APP 段避免与系统消息冲突。
+// 只带「有更新」信号，数据由主线程向 PluginController 取（快照线程安全）。
 constexpr UINT kPluginRefreshMessage = WM_APP + 20;
 
 HICON g_trayIconForMenu = nullptr;  // 避免菜单期间图标被释放
@@ -86,16 +85,16 @@ constexpr UINT_PTR kPluginVisibleTimerId = 3;   // 面板可见时的插件高�
 constexpr UINT_PTR kRadialWatchdogTimerId = 4;  // 轮盘可见期间的按键兜底
 constexpr UINT kLogFlushIntervalMs = 2000;
 constexpr UINT kHookWatchdogIntervalMs = 60 * 1000;
-// 轮盘兜底的检查节奏。120ms 足够「松手后不觉得菜单还赖着」，又不至于
-// 让 GetAsyncKeyState 变成忙轮询。只在轮盘可见期间挂表，其余时间零开销。
+// 轮盘兜底的检查节奏：松手后及时收起，又不至于让 GetAsyncKeyState
+// 变成忙轮询。只在轮盘可见期间挂表，其余时间零开销。
 constexpr UINT kRadialWatchdogIntervalMs = 250;
-// 轮盘最长停留时间。钩子彻底失效（被系统卸载、远程会话切换）时收不到任何
-// 事件，只能靠这个上限把窗口收掉；正常选择用不了这么久。
+// 轮盘最长停留时间：钩子彻底失效（被系统卸载、远程会话切换）时收不到
+// 任何事件，只能靠这个上限把窗口收掉；正常选择用不了这么久。
 constexpr ULONGLONG kRadialMaxVisibleMs = 10 * 1000;
 // 「窗口亮着但钩子已回 Idle」要连续观察到几次才动手，防止和抬起消息抢跑。
 constexpr int kRadialMismatchTicksToHide = 2;
-// 手势钩子的强制重装周期：系统负载高时会静默跳过超时的钩子回调
-//（没有任何通知），只能定期重装把钩子链顺序抢回来。
+// 手势钩子的强制重装周期：系统高负载时会静默跳过超时的钩子回调
+//（无任何通知），只能定期重装抢回钩子链顺序。
 constexpr ULONGLONG kForceReinstallIntervalMs = 10 * 60 * 1000;
 
 // 操作系统版本（写入启动横幅，排查「只在某台机器复现」时用）。
@@ -124,18 +123,14 @@ std::string osVersionString() {
 }
 
 // Explorer 重启时广播的消息 ID（动态注册，不能 constexpr）。
-//
-// 为什么需要它：WH_KEYBOARD_LL 钩子链是 LIFO，后装的先收到事件。
-// 正常情况下 KTile 比 Explorer 晚启动，我们的钩子在前，能吞掉 Win 键
-// 不让它弹开始菜单。但一旦 Explorer 崩溃重启 / 注销重登，它会重新装
-// 钩子排到我们前面 —— 我们的「吞」就失效了，开始菜单和 KTile 会同时弹。
-// 监听这条广播，在 Explorer 重启后立刻重装钩子，把顺序抢回来。
+// 钩子链是 LIFO，Explorer 崩溃重启/注销重登后会重新装钩子排到前面，
+// 吞 Win 键就失效了；监听这条广播，重启后立刻重装钩子抢回顺序。
 UINT taskbarCreatedMessageId() {
     static const UINT id = RegisterWindowMessageW(L"TaskbarCreated");
     return id;
 }
 
-// ---------------------------------------------------------------- 拖入的快捷方式
+// --- 拖入的快捷方式
 
 // .lnk 解析结果。
 struct ResolvedShortcut {
@@ -144,14 +139,9 @@ struct ResolvedShortcut {
     std::wstring workingDirectory; // 快捷方式记录的工作目录
 };
 
-// 把 .lnk 解析成真实目标。
-//
-// 为什么必须解析：快捷方式只是个「指路牌」，指的目标随时可能被
-// 移动/删除/卸载 —— 把 .lnk 本身存成磁贴的 target，等于把磁贴的
-// 生命周期拴在一个中间层上。直接存真实目标，快捷方式删了也不影响启动。
-//
-// 失败（不是合法 lnk / COM 失败）时返回空 target，调用方保留原路径
-// —— 宁可存一个还能双击打开的快捷方式，也不能让拖入凭空失败。
+// 把 .lnk 解析成真实目标再入库：快捷方式指的目标随时可能被移动/删除/
+// 卸载，存真实目标使快捷方式删除也不影响启动。解析失败返回空 target，
+// 调用方保留原路径（还能双击打开总比拖入凭空失败好）。
 ResolvedShortcut resolveShortcut(const std::wstring& lnkPath) {
     constexpr DWORD kMaximumArguments = 2048;
     ResolvedShortcut resolved;
@@ -175,7 +165,7 @@ ResolvedShortcut resolveShortcut(const std::wstring& lnkPath) {
             link->GetPath(path, MAX_PATH, nullptr, SLGP_RAWPATH);
             if (path[0] == L'\0') {
                 // RAWPATH 为空（部分广告安装的快捷方式只有目标列表）：
-                // 再按默认方式要一次 —— shell 会做完整的解析
+                // 再按默认方式要一次，shell 会做完整的解析
                 link->GetPath(path, MAX_PATH, nullptr, 0);
             }
             link->GetArguments(arguments, kMaximumArguments);
@@ -202,12 +192,10 @@ ResolvedShortcut resolveShortcut(const std::wstring& lnkPath) {
     return resolved;
 }
 
-// ---------------------------------------------------------------- 拖入项的名字
+// --- 拖入项的名字
 
-// 从路径取「文件名去掉扩展名」。
-//
-// stripExtension=false（文件夹）时整名保留：文件夹名里带点的很常见
-// （"vs.2022"、"资料.备份"），一律砍掉点后面会把名字改得面目全非。
+// 取「文件名去掉扩展名」。文件夹（stripExtension=false）整名保留：
+// 文件夹名带点的很常见（"vs.2022"），砍掉点后面会把名字改得面目全非。
 std::wstring fileNameStem(const std::wstring& path, const bool stripExtension) {
     const std::size_t slash = path.find_last_of(L"\\/");
     std::wstring name =
@@ -223,11 +211,8 @@ std::wstring fileNameStem(const std::wstring& path, const bool stripExtension) {
     return name;
 }
 
-// 从 URL 取一个「当标题用」的短名。
-//
-// 规则：去掉协议头、去掉查询串与锚点。剩下的通常就是
-// "news.qq.com/rain/a/20261016A01" 这种「一看就知道是哪儿」的串，
-// 比整条带 ?utm_source=... 的原始链接干净得多。
+// 从 URL 取标题用短名：去协议头、查询串与锚点，剩下通常是
+// 一看就知道是哪儿的串，比带 ?utm_source=... 的原始链接干净。
 std::wstring urlDisplayName(const std::wstring& url) {
     std::wstring value = url;
     const std::size_t scheme = value.find(L"://");
@@ -248,20 +233,14 @@ std::wstring urlDisplayName(const std::wstring& url) {
     return value;
 }
 
-// 名称留空（或拖入时本来就没名字）时的取名规则。
-//
-// 两条添加入口共用同一个函数：对话框上写着「名称留空时自动使用目标名称」，
-// 拖入时用户没有机会填名字 —— 两处若各写一套，同一个目标会得到两种名字。
-//
-// 名字跟着**推断出的类型**走，而不是跟着「来源是文件还是链接」走：
-// 有些来源会把网址塞进文件格式里（拖网页上的图标就是这样），
-// 按类型取名能让两条入口得到一样的结果。
+// 名称留空时的取名规则，两条添加入口（对话框、拖入）共用，保证同一
+// 目标得到同一名字。名字跟着推断出的类型走而不是来源：有些来源会把
+// 网址塞进文件格式里（拖网页上的图标就是这样）。
 std::string deriveItemName(const std::wstring& target,
                            const core::ItemType type) {
-    // 内置命令/系统位置的目标派生不出可读名（"ktile:lock" 的 stem 是
-    // "lock"，GUID 路径的 stem 是一串十六进制）—— 查表给出中文名。
-    // 正常的「系统项…」入口会在对话框里回填名称，走不到这里；
-    // 这是给「手改配置文件 / 手填目标」的防御。
+    // 内置命令/系统位置的目标派生不出可读名（stem 是 "lock" 或一串
+    // 十六进制），查表给中文名。正常入口会在对话框回填名称走不到这里，
+    // 这是给手改配置/手填目标的防御。
     if (!core::builtinIdFromTarget(target).empty()) {
         const core::BuiltinItem* item =
             core::findBuiltinItem(core::builtinIdFromTarget(target));
@@ -290,8 +269,8 @@ std::string deriveItemName(const std::wstring& target,
     }
 }
 
-// 只把 ASCII 大写字母转小写，用于「Windows 路径不区分大小写」的比较。
-// 中文等多字节序列原样保留 —— 逐字节转小写本来也不会碰它们。
+// 只把 ASCII 大写字母转小写，用于「Windows 路径不区分大小写」的比较；
+// 逐字节转小写本来也不会碰中文等多字节序列。
 std::string asciiLower(std::string value) {
     for (char& ch : value) {
         if (ch >= 'A' && ch <= 'Z') {
@@ -313,8 +292,8 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
     auto* self = reinterpret_cast<Application*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
-    // TaskbarCreated 是动态消息 ID，不能进 switch —— 在 switch 前拦截。
-    // Explorer 重启后立刻重装手势钩子，把「Win 键先到我们这里」的顺序抢回来。
+    // TaskbarCreated 是动态消息 ID，不能进 switch，在 switch 前拦截；
+    // Explorer 重启后立刻重装手势与轮盘钩子。
     if (message == taskbarCreatedMessageId()) {
         if (self != nullptr) {
             self->reinstallGestureHotkey("Explorer 重启（TaskbarCreated）");
@@ -423,45 +402,38 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
 Application::Application() = default;
 
 Application::~Application() {
-    // 先停插件工作线程：它会 PostMessage 到消息窗口，窗口销毁后再投递
-    // 只会静默失败，但线程仍可能在读写缓存文件 —— 有序退出更干净。
+    // 先停插件工作线程：窗口销毁后它投递的消息只会静默失败，
+    // 且线程仍可能在读写缓存文件，有序退出更干净。
     pluginController_.shutdown();
     if (hotkey_.isRegistered()) {
         hotkey_.unregister();
     }
     gestureHotkey_.uninstall();
     tray_.destroy();
-    // 正常退出路径（托盘菜单退出）已经在 runMessageLoop 之后 shutdown
-    // 过日志；这里兜底覆盖调试开关的提前返回路径。
+    // 兜底覆盖调试开关的提前返回路径（正常退出已在 runMessageLoop 之后
+    // shutdown 过日志）。
     if (loggingReady_) {
         infrastructure::applog::shutdown();
         loggingReady_ = false;
     }
 }
 
-// ================================================================ 启动流程
+// --- 启动流程
 
 int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     instance_ = instance;
 
-    // 单实例检查：已有实例则激活它并退出。
-    //
-    // 所有自动化/调试开关都会跳过该检查 —— 验证脚本必须能在
-    // 「桌面上还挂着一个旧实例」的情况下照常启动自己那一份
-    // （否则自动化会因为拿不到实例权而静默退出，测试全线失败）。
-    // 正常的用户启动路径（无任何调试开关）行为不变。
+    // 单实例检查：已有实例则激活它并退出。所有自动化/调试开关都跳过
+    // 该检查，验证脚本要能在「桌面上还挂着旧实例」时照常启动自己那一份；
+    // 正常用户路径行为不变。
     const bool automationMode = debug.any();
 
     if (!automationMode &&
         !singleInstance_.tryAcquire(std::wstring(kSingleInstanceMutexName))) {
-        // 让已有实例唤出面板。
-        //
-        // 走消息窗口那条通路（消息内容与热键完全相同），不是直接
-        // ShowWindow —— 后者会让窗口「露」出来却仍以为自己隐藏着。
-        // 匹配标题必须用 applicationWindowTitle()（主窗口真实标题），
-        // 不能拿 kApplicationName（"KTile"）凑数 —— FindWindowW 是
-        // 精确匹配。这条通道在热键被别的程序占用时是唯一的救命
-        // 通道，必须真的能用。
+        // 让已有实例唤出面板：走消息窗口通路（消息内容与热键完全相同），
+        // 不能直接 ShowWindow，否则窗口露出来却仍以为自己在隐藏。
+        // 标题必须用 applicationWindowTitle()（主窗口真实标题）精确匹配，
+        // 不能拿 kApplicationName 凑数。热键被别的程序占用时这是唯一通道。
         platform::win32::SingleInstance::activateExistingInstance(
             std::wstring(kMessageWindowClassName),
             std::wstring(applicationWindowTitle()), WM_HOTKEY,
@@ -484,9 +456,9 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
 
     // 扫描 slugin/ 下的按应用轮盘插件。
     //
-    // 刻意放在日志就绪之后而不是 initializeConfig 里：插件写坏时的告警和
-    // 「加载 X / Y 个」是用户排查插件问题的唯一线索，而 initializeConfig
-    // 阶段日志还没有落盘的地方，写进去等于扔掉。
+    // 刻意放在日志就绪之后而不是 initializeConfig 里：插件写坏时的
+    // 告警是用户排查插件问题的唯一线索，initializeConfig 阶段日志
+    // 还没有可落盘的地方。
     loadRadialPlugins();
 
     if (!initializeWindow()) {
@@ -499,15 +471,10 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         return 1;
     }
 
-    // ---- 自动化：走一次「拖入添加」----
-    //
-    // 放在截图模式之前：debugShot 与 debugAdd 可以同时给，
-    // 这样导出的截图里就能看到「刚加进来的磁贴」。
-    // 注意 addPaths 为空的**普通拖放**不从这里进来 ——
-    // 真实拖放由 OLE 回调驱动（见 initializeWindow 里的 setDropHandler）。
-    //
-    // --debug-drop=x,y 给出「松手位置」（客户区坐标）时，新磁贴就落在
-    // 那一格上，与真实拖放完全同一条下游。
+    // ---- 自动化：走一次「拖入添加」，放在截图模式之前，导出的截图里
+    // 能看到刚加进来的磁贴。普通拖放不从这里进来（走 OLE 回调）；
+    // --debug-drop=x,y 给出松手位置时新磁贴落在那一格，与真实拖放
+    // 完全同一条下游。
     std::optional<POINTL> debugDropPoint;
     if (launcherWindow_ != nullptr && debug.dropX >= 0 && debug.dropY >= 0) {
         POINT point{debug.dropX, debug.dropY};
@@ -529,18 +496,14 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         }
         addDroppedSources(std::move(sources), debugDropPoint);
     }
-    // 只给 --debug-drop 时（不配合 --debug-add）把落点预览点亮，
-    // 供截图记录「拖入悬停」那一刻的视觉。
+    // 只给 --debug-drop 时不配合 --debug-add，点亮落点预览供截图。
     if (debugDropPoint.has_value() && debug.addPaths.empty() &&
         launcherWindow_ != nullptr) {
         launcherWindow_->debugSetFileDropPreview(debug.dropX, debug.dropY);
     }
 
-    // ---- 调试：主窗口整体不透明度 ----
-    //
-    // 必须放在窗口创建之后（setWindowOpacityPercent 要改窗口 ex style）、
-    // 截图导出之前（导出的离屏图看不出分层合成效果，验证要用真实窗口
-    // 的屏幕截图）。
+    // ---- 调试：主窗口不透明度。放在窗口创建之后（要改 ex style）、
+    // 截图导出之前（离屏图看不出分层合成效果，须用真实窗口截图）。
     if (debug.opacityPercent > 0 && launcherWindow_ != nullptr) {
         launcherWindow_->setWindowOpacityPercent(debug.opacityPercent);
     }
@@ -590,10 +553,8 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         launcherWindow_->debugSetDrag(debug.dragSrcX, debug.dragSrcY,
                                       debug.dragDstX, debug.dragDstY);
 
-        // 插件数据是异步刷新的；不在这里等一次，截图里永远只有
-        // 「暂无数据」占位，无法验证插件布局。只影响调试截图路径。
-        // 注意 document_ 在 create() 时已被 move 进窗口，这里必须读窗口
-        // 当前的文档，否则拿到的是空表。
+        // 插件数据是异步刷新的，等一次否则截图里只有占位，无法验证布局。
+        // document_ 在 create() 时已被 move 进窗口，必须读窗口当前文档。
         const core::ItemsDocument& shotDocument = launcherWindow_->document();
         const std::size_t shotTab = launcherWindow_->activeTabIndex();
         if (shotTab < shotDocument.tabs.size()) {
@@ -616,21 +577,19 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
             }
         }
 
-        // 调试截图会直接 return，不经过正常退出流程；日志缓冲若不在这里
-        // 刷一次，插件刷新失败信息会随进程结束一起丢掉。
+        // 调试截图直接 return 不经过正常退出流程，先刷日志，
+        // 否则插件刷新失败信息会随进程结束一起丢掉。
         infrastructure::applog::flush();
         return launcherWindow_->debugExportPng(L"debug-shot.png") ? 0 : 3;
     }
 
-    // ---- 调试编辑项目对话框 ----
-    //
-    // 打开第一个磁贴的编辑对话框并继续跑主循环 —— 供自动化验证
-    // 「对话框打开期间主窗口保持可见」「保存落盘」「取消不落盘」。
+    // ---- 调试编辑项目对话框：打开第一个磁贴的编辑对话框并继续跑
+    // 主循环，供自动化验证对话框打开、保存落盘、取消不落盘。
     if (debug.editor && launcherWindow_ != nullptr &&
         launcherWindow_->tabCount() > 0 && !document_.tabs.empty()) {
         launcherWindow_->show();
-        // 取**当前页**的第一项：多标签页下「第 0 页的第 0 项」未必是
-        // 用户眼前那块磁贴，拿错了会拍出一张对不上的截图。
+        // 取当前页的第一项：多标签页下第 0 页的第 0 项未必是用户
+        // 眼前那块磁贴。
         const std::size_t activeTab = launcherWindow_->activeTabIndex();
         const auto& items =
             document_.tabs[activeTab < document_.tabs.size() ? activeTab : 0]
@@ -640,10 +599,8 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         }
     }
 
-    // ---- 调试「添加新项目」对话框 ----
-    //
-    // 与上面的差异只在对话框模式（标题「添加项目」、按钮「添加」），
-    // 供自动化拍下新建态的界面并验证「回车即添加」。
+    // ---- 调试「添加新项目」对话框：与上面差异只在对话框模式
+    //（标题「添加项目」、按钮「添加」），验证「回车即添加」。
     if (debug.newItem && launcherWindow_ != nullptr) {
         launcherWindow_->show();
         applyItemAdd(launcherWindow_->hwnd(), std::wstring());
@@ -658,20 +615,15 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     }
 
     // 定时器挂在托盘的消息窗口上：窗口建好之前 show() 的入口（如
-    // --debug-editor 先显示面板再开对话框）不会生效，这里补一次。
-    // 正常流程面板此时隐藏，调用是无害的空操作。
+    // --debug-editor 先显示面板再开对话框）不生效，这里补一次。
     updatePluginVisibleTimer();
 
     // ---- 调试设置窗口 ----
     //
-    // debug.settingsKeepAlive = false：打开设置后立刻退出（只验证控件是否建成）
-    // debug.settingsKeepAlive = true ：打开设置后继续跑主循环，
-    //                                用于验证「点确定不影响主循环」（问题3）
-    //
-    // 放在托盘（消息窗口）之后：设置里的「唤醒快捷键」会即时热替换，
-    // 需要 messageWindow_ 已存在。注意**不能**连同 initializeHotkey 一起
-    // 提前 —— 自动化跑在用户真实配置下（本机 Alt+Space 被 CLaunch 占着），
-    // 启动注册失败的警告框会把调试入口整个堵死。
+    // keepAlive = false 打开设置后立刻退出（只验证控件建成）；
+    // true 继续跑主循环。放在托盘（消息窗口）之后：设置里的唤醒快捷键
+    // 会即时热替换，需要 messageWindow_ 已存在；不能连同 initializeHotkey
+    // 一起提前，自动化跑在用户真实配置下，注册失败警告框会堵死调试入口。
     if (debug.settings || debug.settingsKeepAlive) {
         openSettings();
         if (!debug.settingsKeepAlive) {
@@ -679,10 +631,8 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         }
     }
 
-    // ---- 调试「轮盘菜单设置」对话框 ----
-    //
-    // 这个对话框平时藏在 设置 → 轮盘 → 「编辑扇区动作…」后面，自动化
-    // 要拍它的版面得先切页再点按钮，很容易点到别处。直接给个入口。
+    // ---- 调试「轮盘菜单设置」对话框：平时藏在设置 → 轮盘 →
+    // 「编辑扇区动作…」后面，自动化拍版面得先切页再点按钮，给个直达入口。
     if (debug.radialEditor) {
         ui::showRadialEditorWindow(
             launcherWindow_ != nullptr ? launcherWindow_->hwnd() : nullptr,
@@ -690,21 +640,15 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         return 0;
     }
 
-    // ---- 调试「关于」对话框 ----
-    //
-    // 打开后立刻退出：自动化只验证控件建成与文案齐全
-    // （EnumChildWindows 断言），不需要人看。
+    // ---- 调试「关于」对话框：打开即退出，自动化只断言控件建成与文案。
     if (debug.about) {
         openAbout();
         return 0;
     }
 
     if (!initializeHotkey()) {
-        // 把「具体是哪个键、被谁占了、去哪儿改」说清楚。
-        // 以前只说「可能被其他程序占用」，用户根本不知道该动哪里 ——
-        // 本机 Alt+Space 常年被 CLaunch 占着，这条提示是唯一线索。
-        // 具体错误（被谁占了）放在正文里，处置建议在语言文件里：
-        // 两段分开，翻译时不用把动态内容塞进句子里。
+    // 把「具体是哪个键、被谁占了、去哪儿改」说清楚。错误详情与处置建议
+    // 分开放（正文/语言文件），翻译时不用把动态内容塞进句子里。
         std::wstring message = infrastructure::i18n::formatW(
             "app.error.hotkeyRegister",
             {platform::win32::formatHotkey(config_.activation.hotkey)});
@@ -728,23 +672,17 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
     }
 
     // 启动期的工作集裁剪由 LauncherWindow 的延迟定时器负责
-    //（kStartupTrimTimerId）：初始化之后的首次渲染会把页换回来，
-    // 太早裁是白裁。
+    //（kStartupTrimTimerId）：初始化后的首次渲染会把页换回来，太早裁是白裁。
 
-    // 日志落盘（2s）与手势钩子看门狗（60s）。
-    // 定时器挂在消息窗口上：主窗口隐藏期间消息循环照常泵送。
+    // 日志落盘（2s）与手势钩子看门狗（60s）挂在消息窗口上：
+    // 主窗口隐藏期间消息循环照常泵送。
     SetTimer(messageWindow_, kLogFlushTimerId, kLogFlushIntervalMs, nullptr);
     SetTimer(messageWindow_, kHookWatchdogTimerId, kHookWatchdogIntervalMs,
              nullptr);
 
-    // ---- 跟随启动 ----
-    //
-    // 放在消息循环之前、所有初始化之后：此时窗口、托盘、热键都已就绪，
-    // 拉起外部程序不会拖慢自己的启动流程（ShellExecuteW 只负责把进程
-    // 交出去）。
-    //
-    // 自动化 / 调试开关下不执行：那些入口会被反复启动几十次，顺手把
-    // 用户的一堆程序拉起来既没意义，还会干扰截图与断言。
+    // 跟随启动放在消息循环之前、所有初始化之后：窗口、托盘、热键就绪，
+    // 拉起外部程序不会拖慢自己的启动流程。自动化/调试开关下不执行，
+    // 避免反复启动几十次干扰截图与断言。
     if (!automationMode) {
         launchFollowStartupItems();
     }
@@ -817,12 +755,9 @@ void Application::onMessageTimer(const UINT_PTR timerId) {
     }
 }
 
-// 轮盘可见期间的兜底：触发键已经松开就强制收起。
-//
-// 为什么需要它：WH_MOUSE_LL 的回调会被系统静默跳过（回调超时，没有任何
-// 通知 —— 与 1.1.0 修「单按 Win 偶发没反应」同一个根因）。一旦「抬起」
-// 事件丢了，轮盘窗口没有焦点、没有 Esc 通道，就会一直挂在屏幕最上层，
-// 用户只能杀进程。这里用物理键状态对账，代价是一次 GetAsyncKeyState。
+// 轮盘可见期间的兜底：触发键已经松开就强制收起。低级钩子回调会被系统
+// 静默跳过（回调超时，无任何通知），「抬起」事件一旦丢失，无焦点无
+// Esc 通道的轮盘窗口只能靠这里对账收掉，代价是一次 GetAsyncKeyState。
 void Application::onRadialWatchdog() {
     if (messageWindow_ == nullptr || !radialWindow_ ||
         !radialWindow_->isVisible()) {
@@ -838,10 +773,9 @@ void Application::onRadialWatchdog() {
         return;
     }
 
-    // 判据二：两侧状态不一致 —— 窗口还亮着，钩子却已回到 Idle。
-    // 说明抬起事件钩子处理过了、但 kRadialReleaseMessage 没送到这里
-    // （PostMessage 失败、消息窗口重建等）。连续观察到两次才收，避免和
-    // 正常路径上的抬起消息抢跑（那种情况下窗口会先被 release 收掉）。
+    // 判据二：两侧状态不一致，窗口还亮着、钩子却已回 Idle，说明抬起
+    // 事件没送到（PostMessage 失败、消息窗口重建等）。连续两次才收，
+    // 避免和正常路径上的抬起消息抢跑。
     if (!radialHook_.isGestureActive()) {
         if (++radialWatchdogMismatchTicks_ >= kRadialMismatchTicksToHide) {
             infrastructure::applog::warn("轮盘菜单：手势已结束但窗口未收，强制收起");
@@ -851,13 +785,9 @@ void Application::onRadialWatchdog() {
     }
     radialWatchdogMismatchTicks_ = 0;
 
-    // 判据三：可见时长上限。
-    //
-    // 这里**不能**去问「触发键还按着吗」：手势开始时我们吞掉了按下事件，
-    // GetAsyncKeyState 的鼠标键状态要等事件进入目标队列才更新，被吞掉的
-    // 那次按下它永远看不到 —— 整个拖动期间它都回答「已松开」。1.2.0 的
-    // 第一版兜底就是这么写的，结果每 120ms 判一次「松开了」，轮盘刚出现
-    // 就被收掉，用户根本来不及选。
+    // 判据三：可见时长上限。不能去问 GetAsyncKeyState「触发键还按着吗」：
+    // 手势开始时按下事件被吞掉，它要等事件进入目标队列才更新，整个拖动
+    // 期间都回答「已松开」，按它判断轮盘刚出现就会被收掉。
     const ULONGLONG now = GetTickCount64();
     if (radialShownTick_ != 0 && now - radialShownTick_ >= kRadialMaxVisibleMs) {
         infrastructure::applog::warn("轮盘菜单：停留超过 10 秒，强制收起");
@@ -930,8 +860,8 @@ void Application::onHookWatchdog() {
         return;
     }
 
-    // 轮盘钩子先检查：它和手势钩子是两条独立的钩子链，一边挂了不影响
-    // 另一边，所以不能因为「没配手势」就整段跳过。
+    // 轮盘钩子先检查：它和手势钩子是两条独立的钩子链，
+    // 不能因为「没配手势」就整段跳过。
     if (radialConfig_.trigger.enabled) {
         const bool menuVisible = radialWindow_ && radialWindow_->isVisible();
         if (!radialHook_.isInstalled()) {
@@ -953,8 +883,8 @@ void Application::onHookWatchdog() {
         reinstallGestureHotkey("看门狗（钩子丢失）");
         return;
     }
-    // 系统会静默跳过超时的钩子回调（没有通知），定期重装抢回钩子链
-    // 顺序。手势做到一半时不装：重装会重置状态机，等它做完。
+    // 系统静默跳过超时钩子且无通知，定期重装抢回钩子链顺序。
+    // 手势进行中不装：重装会重置状态机。
     const ULONGLONG elapsed =
         GetTickCount64() - lastGestureInstallTick_;
     if (elapsed >= kForceReinstallIntervalMs && !gestureHotkey_.isMidGesture()) {
@@ -966,8 +896,8 @@ void Application::reinstallRadialHook(const char* reason) {
     if (!radialConfig_.trigger.enabled || messageWindow_ == nullptr) {
         return;
     }
-    // 轮盘正显示时别动钩子：install 内部先 uninstall，状态机会被重置，
-    // 用户手里正按着的那次拖动就断了。等下一次看门狗或事件再收尾。
+    // 轮盘显示期间不动钩子：install 内部先 uninstall，会重置状态机，
+    // 截断用户手里正按着的那次拖动。等下一次看门狗或事件再收尾。
     if (radialWindow_ && radialWindow_->isVisible()) {
         return;
     }
@@ -995,9 +925,8 @@ bool Application::initializeConfig() {
         return false;
     }
 
-    // 告诉图标仓库「自定义图标存在哪」。
-    // 必须在加载磁贴之前完成 —— item.icon 里存的是相对 data 的路径
-    // （"res\xx.png"），解析依赖这个根目录。
+    // 告诉图标仓库「自定义图标存在哪」，必须在加载磁贴之前完成：
+    // item.icon 里存相对 data 的路径（"res\xx.png"），解析依赖这个根目录。
     platform::win32::setIconStoreRoot(paths_.dataDirectory());
 
     // 皮肤根目录 + 首次运行生成内置预置（已存在的不覆盖）
@@ -1009,11 +938,9 @@ bool Application::initializeConfig() {
         store_.loadConfig(paths_.configFilePath());
     config_ = configResult.value;
 
-    // 界面语言：必须赶在「第一个窗口 / 第一段文案」之前定下来。
-    // 窗口标题、托盘菜单、示例磁贴的默认名字都是创建时取词的，
-    // 晚一步就会留下一半中文一半英文。
-    // 日志此时还没初始化（initializeLogging 在 run 里更晚），
-    // 所以这里只落「生效语言」这个状态，日志在 initializeLogging 里补。
+    // 界面语言必须赶在第一个窗口/第一段文案之前定下，否则窗口标题、
+    // 托盘菜单、示例磁贴名字一半中文一半英文。日志此时还没初始化，
+    // 只落「生效语言」状态，日志在 initializeLogging 里补。
     effectiveLanguage_ = infrastructure::i18n::initialize(
         paths_.langDirectory(), config_.language);
 
@@ -1086,9 +1013,8 @@ void Application::seedSampleDocument() {
         tab.items.push_back(std::move(item));
     }
 
-    // 第二个示例页：让「多标签页」这件事在首次运行时就被看见 ——
-    // 只给一页的话，用户不会知道面板支持分标。
-    // 注意 id 必须全文档唯一（core::addItem 的规则），所以这里另起一组。
+    // 第二个示例页：让「多标签页」首次运行时就被看见。
+    // id 必须全文档唯一（core::addItem 的规则），另起一组。
     const std::size_t toolsIndex = core::addTab(document, U("app.firstRun.tabTools"));
     const SampleItem toolSamples[] = {
         {"t1", U("app.firstRun.regedit").c_str(), "C:\\Windows\\regedit.exe",
@@ -1124,7 +1050,7 @@ void Application::persistConfig() {
     (void)store_.saveConfig(paths_.configFilePath(), config_);
 }
 
-// ---------------------------------------------------------------- 跟随启动
+// --- 跟随启动
 
 const core::LaunchItem* Application::findItemById(
     const std::string& itemId) const {
@@ -1183,9 +1109,8 @@ void Application::toggleFollowStartup(const core::LaunchItem& item) {
         return;
     }
 
-    // 快照：磁贴被删之后靠它继续能启动。参数、工作目录、管理员权限
-    // 一并带走 —— 「从磁贴加入」在用户看来就是「按这个磁贴的方式启动」，
-    // 少一样都会变成另一种运行结果。
+    // 快照：磁贴被删之后靠它继续启动。参数、工作目录、管理员权限一并
+    // 带走，少一样就是另一种运行结果。
     core::FollowLaunchEntry entry;
     entry.itemId = item.id;
     entry.name = label;
@@ -1210,9 +1135,8 @@ bool Application::syncFollowLaunchWithTiles() {
         }
         const core::LaunchItem* tile = findItemById(entry.itemId);
         if (tile == nullptr) {
-            // 磁贴已被删除：条目保留，快照不动。删磁贴是「不想在面板上
-            // 看到它」，不等于「不要开机启动」，这里静默清掉会让用户
-            // 下次开机少一个程序却找不到原因。
+            // 磁贴已被删除：条目保留、快照不动。删磁贴不等于不要开机
+            // 启动，静默清掉会让用户下次开机少一个程序却找不到原因。
             continue;
         }
         const std::string name = tile->name.empty() ? tile->target : tile->name;
@@ -1242,8 +1166,8 @@ void Application::launchFollowStartupItems() {
                                  " 项待处理");
 
     for (const core::FollowLaunchEntry& entry : entries) {
-        // 两种来源在这里合流：从磁贴来的先按 id 取磁贴当前值，取不到
-        // （磁贴已删）或本来就不是磁贴条目，就用快照。后面只剩一条路径。
+        // 两种来源在此合流：磁贴条目按 id 取当前值，取不到（磁贴已删）
+        // 或手动条目用快照，后面只剩一条路径。
         core::LaunchItem item;
         bool fromLiveTile = false;
         if (entry.fromTile()) {
@@ -1264,9 +1188,8 @@ void Application::launchFollowStartupItems() {
 
         const std::string label = item.name.empty() ? item.target : item.name;
 
-        // 只有可执行目标才谈得上「启动后常驻」。网址、文件夹开机自动
-        // 弹出来是骚扰，插件磁贴没有可执行文件 —— 右键菜单里已经禁用，
-        // 这里再挡一次（用户可能添加之后又改了磁贴类型）。
+        // 只有可执行目标才谈得上「启动后常驻」。插件磁贴没有可执行文件，
+        // 右键菜单已禁用，这里再挡一次（用户添加后可能改了磁贴类型）。
         if (item.type != core::ItemType::Application) {
             infrastructure::applog::warn("跟随启动：跳过 " + label +
                                          "（不是可执行程序）");
@@ -1280,17 +1203,16 @@ void Application::launchFollowStartupItems() {
             continue;
         }
 
-        // 已经在运行就不重复启动。开机那一会儿这些程序常常已经被系统
-        // 或用户自己拉起来过，再开一次等于托盘里出现两份。
+        // 已在运行就不重复启动：开机时这些程序常已被系统或用户拉起过，
+        // 再开一次托盘里会出现两份。
         if (platform::win32::isProgramRunning(target)) {
             infrastructure::applog::info("跟随启动：跳过 " + label +
                                          "（已在运行）");
             continue;
         }
 
-        // 交给 launchItem 的 target 换成解析后的绝对路径：相对路径它自己
-        // 也会解析，结果一样，但失败提示里就不会出现一个看不出落在哪儿
-        // 的相对路径。
+        // 交给 launchItem 的 target 换成解析后的绝对路径：它自己也会解析
+        // 同样的结果，但失败提示里不会出现看不出落点的相对路径。
         item.target = base::wideToUtf8Lossy(target);
 
         const platform::win32::LaunchResult result =
@@ -1317,17 +1239,16 @@ void Application::loadRadialConfig() {
 }
 
 void Application::loadRadialPlugins() {
-    // 与磁贴插件同样的落点策略：便携模式下跟随 exe，否则跟随 data 目录，
-    // 保证「整个目录可搬移」的约定不被破坏。
+    // 落点策略与磁贴插件一致：便携模式跟随 exe，否则跟随 data 目录，
+    // 保持「整个目录可搬移」的约定。
     const std::wstring root =
         paths_.isPortable() ? paths_.executableDirectory() + L"\\slugin"
                             : paths_.dataDirectory() + L"\\slugin";
     radialPluginStore_.discover(root);
 
-    // 重扫会清空并重建插件列表，而 activeRadialMenu_ 正指着其中某个
-    // plugin->menu —— 此时若轮盘还亮着，那个指针就成了野指针（选择动作时
-    // 会读到已释放的内存）。正常路径上「打开设置」本身就意味着拖动早已结束，
-    // 这里只是把「理论上不可能」变成「一定安全」。
+    // 重扫清空并重建插件列表，而 activeRadialMenu_ 正指着其中某个
+    // plugin->menu；轮盘还亮着时指针悬空（选择动作会读到已释放内存），
+    // 正常路径「打开设置」意味着拖动早已结束，这里把理论上不可能变成一定安全。
     if (radialWindow_ && radialWindow_->isVisible()) {
         hideRadialMenu();
     }
@@ -1375,16 +1296,13 @@ void Application::persistRadialConfig() {
     (void)radialStore_.save(path, radialConfig_);
 }
 
-// ================================================================ 轮盘菜单
+// --- 轮盘菜单
 
 void Application::onRadialShow(POINT startPoint) {
     const ULONGLONG showStartTick = GetTickCount64();
-    // 黑名单在钩子按下时就已经拦掉了，这里不再判 —— 能走到这一步说明
-    // 前台进程没被拉黑（或者黑名单里没有它）。
-    //
-    // 匹配顺序：slugin 插件 → 用户配置的通用轮盘。
-    // 插件优先是有意的：插件是「这个应用该有哪些动作」的专门答案，通用轮盘
-    // 是「所有应用都能凑合用」的兜底。反过来的话插件永远轮不到。
+    // 黑名单在钩子按下时已拦掉，这里不再判。匹配顺序：slugin 插件 →
+    // 用户配置的通用轮盘。插件优先是有意的：插件是「这个应用该有哪些
+    // 动作」的专门答案，通用轮盘是兜底，反过来插件永远轮不到。
     const core::RadialMenu* menu = &radialConfig_.menu;
     {
         const std::wstring process = platform::win32::foregroundProcessName();
@@ -1421,8 +1339,8 @@ void Application::onRadialShow(POINT startPoint) {
     }
     radialWindow_->show(*menu, startPoint,
                         static_cast<int>(radialConfig_.trigger.cancelRadiusPx));
-    // 告诉钩子「窗口真的亮了」。两者是两套状态，抬起事件丢失时会分家，
-    // 钩子要靠这个才能判断「该收还是不收」（见 radial_mouse_hook.h）。
+    // 告诉钩子窗口真的亮了。钩子与窗口是两套状态，抬起事件丢失时会
+    // 分家，钩子靠这个判断「该收还是不收」（见 radial_mouse_hook.h）。
     radialHook_.setWheelVisible(true);
     radialShownTick_ = GetTickCount64();
     radialWatchdogMismatchTicks_ = 0;
@@ -1432,9 +1350,9 @@ void Application::onRadialShow(POINT startPoint) {
                  kRadialWatchdogIntervalMs, nullptr);
     }
 
-    // 显示这一段是**在装钩子的线程上**同步跑的（本窗口的消息循环），跑太久
-    // 会让系统跳过这期间的钩子回调 —— 抬起事件就是这么丢的。超过半秒就
-    // 留一条记录，下次再出现「松开右键轮盘还在」时可以直接对上号。
+    // 显示这一段跑在装钩子的线程上，太久会让系统跳过这期间的钩子回调
+    //（抬起事件就是这么丢的）。超过半秒留记录，出现「松开右键轮盘还在」
+    // 时可直接对号。
     const ULONGLONG elapsed = GetTickCount64() - showStartTick;
     if (elapsed >= 500) {
         infrastructure::applog::warn(
@@ -1460,29 +1378,20 @@ void Application::onRadialRelease(POINT currentPoint) {
         radialHook_.setWheelVisible(false);
         return;
     }
-    // 窗口自行判定扇区并触发动作，然后隐藏。
-    //
-    // 这里**不再补发原生右键**。以前的做法是「全程没碰任何扇区、又在中心
-    // 空档松手」就当作手抖的单击，把点击还给前台 —— 结果是用户明明看到轮盘
-    // 弹出来、想取消，桌面上却跟着冒出一个上下文菜单，而且松手位置不同就
-    // 时有时无。既然轮盘亮过，这一次按下的结果就交给轮盘：选中就执行，
-    // 没选中就是取消。真的只想点右键（压根没拖动、没唤出轮盘）的那一次，
-    // 在钩子层（未超激活阈值）就已经补发了，跟这里无关。
+    // 窗口自行判定扇区并触发动作，然后隐藏。这里不再补发原生右键：
+    // 以前「没碰扇区、中心空档松手」当作手抖单击还给前台，结果是用户
+    // 明明想取消，桌面却跟着冒出上下文菜单，且松手位置不同就时有时无。
+    // 轮盘亮过之后这次按下的结果就交给轮盘；真想点右键的那一次
+    //（压根没拖动、没唤出轮盘）在钩子层（未超激活阈值）就已补发。
     radialWindow_->releaseAt(currentPoint);
     activeRadialMenu_ = nullptr;
     radialHook_.setWheelVisible(false);
 }
 
-// 钩子报「这次手势作废」。
-//
-// 触发场景都不是用户操作失误，而是**抬起事件没走到钩子里**（系统会静默
-// 跳过超时的低级钩子回调，我们的回调就跑在装钩子的 UI 线程上）。这件事
-// 平时完全静默：状态机停在 Shown/Tracking，轮盘要么赖在屏幕上跟着鼠标
-// 高亮，要么在几百毫秒后某次小移动里突然弹出来。这里把它收掉，并且记一条
-// 日志 —— 这条日志是唯一能证明「不是用户手抖」的证据。
-//
-// 注意：**不执行任何扇区动作**。用户已经把这次手势作废了，再补一次快捷键
-// 等于凭空多按了一下。
+// 钩子报「这次手势作废」。触发原因不是用户操作失误，而是抬起事件没走到
+// 钩子里（系统静默跳过超时的低级钩子回调），表现为轮盘赖在屏幕上跟着
+// 鼠标高亮或突然弹出。收掉并记日志，这是唯一能证明「不是用户手抖」的证据。
+// 不执行任何扇区动作：再补一次快捷键等于凭空多按了一下。
 void Application::onRadialAbort(int reason) {
     const char* why = "未知";
     switch (static_cast<platform::win32::RadialAbortReason>(reason)) {
@@ -1547,8 +1456,8 @@ bool Application::initializeWindow() {
     // 应用网格配置
     launcherWindow_->setGridSize(config_.appearance.gridColumns,
                                  config_.appearance.gridRows);
-    // setGridSize 只改成员，几何必须显式重算——否则窗口仍按默认
-    // 8x6 造，配置成更小网格的用户会看到大片空白（实测踩过）。
+    // setGridSize 只改成员，几何必须显式重算，否则窗口仍按默认 8x6 造，
+    // 配置成更小网格的用户会看到大片空白。
     launcherWindow_->recomputeLayout();
     launcherWindow_->applyGridGeometry();
 
@@ -1569,7 +1478,7 @@ bool Application::initializeWindow() {
                                            config_.appearance.lastWindowY,
                                            config_.appearance.lastWindowPositionValid);
     // 用户拖动标题带后记住坐标（下次「上一次的位置」用）。
-    // 只有拖动会触发 —— 程序按策略摆窗口不写盘，避免自己污染记录。
+    // 只有拖动会写盘，程序按策略摆窗口不记，避免自己污染记录。
     launcherWindow_->setWindowMovedHandler(
         [this](const int x, const int y) {
             if (config_.appearance.lastWindowX == x &&
@@ -1586,9 +1495,8 @@ bool Application::initializeWindow() {
     // 应用皮肤与背景图（背景位图在渲染目标就绪后自动建立）
     applyThemeFromConfig();
 
-    // 不透明度。必须在 applyThemeFromConfig 之后：磁贴背景的「跟随皮肤」
-    // 要读皮肤里的 tileFill，皮肤还没套上时算出来的是旧值。
-    // 整窗透明度在窗口创建后即可设置（不需要等渲染目标）。
+    // 不透明度必须在 applyThemeFromConfig 之后：磁贴背景的「跟随皮肤」
+    // 要读皮肤里的 tileFill，皮肤没套上时算出来的是旧值。
     launcherWindow_->setWindowOpacityPercent(
         static_cast<int>(config_.appearance.windowOpacityPercent));
     launcherWindow_->setTileOpacityPercent(
@@ -1597,8 +1505,8 @@ bool Application::initializeWindow() {
     launcherWindow_->setDefaultTileColor(config_.appearance.defaultTileColor);
 
     // ---- 回调：启动项目 ----
-    // 真实启动逻辑：普通权限按项目自身的管理员设置决定是否提权；
-    // 成功后隐藏窗口（启动器的标准行为），失败弹错并保持窗口可见。
+    // 普通权限按项目自身的管理员设置决定是否提权；成功后隐藏窗口
+    //（启动器「唤出 → 启动 → 消失」的标准行为），失败弹错并保持可见。
     launcherWindow_->setLaunchHandler([this](const core::LaunchItem& item) {
         launchItem(item, false);
     });
@@ -1627,9 +1535,8 @@ bool Application::initializeWindow() {
     });
 
     // ---- 回调：活动标签页变更 ----
-    // 「上次在哪一页」也是用户偏好，立刻落盘 —— 面板是随时唤出随时用的
-    // 东西，进程被结束（关机、任务管理器）时不会有从容的退出时机，
-    // 攒到退出再写多半就丢了。
+    // 「上次在哪一页」也是用户偏好，立刻落盘：面板随时唤出随时用，
+    // 进程被结束（关机、任务管理器）时不会有从容的退出时机。
     launcherWindow_->setActiveTabChangedHandler([this](const std::size_t tabIndex) {
         if (!launcherWindow_) {
             return;
@@ -1637,8 +1544,8 @@ bool Application::initializeWindow() {
         config_.appearance.activeTabId = launcherWindow_->activeTabId();
         persistConfig();
 
-        // 面板开着时切页：新页的插件磁贴同样需要懒加载刷新。
-        // 面板隐藏时的切页（例如设置窗口改默认页）不触发，避免无谓开销。
+        // 面板开着时切页才触发懒加载刷新；隐藏时的切页（如设置窗口
+        // 改默认页）不触发，避免无谓开销。
         if (launcherWindow_->isVisible()) {
             const core::ItemsDocument& document = launcherWindow_->document();
             if (tabIndex < document.tabs.size()) {
@@ -1658,11 +1565,11 @@ bool Application::initializeWindow() {
         });
 
     // ---- 回调：空白区右键 → 设置 ----
-    // 托盘之外的第二个设置入口（托盘图标可能被收进溢出区）。
+    // 托盘之外的第二个入口（托盘图标可能被收进溢出区）。
     launcherWindow_->setSettingsHandler([this]() { openSettings(); });
 
     // ---- 回调：空白区右键 → 关于 ----
-    // 与设置同理由：托盘图标可能被收进溢出区，主窗口给个直达入口。
+    // 理由同上。
     launcherWindow_->setAboutHandler([this]() { openAbout(); });
 
     // ---- 回调：空白区右键 → 添加新项目 ----
@@ -1674,10 +1581,9 @@ bool Application::initializeWindow() {
 
     // ---- 插件系统 ----
     //
-    // 初始化放在窗口建好之后：刷新完成的回投需要一个已存在的窗口句柄。
-    // 数据目录与 icon_store/themes 用的是同一个根（便携路径）。
-    // 插件目录放在 exe 同级（便携模式）；exe 目录不可写时跟随 data 目录，
-    // 保证「整个目录可搬移」的约定不被破坏。
+    // 初始化放在窗口建好之后：刷新完成的回投需要已存在的窗口句柄。
+    // 插件目录便携模式放 exe 同级，exe 目录不可写时跟随 data 目录，
+    // 保证「整个目录可搬移」。
     const std::wstring pluginDirectory =
         paths_.isPortable() ? paths_.executableDirectory() + L"\\plugin"
                             : paths_.dataDirectory() + L"\\plugin";
@@ -1723,14 +1629,11 @@ bool Application::initializeWindow() {
 
     // ---- 拖放接收：把文件/文件夹/链接拖到面板上即可添加 ----
     //
-    // 必须在窗口建好之后注册（RegisterDragDrop 要 HWND），
-    // 且进程已 OleInitialize（见 main.cpp）。
-    // 注册失败不致命：只是拖放这条入口不可用，其余功能照常 ——
-    // 因此这里不弹框打扰用户，静默降级。
-    //
-    // 注意：Windows 的 UIPI 不允许标准权限的拖拽来源（资源管理器、
-    // 浏览器）向**以管理员身份运行**的本进程投放拖放，那种情况下光标会
-    // 显示「禁止」符号。这不是程序缺陷，是以普通权限启动即可解决的环境问题。
+    // 必须在窗口建好之后注册（RegisterDragDrop 要 HWND），且进程已
+    // OleInitialize（见 main.cpp）。注册失败不致命，拖放入口不可用而已，
+    // 静默降级不弹框。Windows 的 UIPI 不允许标准权限的拖拽来源
+    //（资源管理器、浏览器）向以管理员身份运行的本进程投放拖放，光标
+    // 显示「禁止」，以普通权限启动即可解决。
     const bool dropRegistered = dropTarget_.registerForWindow(
         launcherWindow_->hwnd(),
         [this](std::vector<platform::win32::DroppedSource> sources,
@@ -1741,8 +1644,8 @@ bool Application::initializeWindow() {
             if (!launcherWindow_) {
                 return;
             }
-            // count == 0 表示这份拖拽数据里没有我们认识的东西（既非文件
-            // 也非链接）—— 画了落点框却什么都加不进去是假承诺，不画。
+            // count == 0 表示这份拖拽数据里没有认识的东西（既非文件
+            // 也非链接），画了落点框却什么都加不进去是假承诺，不画。
             launcherWindow_->setFileDropTarget(
                 entered && count > 0, config_.appearance.defaultTileSize,
                 point);
@@ -1758,7 +1661,7 @@ bool Application::initializeWindow() {
     return true;
 }
 
-// ================================================================ 磁贴右键菜单
+// --- 磁贴右键菜单
 
 void Application::handleItemContextMenu(const HWND owner,
                                         const std::size_t itemIndex,
@@ -1770,8 +1673,8 @@ void Application::handleItemContextMenu(const HWND owner,
     POINT cursor{};
     GetCursorPos(&cursor);
 
-    // 页面列表：供菜单里的「移动到其他页面」子菜单使用。
-    // 页名单向 UTF-16 转换一次即可（菜单里要显示中文页名）。
+    // 页面列表供「移动到其他页面」子菜单使用；页名转 UTF-16 一次
+    //（菜单要显示中文页名）。
     std::vector<std::wstring> tabNames;
     for (const core::Tab& tab : launcherWindow_->document().tabs) {
         tabNames.push_back(base::utf8ToWideLossy(tab.name));
@@ -1782,8 +1685,8 @@ void Application::handleItemContextMenu(const HWND owner,
         ui::showTileContextMenu(owner, cursor, item, tabNames, activeTab,
                                 isFollowingStartup(item.id));
 
-    // ---- 「移动到其他页面 / 复制到其他页面」：命令 ID = 各自基址 + 目标页下标。
-    // 两个区间必须显式判断边界 —— 只判 >= moveBase 会把复制段也吞进移动。
+    // 命令 ID = 各自基址 + 目标页下标。必须显式判断边界：
+    // 只判 >= moveBase 会把复制段也吞进移动。
     const auto moveBase = static_cast<std::size_t>(ui::TileMenuCommand::MoveToTabBase);
     const auto copyBase = static_cast<std::size_t>(ui::TileMenuCommand::CopyToTabBase);
     const auto commandId = static_cast<std::size_t>(command);
@@ -1820,7 +1723,7 @@ void Application::handleItemContextMenu(const HWND owner,
         }
 
         case ui::TileMenuCommand::ToggleFollowStartup:
-            // 勾选切换：加入或移除。都不启动 —— 语义是「下次 KTile 启动」。
+            // 勾选切换：加入或移除，都不启动，语义是「下次 KTile 启动」。
             toggleFollowStartup(item);
             break;
 
@@ -1870,7 +1773,7 @@ void Application::launchItem(const core::LaunchItem& item,
         return;
     }
 
-    // 插件磁贴没有可执行目标：点击 = 立即刷新（忽略 TTL），面板保持打开。
+    // 插件磁贴点击 = 立即刷新（忽略 TTL），面板保持打开；
     // 缓存里的旧数据在刷新期间继续显示，不会闪成空白。
     if (item.type == core::ItemType::Plugin) {
         pluginController_.requestRefresh(item, true);
@@ -1880,7 +1783,7 @@ void Application::launchItem(const core::LaunchItem& item,
     const platform::win32::LaunchResult result =
         platform::win32::launchItem(item, forceAdministrator);
     if (result.ok) {
-        // 启动成功即隐藏 —— 启动器是「唤出 → 启动 → 消失」的轻量工具
+        // 启动成功即隐藏：启动器是「唤出 → 启动 → 消失」的轻量工具
         launcherWindow_->hide();
         return;
     }
@@ -1896,8 +1799,8 @@ void Application::applyItemResize(const std::size_t itemIndex,
         return;
     }
 
-    // 直接改 UI 层持有的文档，再由它统一广播变更 —— 避免「app 与 ui 各存一份」
-    // 导致的状态分裂。
+    // 直接改 UI 层持有的文档再由它统一广播变更，
+    // 避免「app 与 ui 各存一份」的状态分裂。
     if (!launcherWindow_->setItemTileSize(itemIndex, newSize)) {
         return;  // 尺寸没变，不做任何事
     }
@@ -1912,8 +1815,8 @@ void Application::applyItemLabelMode(const std::size_t itemIndex,
         return;
     }
 
-    // 与改尺寸同一套路：改 UI 层持有的文档，再广播 + 落盘。
-    // 不同之处是这只影响标题画不画，磁贴位置保持不变。
+    // 与改尺寸同一套路：改 UI 层持有的文档再广播 + 落盘，
+    // 只影响标题画不画，磁贴位置不变。
     if (!launcherWindow_->setItemLabelMode(itemIndex, mode)) {
         return;
     }
@@ -1930,8 +1833,8 @@ void Application::applyItemMoveToTab(const std::size_t itemIndex,
 
     const std::size_t activeTab = launcherWindow_->activeTabIndex();
     core::ItemsDocument updated = launcherWindow_->document();
-    // 保留网格坐标：目标页里若有磁贴占着同一格，布局引擎会就近避让，
-    // 比「清掉坐标随便找个空位」更贴近用户的预期。
+    // 保留网格坐标：目标页冲突时布局引擎就近避让，
+    // 比清掉坐标随便找空位更贴用户预期。
     if (!core::moveItemToTab(updated, activeTab, itemIndex, targetTab)) {
         return;  // 同页 / 下标越界：什么都不做
     }
@@ -2012,8 +1915,8 @@ void Application::applyItemEdit(const HWND owner,
 
     // ---- 插件磁贴：给对话框一个「按真实磁贴效果渲染」的回调 ----
     //
-    // 插件磁贴没有目标图标，预览必须显示插件数据；这里把主窗口的渲染路径
-    // 包成回调，避免在编辑对话框里再实现一套（两套必然逐渐漂移）。
+    // 插件磁贴没有目标图标，预览包成回调走主窗口的渲染路径，
+    // 避免在编辑对话框里再实现一套（两套必然逐渐漂移）。
     ui::PluginPreviewRenderer pluginPreview;
     if (item.type == core::ItemType::Plugin) {
         const core::PluginView view = pluginController_.viewFor(item);
@@ -2025,7 +1928,7 @@ void Application::applyItemEdit(const HWND owner,
     }
 
     // ---- 弹对话框（期间主窗口保持可见：owner 关系保证点击判定）----
-    // 传全局「默认显示标题」是为了让预览能如实画出「跟随全局设置」那一档的样子
+    // 传全局「默认显示标题」让预览如实画出「跟随全局设置」那一档。
     ui::ItemEditorFields result;
     if (!ui::showItemEditorDialog(
             owner, tabNames, initial.tabIndex, initial,
@@ -2051,8 +1954,8 @@ void Application::applyItemEdit(const HWND owner,
     fields.tileSize = result.tileSize;
     fields.labelMode = result.labelMode;
     fields.iconScalePercent = result.iconScalePercent;
-    // 外层 optional = 「这次编辑要处理颜色」；内层空 = 清除自定义色。
-    // 对话框总是回填当前值，所以没动过时这里与 item.tileColor 相等，
+    // 外层 optional = 这次编辑要处理颜色；内层空 = 清除自定义色。
+    // 对话框总是回填当前值，没动过时与 item.tileColor 相等，
     // editItem 会判定为无变化。
     fields.tileColor = std::optional<std::optional<std::uint32_t>>(
         result.tileColor);
@@ -2064,17 +1967,16 @@ void Application::applyItemEdit(const HWND owner,
         return;  // 无实际变化（对话框已挡住空目标）
     }
 
-    // ---- 页面迁移：对话框里选了别的页就把磁贴搬过去 ----
-    // 保留网格坐标 —— 布局引擎遇到冲突会就近避让。
-    // 注意先编辑再搬移：搬移会改变 itemIndex 的语义。
+    // ---- 页面迁移：选了别的页就把磁贴搬过去，保留网格坐标（冲突时
+    // 就近避让）。先编辑再搬移，搬移会改变 itemIndex 的语义。
     if (result.tabIndex != activeTab) {
         (void)core::moveItemToTab(updated, activeTab, itemIndex,
                                   result.tabIndex);
     }
 
     launcherWindow_->setDocument(std::move(updated));
-    // 目标或图标可能刚被换掉，缓存里的旧位图必须作废，
-    // 否则磁贴还显示着上一张图标（缓存键只看 id，不看内容）
+    // 目标或图标可能刚被换掉，缓存键只看 id 不看内容，
+    // 旧位图必须作废，否则磁贴还显示上一张图标。
     launcherWindow_->invalidateIconCache();
     launcherWindow_->recomputeLayout();
     launcherWindow_->refresh();
@@ -2089,10 +1991,8 @@ void Application::applyItemAdd(const HWND owner,
         return;
     }
 
-    // ---- 对话框初值：新建态 ----
-    //
-    // 全空，只把「设置里指定的默认磁贴尺寸」带进去 —— 用户偏好过的东西
-    // 不该每次都要重选一遍。
+    // ---- 对话框初值：新建态。全空，只带设置里指定的默认磁贴尺寸，
+    // 用户偏好过的东西不必每次重选。
     ui::ItemEditorFields initial;
     initial.type = core::ItemType::Application;  // 目标推断失败时的兜底
     initial.target = initialTarget;
@@ -2125,9 +2025,8 @@ void Application::applyItemAdd(const HWND owner,
     core::LaunchItem item;
     item.id = platform::win32::createGuidString();
     item.type = result.type;  // 对话框已按目标推断并回填
-    // 名称留空 → 按目标取名。对话框上就是这么承诺的（
-    // 「名称留空时自动使用目标名称」），不能让它成为一句空话：
-    // 名字为空的磁贴在界面上是不画标题的，用户会以为这块磁贴坏了。
+    // 名称留空按目标取名，这是对话框「名称留空时自动使用目标名称」
+    // 承诺过的行为：名字为空的磁贴不画标题，用户会以为磁贴坏了。
     item.name = result.name.empty()
                     ? deriveItemName(result.target, result.type)
                     : base::wideToUtf8Lossy(result.name);
@@ -2153,8 +2052,8 @@ void Application::applyItemAdd(const HWND owner,
 
     std::size_t newIndex = 0;
     if (!core::addItem(updated, tabIndex, std::move(item), &newIndex)) {
-        // 对话框已经挡住了空目标，这里剩下的可能只有「id 撞车」这类
-        // 几乎不可能的事故 —— 仍要如实报告，不能静默吞掉。
+        // 对话框已挡住空目标，剩下的可能只有 id 撞车这类几乎不可能的
+        // 事故，仍要如实报告不能静默吞掉。
         MessageBoxW(owner, T("app.error.addItem"), kApplicationName,
                     MB_OK | MB_ICONWARNING);
         return;
@@ -2187,8 +2086,8 @@ void Application::addPluginItem(const std::string& pluginId) {
     }
     item.type = core::ItemType::Plugin;
     item.name = manifest->name;
-    // target 只作为「插件 id」的冗余记录：启动路径会识别 Plugin 类型并
-    // 走刷新而不是 ShellExecute。保留它也让用户手工编辑 JSON 时一眼可读。
+    // target 只是插件 id 的冗余记录：启动路径按 Plugin 类型走刷新而不是
+    // ShellExecute；保留它也让用户手工编辑 JSON 时一眼可读。
     item.target = pluginId;
     item.pluginId = pluginId;
     item.tileSize = config_.appearance.defaultTileSize;
@@ -2206,8 +2105,7 @@ void Application::addPluginItem(const std::string& pluginId) {
     document_ = launcherWindow_->document();
     persistItems();
 
-    // 刚加进来的插件磁贴没有缓存，立刻排一次刷新（命中 TTL 时控制器
-    // 会自己跳过，所以这里不强制）。
+    // 刚加进来的插件磁贴没有缓存，排一次刷新（命中 TTL 时控制器自己跳过）。
     const core::ItemsDocument& current = launcherWindow_->document();
     if (tabIndex < current.tabs.size()) {
         pluginController_.refreshItems(current.tabs[tabIndex].items, false);
@@ -2221,13 +2119,9 @@ void Application::addDroppedSources(
         return;
     }
 
-    // 已存在的目标（小写化后比较）：拖同一个文件两次不该加出两块 ——
-    // 磁贴本来就是一格一个，重复项只会让面板越拖越乱。
-    // 去重只在**当前页**内进行。
-    //
-    // 多标签页的意义正是「同一个程序可以同时放在两页上」
-    //（比如「常用」和「开发」各放一个编辑器），按整份文档去重会把
-    // 这条最核心的能力直接掐掉。
+    // 已存在的目标（小写化后比较）只在当前页内去重：拖同一个文件两次
+    // 不该加出两块，磁贴一格一个，重复项只会让面板越拖越乱。
+    // 跨页不去重：「同一个程序放两页」正是多标签页的核心能力。
     const std::size_t activeTab = launcherWindow_->activeTabIndex();
     const std::size_t activeTabCount = launcherWindow_->tabCount();
     std::vector<std::string> existingTargets;
@@ -2245,9 +2139,8 @@ void Application::addDroppedSources(
     for (const platform::win32::DroppedSource& source : sources) {
         std::wstring sourceValue = source.value;
 
-        // .lnk 快捷方式 → 解析出真实目标再入库。
-        // 注意 dedup 用的也是解析后的 target：同一个程序，拖它的
-        // 快捷方式和拖它本体，应该被识别为同一个东西。
+        // .lnk 解析出真实目标再入库。去重也用解析后的 target：
+        // 拖同一个程序的快捷方式和拖它本体应识别为同一个东西。
         std::wstring linkArguments;
         std::wstring linkWorkingDirectory;
         if (source.kind == platform::win32::DroppedKind::Path &&
@@ -2281,9 +2174,8 @@ void Application::addDroppedSources(
         item.tileSize = config_.appearance.defaultTileSize;
         item.labelMode = core::TileLabelMode::FollowGlobal;
 
-        // 类型：拖放回调说是链接就是网址；其余按目标推断
-        //（存在的目录 → 文件夹、.exe → 应用……）。
-        // 推断不出（路径不存在且没有扩展名）时按文件处理 ——
+        // 类型：链接就是网址，其余按目标推断（存在的目录 → 文件夹、
+        // .exe → 应用）；推断不出（路径不存在且无扩展名）按文件处理，
         // 拖进来的东西十有八九就是文件。
         item.type = (source.kind == platform::win32::DroppedKind::Url)
                         ? core::ItemType::Url
@@ -2294,7 +2186,7 @@ void Application::addDroppedSources(
         item.name = deriveItemName(sourceValue, item.type);
 
         // 快捷方式自带的启动参数与工作目录一并继承，
-        // 否则「带参数的快捷方式」拖进来启动行为就变了。
+        // 否则带参数的快捷方式拖进来启动行为就变了。
         if (!linkArguments.empty()) {
             item.arguments.push_back(
                 base::wideToUtf8Lossy(linkArguments));
@@ -2310,8 +2202,7 @@ void Application::addDroppedSources(
     }
 
     if (fresh.empty()) {
-        // 什么都没加进去 —— 必须说清楚为什么，否则用户只会觉得
-        // 「拖了半天没反应，这功能是坏的」。
+        // 什么都没加进去时必须说清楚为什么，否则用户只会觉得功能是坏的。
         const wchar_t* reason = (duplicates > 0)
                                     ? T("app.info.alreadyAdded")
                                     : T("app.error.dropUnknown");
@@ -2321,8 +2212,8 @@ void Application::addDroppedSources(
     }
 
     // 安放：直接落在光标所在那一格，压到谁就把谁挤开（与拖动磁贴同一套
-    // 规则）。这一步在 UI 层完成 —— 只有它知道网格几何，也只有它能顺带
-    // 播让位动画、把排布立刻落盘。
+    // 规则）。在 UI 层完成，只有它知道网格几何，还能顺带播让位动画、
+    // 立即落盘。
     if (!launcherWindow_->insertNewItemsAt(std::move(fresh), dropPoint)) {
         MessageBoxW(launcherWindow_->hwnd(), T("app.error.addItem"),
                     kApplicationName, MB_OK | MB_ICONWARNING);
@@ -2342,8 +2233,8 @@ void Application::applyItemRemoval(const HWND owner,
     const std::wstring displayName =
         base::utf8ToWideLossy(item.name.empty() ? item.target : item.name);
 
-    // 删磁贴不动跟随清单：删磁贴是「不想在面板上看到它」，不等于
-    // 「不要开机启动」。确认框里把这层说清楚，别让用户下次开机才发现。
+    // 删磁贴不动跟随清单：删磁贴不等于不要开机启动，
+    // 确认框里把这层说清楚，别让用户下次开机才发现。
     if (!ui::confirmItemRemoval(owner, displayName,
                                 isFollowingStartup(item.id))) {
         return;
@@ -2363,11 +2254,9 @@ void Application::applyItemRemoval(const HWND owner,
     persistItems();
 }
 
-// 按配置把皮肤配色与背景图应用到主窗口。
-//
-// 皮肤名失效（文件被删/改名）时回落默认配色，但**不回写配置**：
-// 用户把文件恢复回来后选择仍然有效。背景图同理 —— 文件读不出来
-// 就先用纯色背景，路径保留在配置里。
+// 按配置把皮肤配色与背景图应用到主窗口。皮肤名失效（文件被删/改名）时
+// 回落默认配色但不回写配置，用户恢复文件后选择仍有效；背景图读不出来
+// 先用纯色，路径保留在配置里。
 void Application::applyThemeFromConfig() {
     if (launcherWindow_ == nullptr) {
         return;
@@ -2394,28 +2283,23 @@ void Application::openSettings() {
         return;
     }
 
-    // ---- 设置期间主窗口保持可见（像被钉住一样）----
-    //
-    // 两个理由：
-    //   1. 皮肤/背景图是「所见即所得」的设置项，主窗口必须在场才看得到；
-    //   2. 设置窗口是主窗口的 owned 弹窗，用户点它内部的下拉列表时，
-    //      下拉列表是**独立顶层窗口**、不在主窗口的 owner 链上，会被
-    //      「点外面自动收起」判成外部点击 —— 主窗口当场消失，预览白搭。
-    //      setModalGuard 让主窗口在设置期间不响应这类收起（不动钉子偏好）。
+    // 设置期间主窗口保持可见（像被钉住一样）。皮肤/背景图是所见即所得
+    // 的设置项，主窗口必须在场才看得到；且设置窗口内部的下拉列表是
+    // 独立顶层窗口、不在主窗口 owner 链上，会被「点外面收起」判成外部
+    // 点击让主窗口消失。setModalGuard 让主窗口期间不响应收起（不动钉子偏好）。
     if (!launcherWindow_->isVisible()) {
         launcherWindow_->show();
     }
     launcherWindow_->setModalGuard(true);
 
-    // 跟随清单里来自磁贴的条目先按磁贴当前值刷一次：设置窗口显示的就是
-    // 待会儿真正会启动的东西。改过参数/路径的磁贴在这里对齐，省得用户
-    // 对着一个旧名字猜「到底按哪个启动」。
+    // 磁贴来源的跟随条目先按磁贴当前值刷一次：设置窗口显示的就是
+    // 待会儿真正会启动的东西，省得用户对着旧名字猜。
     if (syncFollowLaunchWithTiles()) {
         persistConfig();
     }
 
-    // 实时预览：改了就立刻反映到主窗口，但**不落盘**。
-    // 点「确定」才写 config；点「取消」由下面重新套用配置还原。
+    // 实时预览：改了立刻反映到主窗口但不落盘，点「确定」才写 config，
+    // 点「取消」由后面重新套用配置还原。
     ui::SettingsPreviewHooks preview;
     preview.themeChanged = [this](const std::string& themeName) {
         ui::ThemeColors theme;
@@ -2441,8 +2325,8 @@ void Application::openSettings() {
         }
         launcherWindow_->setGridSize(columns, rows);
         launcherWindow_->recomputeLayout();
-        // 网格决定客户区尺寸：必须立刻改窗口大小，否则超出的磁贴
-        // 会被旧尺寸裁掉，看起来像设置没生效。
+        // 网格决定客户区尺寸：必须立刻改窗口大小，否则超出的磁贴被旧
+        // 尺寸裁掉，看起来像设置没生效。
         launcherWindow_->applyGridGeometry();
     };
     preview.showTileLabelsChanged = [this](const bool showLabels) {
@@ -2465,10 +2349,8 @@ void Application::openSettings() {
         launcherWindow_->setDefaultTileColor(color);
     };
 
-    // ---- 统计当前布局实际占用的行列，用于「缩小网格」的提示 ----
-    //
-    // 只提示、不阻止：缩小网格不会删磁贴，超出的会被布局引擎重新安置。
-    // 但用户需要知道「改小会重排」，否则会以为磁贴丢了。
+    // 统计当前布局实际占用的行列，给「缩小网格」的提示。只提示不阻止：
+    // 超出的磁贴会被布局引擎重新安置，但要告诉用户「改小会重排」。
     std::uint16_t columnsInUse = 0;
     std::uint16_t rowsInUse = 0;
     for (const auto& placement : launcherWindow_->layout().placements) {
@@ -2486,8 +2368,8 @@ void Application::openSettings() {
 
     // ---- 插件管理页回调 ----
     //
-    // 设置窗口不直接碰磁盘：安装/删除都转发给 PluginController，
-    // 由它负责重新扫描清单并通知界面刷新。这里只做「模型 → 显示字段」翻译。
+    // 设置窗口不直接碰磁盘：安装/删除转发给 PluginController，
+    // 由它重新扫描清单并通知界面刷新，这里只做「模型 → 显示字段」翻译。
     ui::SettingsPluginHooks pluginHooks;
     pluginHooks.list = [this]() {
         std::vector<ui::SettingsPluginInfo> rows;
@@ -2529,8 +2411,8 @@ void Application::openSettings() {
 
     // ---- 轮盘插件页回调 ----
     //
-    // 这一页只读：轮盘插件的形态是「目录 + JSON + 图标」，界面能做的最有用的
-    // 事就是「让你看清加载了哪些、为什么某个被跳过，然后一键打开那份 JSON」。
+    // 这一页只读：轮盘插件是「目录 + JSON + 图标」的形态，界面能做的
+    // 最有用的事是展示加载了哪些、为什么被跳过，并提供打开 JSON 的入口。
     ui::SettingsRadialPluginHooks radialPluginHooks;
     radialPluginHooks.list = [this]() {
         std::vector<ui::SettingsRadialPluginInfo> rows;
@@ -2596,8 +2478,8 @@ void Application::openSettings() {
         config_.activation.startWithWindows,
         config_.activation.followLaunch,
         core::hotkeyPresetOf(config_.activation.hotkey),
-        // 不透明度传「当前实际生效值」：磁贴背景若是「跟随皮肤」（-1），
-        // 这里换成皮肤实际的 alpha 百分比，滑块才停在观感对应的位置。
+        // 不透明度传当前实际生效值：磁贴背景「跟随皮肤」(-1) 时换成
+        // 皮肤实际的 alpha 百分比，滑块才停在观感对应的位置。
         launcherWindow_->windowOpacityPercent(),
         launcherWindow_->effectiveTileOpacityPercent(),
         static_cast<int>(config_.appearance.iconScalePercent),
@@ -2614,10 +2496,8 @@ void Application::openSettings() {
     launcherWindow_->setModalGuard(false);
 
     if (!accepted) {
-        // 取消：撤销全部实时预览 —— config 未被改动，重新套一次即可。
-        //   皮肤 + 背景图 → applyThemeFromConfig 一起还原
-        //   标签栏位置 / 标签显示 / 标题默认行为 → 纯状态项
-        //   网格 → 改回原行列数并立即恢复窗口尺寸
+    // 取消：config 未被改动，重新套用配置即可撤销全部实时预览
+    //（皮肤/背景由 applyThemeFromConfig 还原，网格改回原行列数并恢复窗口尺寸）。
         applyThemeFromConfig();
         launcherWindow_->setTabBarAtBottom(config_.appearance.tabBarAtBottom);
         launcherWindow_->setShowTileLabels(config_.appearance.showTileLabels);
@@ -2671,19 +2551,15 @@ void Application::openSettings() {
         configChanged = true;
     }
 
-    // ---- 标签栏位置 ----
-    //
-    // 纯几何变化：窗口尺寸不变、布局不变，切一下位置重画即可。
+    // 标签栏位置：纯几何变化，窗口尺寸与布局不变，切位置重画即可。
     if (result.tabBarAtBottom.has_value()) {
         config_.appearance.tabBarAtBottom = *result.tabBarAtBottom;
         launcherWindow_->setTabBarAtBottom(*result.tabBarAtBottom);
         configChanged = true;
     }
 
-    // ---- 窗口出现位置 ----
-    //
-    // 无法「预览」（窗口不会自己乱动），但确定后立刻按新策略摆一次，
-    // 用户关闭设置就能看到结果，不用等下次唤出。
+    // 窗口出现位置无法预览，确定后立刻按新策略摆一次，
+    // 用户关闭设置就能看到结果。
     if (result.windowPlacement.has_value()) {
         config_.appearance.windowPlacement = *result.windowPlacement;
         launcherWindow_->setWindowPlacement(*result.windowPlacement);
@@ -2691,15 +2567,10 @@ void Application::openSettings() {
         configChanged = true;
     }
 
-    // ---- 界面语言 ----
-    //
-    // 放在 applySettings 的最前面：后面的提示框（自启失败、热键没生效…）
-    // 都是当场弹的，语言先切过去它们才能用新文案。
-    //
-    // 已经画好的窗口不会自己改字：设置对话框点确定就关了，下次打开是新
-    // 语言；托盘菜单每次右键都重建，立刻生效；面板上的空状态提示在下次
-    // 重绘时取词，所以这里补一次 refresh。窗口标题是 SetWindowTextW 设的，
-    // 也得补一次，否则任务栏上还留着旧语言的名字。
+    // 界面语言放在最前：后面的提示框要当场用新文案。已画好的窗口不会
+    // 自己改字：托盘菜单每次右键都重建、立刻生效；面板空状态在下次重绘
+    // 时取词，补一次 refresh；窗口标题要补 SetWindowTextW，否则任务栏
+    // 还留着旧语言的名字。
     if (result.language.has_value()) {
         config_.language = *result.language;
         const std::string effective =
@@ -2722,10 +2593,8 @@ void Application::openSettings() {
         configChanged = true;
     }
 
-    // ---- 背景图 ----
-    //
-    // 空串 = 清除；非空 = 用户新选的图片绝对路径，先复制进
-    // themes\backgrounds（哈希命名，保证绿色可搬），再应用。
+    // 空串 = 清除；非空先复制进 themes\backgrounds（哈希命名，保证绿色可搬），
+    // 再应用。
     if (result.backgroundImage.has_value()) {
         if (result.backgroundImage->empty()) {
             config_.appearance.backgroundImage.clear();
@@ -2767,20 +2636,16 @@ void Application::openSettings() {
         }
     }
 
-    // ---- 跟随启动 ----
-    //
-    // 只落盘，不在这里立刻执行：清单的语义是「下次 KTile 启动时一并拉起」。
-    // 点「添加」就当场把程序跑起来会让整理清单变成误触区。
+    // 只落盘不立即执行：语义是「下次 KTile 启动时一并拉起」，
+    // 点「添加」就当场跑起来会让整理清单变成误触区。
     if (result.followLaunch.has_value()) {
         config_.activation.followLaunch = *result.followLaunch;
         configChanged = true;
     }
 
-    // ---- 唤醒快捷键 ----
-    //
-    // 热键/手势可以热替换：先把旧的注销/卸载，再按新配置装一遍。
-    // 注册失败（被别的程序占着）时**仍然保存设置** —— 用户选了什么是
-    // 用户的意思，程序只负责告诉他这次没生效，下次启动会再试。
+    // 热键/手势可热替换：先拆旧再装新。注册失败（被别的程序占着）仍
+    // 保存设置：用户选了什么是用户的意思，程序只负责告诉他这次没生效；
+    // 装不上时回滚旧配置，保证至少有一个键能唤出面板。
     if (result.hotkeyPreset.has_value() &&
         *result.hotkeyPreset != core::hotkeyPresetOf(config_.activation.hotkey)) {
         const core::HotkeyConfig previous = config_.activation.hotkey;
@@ -2800,7 +2665,7 @@ void Application::openSettings() {
                  hotkeyErrorText_});
             MessageBoxW(launcherWindow_->hwnd(), message.c_str(),
                         kApplicationName, MB_OK | MB_ICONWARNING);
-            // 装不上就把旧的装回去，避免「一个都不能用」——
+            // 装不上就把旧的装回去，避免「一个都不能用」，
             // 用户至少还能用熟悉的那个键唤出面板。
             config_.activation.hotkey = previous;
             initializeHotkey();
@@ -2809,10 +2674,8 @@ void Application::openSettings() {
         updateTrayTooltip();
     }
 
-    // ---- 不透明度 ----
-    //
-    // 两项都即时生效：整窗透明度改完 ex style 系统立刻重新合成；
-    // 磁贴底色在下一帧重绘就变（预览阶段已经在显示，这里只是落盘确认）。
+    // 不透明度两项都即时生效：整窗改完 ex style 系统立刻重新合成；
+    // 磁贴底色下一帧重绘就变（预览阶段已在显示，这里只是落盘确认）。
     if (result.windowOpacityPercent.has_value()) {
         config_.appearance.windowOpacityPercent = *result.windowOpacityPercent;
         launcherWindow_->setWindowOpacityPercent(*result.windowOpacityPercent);
@@ -2824,16 +2687,13 @@ void Application::openSettings() {
         configChanged = true;
     }
 
-    // ---- 图标统一缩放 ----
-    // 只改绘制矩形，下一帧重绘即生效，布局与窗口尺寸都不动。
+    // 图标统一缩放只改绘制矩形，下一帧重绘即生效，布局与窗口尺寸不动。
     if (result.iconScalePercent.has_value()) {
         config_.appearance.iconScalePercent = *result.iconScalePercent;
         launcherWindow_->setTileIconScalePercent(*result.iconScalePercent);
         configChanged = true;
     }
 
-    // ---- 全局默认磁贴底色 ----
-    //
     // 外层有值 = 用户确实动过（含「恢复跟随皮肤」）；
     // 内层空 = 清空默认色，回到皮肤 tileFill。
     if (result.defaultTileColor.has_value()) {
@@ -2843,12 +2703,10 @@ void Application::openSettings() {
         configChanged = true;
     }
 
-    // ---- 轮盘菜单 ----
-    //
-    // 整份替换而不是逐字段合并：轮盘方案与按应用规则是嵌套结构，用户在
-    // 编辑对话框里可能删掉了方案、改了扇区数，逐字段合并表达不了这些变化。
-    // 换完必须重装钩子 —— 触发键/修饰键可能一起变了，旧钩子仍按旧配置吞键。
-    // 不需要重启：轮盘配置在显示时才被读取。
+    // 整份替换而不是逐字段合并：轮盘方案与按应用规则是嵌套结构，
+    // 用户可能删掉方案、改扇区数，逐字段合并表达不了这些变化。
+    // 换完必须重装钩子，触发键可能一起变了，旧钩子仍按旧配置吞键；
+    // 配置在显示时才被读取，无需重启。
     if (result.radial.has_value()) {
         radialConfig_ = *result.radial;
         radialHook_.uninstall();
@@ -2863,21 +2721,16 @@ void Application::openSettings() {
             }
         }
         persistRadialConfig();
-        // 触发方式可能从「Ctrl+右键」改成「中键」等，托盘提示不涉及这一项，
-        // 但主面板说明文案里若引用过触发方式也在这里统一刷新。
         updateTrayTooltip();
     }
 
-    // ---- 应用网格改动 ----
-    //
-    // 顺序很重要：先改尺寸，再让窗口重算布局，最后落盘。
+    // 应用网格改动，顺序：先改尺寸，再重算布局，最后落盘。
     // 若先落盘再重算，中途崩溃会留下「配置是新的、界面还是旧的」的不一致。
     if (gridChanged) {
         launcherWindow_->setGridSize(config_.appearance.gridColumns,
                                      config_.appearance.gridRows);
         launcherWindow_->recomputeLayout();
-        // 网格决定客户区尺寸，立即生效 —— 否则要等下次唤出面板才变，
-        // 用户会以为设置没保存。
+        // 网格决定客户区尺寸，立即生效，否则要等下次唤出面板才变。
         launcherWindow_->applyGridGeometry();
         launcherWindow_->refresh();
     }
@@ -2886,12 +2739,9 @@ void Application::openSettings() {
         persistConfig();
     }
 
-    // ---- 需要重启才能生效的设置 ----
-    //
-    // 当前三个设置（网格尺寸、标签显示、开机自启）都能即时生效，无需重启。
-    // 保留这一分支是为了让后续新增设置的开发者有一个明确的落点：
-    // 分组热键、后台常驻策略、右键菜单结构等改动无法在运行时热替换，
-    // 届时在 restartPending 里累积，最后统一提示，而不是每项弹一次框。
+    // 当前所有设置都能即时生效，此分支保留为扩展点：后续无法运行时
+    // 热替换的设置（分组热键、后台常驻策略、右键菜单结构等）在
+    // restartPending 里累积，最后统一提示，而不是每项弹一次框。
     if (restartPending) {
         MessageBoxW(launcherWindow_->hwnd(),
                     T("app.restart.message"),
@@ -2955,9 +2805,8 @@ bool Application::initializeTray() {
         return false;
     }
 
-    // 托盘图标创建成功后所有权转移给 TrayIcon（它用 get() 持有）
-    // 注意：此处 release 的图标由 TrayIcon 在销毁时通知系统移除，
-    // 但 HICON 本身需要存活，故用全局变量持有
+    // 图标所有权转移给 TrayIcon（它用 get() 持有，销毁时通知系统移除）。
+    // HICON 要活到菜单显示期间，用全局变量持有。
     g_trayIconForMenu = icon.release();
 
     return true;
@@ -2976,8 +2825,8 @@ bool Application::initializeHotkey() {
     const core::HotkeyConfig& config = config_.activation.hotkey;
 
     // 两种手势只能走低级键盘钩子：RegisterHotKey 表达不了「双击同一个键」
-    // 和「单键」，所以这里按 gesture 分成两条互斥的通道。
-    // 每次调用都先把另一条通道拆干净 —— 设置里换方式时需要热替换。
+    // 和「单键」，按 gesture 分成两条互斥通道。每次先拆另一条通道，
+    // 支持设置里换方式时的热替换。
     if (config.gesture != core::HotkeyGesture::None) {
         hotkey_.unregister();
         const auto status = gestureHotkey_.install(
@@ -3015,9 +2864,9 @@ void Application::reinstallGestureHotkey(const char* reason) {
     if (messageWindow_ == nullptr) {
         return;
     }
-    // install 内部会先 uninstall，调用一次即可完成「拆旧 + 装新」。
-    // 失败不覆盖 hotkeyErrorText_：这里不是用户主动改热键，没必要
-    // 把「暂时没装上」当成用户能处理的错误提示出来，下次唤醒时再试。
+    // install 内部会先 uninstall，一次完成「拆旧 + 装新」。失败不覆盖
+    // hotkeyErrorText_：这里不是用户主动改热键，不必把「暂时没装上」
+    // 当成用户能处理的错误提示出来，下次唤醒时再试。
     infrastructure::applog::info(std::string("重装手势钩子（") +
                                  (reason != nullptr ? reason : "?") + "）");
     const auto status = gestureHotkey_.install(
@@ -3030,7 +2879,7 @@ void Application::reinstallGestureHotkey(const char* reason) {
     }
 }
 
-// ================================================================ 消息循环
+// --- 消息循环
 
 int Application::runMessageLoop() {
     MSG message{};
@@ -3042,7 +2891,7 @@ int Application::runMessageLoop() {
     return static_cast<int>(message.wParam);
 }
 
-// ================================================================ 行为
+// --- 行为
 
 void Application::toggleLauncher() {
     if (!launcherWindow_) {
@@ -3067,8 +2916,8 @@ void Application::hideLauncher() {
 }
 
 void Application::openAbout() {
-    // owner 给主窗口：About 对话框是它的 owned 弹窗，点对话框内部
-    // 不会被「点外面收起」误判（belongsToTarget 走 owner 链）。
+    // owner 给主窗口：About 是它的 owned 弹窗，点对话框内部不会被
+    // 「点外面收起」误判（belongsToTarget 走 owner 链）。
     HWND owner = launcherWindow_ ? launcherWindow_->hwnd() : nullptr;
     ui::showAboutDialog(owner, std::wstring(applicationWindowTitle()),
                         std::wstring(kApplicationVersion));
@@ -3142,7 +2991,6 @@ void Application::handleTrayCommand(const UINT commandId) {
                 std::wstring(kStartupRegistryValueName), !currentlyEnabled);
 
             if (status) {
-                // 同步到配置并落盘，保证重启后状态一致
                 config_.activation.startWithWindows = !currentlyEnabled;
                 persistConfig();
             } else {
@@ -3161,7 +3009,6 @@ void Application::handleTrayCommand(const UINT commandId) {
             if (launcherWindow_) {
                 launcherWindow_->hide();
             }
-            // 退出前把内存状态刷回磁盘
             persistItems();
             persistConfig();
             persistRadialConfig();

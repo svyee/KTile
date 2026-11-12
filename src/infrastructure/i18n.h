@@ -1,23 +1,9 @@
 // KTile - 基础设施层：多语言（i18n）
 //
-// 设计取舍：
-//
-// 1. 文案放外部文件，不编进 exe。
-//    <exe>\lang\<code>.json 每份一个语言，加语言 = 加一个文件，不改代码、
-//    不用重新编译。这与 plugin/、slugin/ 的「资源随 exe 走」保持一致。
-//
-// 2. 缺词不炸。
-//    回退链：当前语言 → 英语 → key 本身。key 漏译时界面上会出现
-//    "settings.title" 这种字样 —— 丑，但一眼能看出漏在哪儿，比空白好排查。
-//
-// 3. 语言代码用 BCP 47 子集。
-//    目前只有 "zh-Hans" 与 "en"。代码即文件名（lang/zh-Hans.json），
-//    不做大小写/别名归一 —— 少一层隐式约定，加语言时不容易踩坑。
-//
-// 4. 运行时可变。
-//    设置里改语言后立刻 setLanguage()，新创建的界面直接是新手语言；
-//    已经画好的窗口（设置对话框自身）下次打开时生效。
-//
+// 文案放 <exe>\lang\<code>.json，加语言只需加文件。缺词回退链：
+// 当前语言 → 英语 → key 本身，露出的 "settings.title" 比空白好排查。
+// 语言代码用 BCP 47 子集（zh-Hans / en），代码即文件名，不做大小写或
+// 别名归一。运行时可切换语言；已画好的窗口下次打开时生效。
 #pragma once
 
 #include "infrastructure/json/json_parser.h"
@@ -65,10 +51,8 @@ bool isLoaded() noexcept;
 const std::string& tr(const char* key);
 const std::wstring& trw(const char* key);
 
-// 带占位符的翻译：文案里写 {0} / {1}，按 args 顺序替换。
-//
-// 为什么不用 printf 风格：语序因语言而异（"「{0}」不能为空" 与
-// "\"{0}\" cannot be empty"），只有命名占位符能让译者自己调整位置。
+// 带占位符的翻译：文案里写 {0} / {1}，按 args 顺序替换。不用 printf
+// 风格：语序因语言而异，只有命名占位符能让译者自己调整位置。
 std::wstring formatW(const char* key, const std::vector<std::wstring>& args);
 std::string formatU(const char* key, const std::vector<std::string>& args);
 

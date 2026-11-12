@@ -2,11 +2,9 @@
 
 // 插件清单与缓存持久化
 //
-// 职责边界：
-//   - 发现 <exe目录>/plugin/<id>/plugin.json，把 JSON 翻译成 core::PluginManifest。
-//   - 缓存插件返回的数据（<data>/plugins/cache/<id>-<hash>.json），供面板
-//     唤出时先画旧数据、再异步刷新。
-//   - 这里可以依赖 Win32 / JSON；core 保持纯逻辑。
+// 发现 <exe目录>/plugin/<id>/plugin.json 并翻译成 core::PluginManifest；
+// 缓存插件返回的数据（<data>/plugins/cache/<id>-<hash>.json），供面板唤出
+// 时先画旧数据、再异步刷新。本层可依赖 Win32 / JSON，core 保持纯逻辑。
 
 #include <string>
 #include <utility>

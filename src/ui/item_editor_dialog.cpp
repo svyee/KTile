@@ -31,27 +31,20 @@ namespace ktile {
 namespace ui {
 namespace {
 
-// ---------------------------------------------------------------- 布局常量
-// 单位均为 DIP（96dpi 像素），绘制时按 DPI 缩放。
-//
-// 布局分两列（下列坐标是**中文基准**，实际值由 computeLayout 按实测文字递推）：
-//   左列（x=20..200）  —— 图标/磁贴预览 + 磁贴大小 + 换图按钮
-//   右列（x=212..600） —— 名称/目标/参数/工作目录/所属页面/管理员
-//
-// 左列存在的意义：图标是磁贴上最显眼的东西，改完能立刻看到结果，
-// 比「填一个 .ico 路径」直观得多。
+// --- 布局常量
+// 单位均为 DIP（96dpi 像素），绘制时按 DPI 缩放。布局分两列：
+// 左列图标/磁贴预览与外观选项，右列名称/目标等字段。
+// 下列坐标是中文界面的基准值，实际值由 computeLayout 按实测文字递推。
 
-// 下面这一组是**中文界面下的基准值**：标签列 68 / 78 恰好排得下四个汉字，
-// 字段宽 306。英文的「Title display:」「Background:」比四个汉字长，定宽
-// STATIC 会把尾巴直接切掉（不换行、不给省略号，就是没了）。所以运行时
-// 由 computeLayout 先量再定宽：中文量出来的宽度落在基准上时一个像素不动，
-// 长语言把标签列撑开、整窗跟着变宽，**字段宽度保持 306 不压缩** ——
-// 压缩字段会让下面那两行提示重新折行，牵一发动全身。
+// 基准值按中文界面定（标签列 68/78 恰好排下四个汉字）。英文标签更长，
+// 定宽 STATIC 会直接切掉超宽文字，所以运行时由 computeLayout 先量再定宽：
+// 长语言把标签列和整窗一起撑宽，字段宽度保持 306 不压缩，
+// 压缩会让下方提示行重新折行。窗口宽度必须在 CreateWindowExW 之前定下。
 constexpr int kClientWidth = 620;
 constexpr int kClientHeight = 430;
 
-// 内容卡片：把所有输入控件包进一张白色圆角卡片，与设置窗口同一套视觉。
-// 卡片只影响背景绘制，不改变任何控件的绝对坐标。
+// 内容卡片：所有输入控件包进一张白色圆角卡片，只影响背景绘制，
+// 不改变控件坐标。
 constexpr int kCardLeft = 12;
 constexpr int kCardTop = 8;
 constexpr int kCardRight = kClientWidth - 12;
@@ -73,28 +66,22 @@ constexpr int kResetIconY = 232;
 constexpr int kResetIconWidth = 180;
 constexpr int kResetIconHeight = 26;
 
-// 标题显示方式（跟随全局 / 始终显示 / 移入时显示）。
-// 放在「磁贴大小」下面：两者都是「这块磁贴长什么样」的选项，
-// 改完立刻反映在正上方的预览里。
+// 标题显示方式（跟随全局 / 始终显示 / 移入时显示）：与磁贴大小同属
+// 「这块磁贴长什么样」的选项，改完即时反映在正上方预览里。
 constexpr int kLabelModeLabelY = 264;
 constexpr int kLabelModeComboX = 88;
 constexpr int kLabelModeComboY = 262;
 constexpr int kLabelModeComboWidth = 112;
 
-// 图标大小（每块磁贴独立覆盖全局设置）。放在「标题显示」下面，
-// 同属「这块磁贴长什么样」的一组；滑块初值跟随全局，勾选「按统一设置」
-// 时置灰。
+// 图标大小（本项覆盖全局设置），滑块初值跟随全局，勾「按统一设置」时置灰。
 constexpr int kIconScaleCheckY = 294;
 constexpr int kIconScaleSliderY = 318;
 constexpr int kIconScaleSliderWidth = 64;   // 88..152，别越过右列 x=212
 constexpr int kIconScaleValueX = 158;
 
-// 背景色：文字 + 色块（点击即选色）+「默认」按钮。
-// 放在左列最下方，与「磁贴大小 / 标题显示 / 图标大小」同属外观组；
-// 色块本身就是当前色的样本与入口，改完立刻在正上方预览里看到。
+// 背景色：文字 + 色块（点击选色）+「默认」按钮，属左列外观组。
 constexpr int kTileColorLabelY = 346;
-// 背景色样本本身就是按钮：尺寸取原来「选择」按钮的大小，
-// 既好点中，也能直接把颜色看得清楚。
+// 色块本身就是按钮与颜色样本，尺寸取原「选择」按钮的大小。
 constexpr int kTileColorSwatchX = 80;
 constexpr int kTileColorSwatchY = 345;
 constexpr int kTileColorSwatchWidth = 56;
@@ -117,23 +104,19 @@ constexpr int kBuiltinPickX = 492;   // 「系统项...」排在两个浏览按�
 constexpr int kBrowseWidth = 92;
 constexpr int kBrowseHeight = 25;
 
-// 控件 ID（沿用 HLaunch 的编号习惯，便于对照）
+// 控件 ID（沿用 HLaunch 编号，跳号对应已移除的控件）
 constexpr int kNameId = 1001;
-// 1002 原为「类型」下拉框 —— 已移除，类型改为按目标自动推断
 constexpr int kTargetId = 1003;
 constexpr int kArgumentsId = 1004;
 constexpr int kWorkingDirectoryId = 1005;
-// 1006 原为「图标路径」输入框 —— 已移除，改为顶部预览 + 点击换图
 constexpr int kTabId = 1007;
 constexpr int kAdministratorId = 1008;
-// 1009/1010/1011 原为三个「浏览...」按钮，现拆成文件/目录两个 + 工作目录一个
 constexpr int kBrowseTargetFileId = 1009;
 constexpr int kBrowseWorkingDirectoryId = 1010;
 constexpr int kBrowseTargetDirectoryId = 1011;
 constexpr int kPreviewId = 1012;     // 自绘预览（SS_OWNERDRAW | SS_NOTIFY）
 constexpr int kTileSizeId = 1013;    // 磁贴大小下拉
 constexpr int kResetIconId = 1014;   // 「重置图标」
-// 1015 原为「类型」只读提示行 —— 已按反馈移除，类型本来就不需要用户关心
 constexpr int kLabelModeId = 1016;   // 标题显示方式下拉
 constexpr int kBuiltinPickId = 1017; // 「系统项...」— 选内置命令/系统位置
 constexpr int kIconScaleCheckId = 1018;  // 「按统一设置」勾选框
@@ -141,35 +124,30 @@ constexpr int kIconScaleSliderId = 1019; // 图标大小滑块（50~100）
 constexpr int kIconScaleValueId = 1020;  // 图标大小数值显示
 constexpr int kTileColorSwatchId = 1021; // 背景色样本（SS_OWNERDRAW）
 constexpr int kTileColorClearId = 1023;  // 「默认」恢复跟随全局
-// 说明文字单独给 ID：WM_CTLCOLORSTATIC 靠 ID 区分「该画次级灰」的提示行。
-// 普通标签与提示都传 0 的话，只能一律用正文色。
+// 提示行单独给 ID：WM_CTLCOLORSTATIC 靠 ID 区分该画次级灰的说明文字。
 constexpr int kWorkingDirectoryHintId = 1030;
 constexpr int kFooterHintId = 1031;
-// 目标输入框下面的「相对路径」说明（1032 起是这一段的新号位）
 constexpr int kTargetHintId = 1032;
 // 保存/取消直接用 IDOK / IDCANCEL：IsDialogMessageW 处理回车/Esc 时
-// 对普通窗口发送的就是这两个 ID，按钮点击也发同 ID，一套处理两处来源。
+// 对普通窗口发送的就是这两个 ID，一套处理两处来源。
 
 constexpr const wchar_t* kEditorDialogClass = L"KTile.ItemEditorDialog";
 
-// 对话框关闭通知（结束嵌套模态循环，不影响主消息循环）。
-// 与 settings_window / 重命名对话框同一机制：PostQuitMessage 投递的是
-// 线程级粘性 WM_QUIT，会连带杀掉主窗口的消息循环，绝不能用。
+// 对话框关闭通知，用于结束本地模态循环。绝不能用 PostQuitMessage：
+// 它投递线程级粘性 WM_QUIT，会连带杀掉主窗口的消息循环。
 constexpr UINT kEditorDialogCloseMessage = WM_APP + 0x90U;
 
-// 预览用配色。磁贴在真实窗口里是「半透明深色玻璃叠在亚克力背景上」，
-// 对话框里没有背景模糊可叠，直接用中深灰模拟观感。
-// 同色的 ARGB 形式：背景色样本与「跟随全局」预览都按它取默认。
+// 预览用配色：真实磁贴是半透明深色玻璃叠亚克力，对话框里没有背景模糊，
+// 用中深灰模拟。ARGB 形式供色块与「跟随全局」预览取默认。
 constexpr std::uint32_t kPreviewTileFillArgb = 0xFF3A3A3E;
 constexpr COLORREF kPreviewTileBorder = RGB(0x62, 0x62, 0x68);
 constexpr COLORREF kPreviewFrame = RGB(0x9A, 0x9A, 0x9A);
 constexpr COLORREF kPreviewPlaceholder = RGB(0x8A, 0x8A, 0x8A);
 
-// 标签底衬：与 launcher_window.cpp 的 kLabelScrim 同值（55% 黑）。
-// 预乘形式，直接喂给 AlphaBlend。
+// 标签底衬：与 launcher_window.cpp 的 kLabelScrim 同值（55% 黑），预乘形式。
 constexpr std::uint32_t kLabelScrimPremultiplied = 0x8C000000U;
 
-// ---------------------------------------------------------------- 小工具
+// --- 小工具
 
 int scaleFor(HWND window, int value) {
     HDC dc = GetDC(window);
@@ -191,12 +169,10 @@ HFONT dialogFont() {
     return static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 }
 
-// ---------------------------------------------------------------- 布局计算
-//
-// 一整块控件的 X 坐标都在这里定下来，createControls 只负责按值摆。
-// 为什么要提前算：窗口宽度取决于标签实测宽度，而窗口宽度必须在
-// CreateWindowExW 之前给出，所以测量发生在窗口还不存在的时候 ——
-// 借 owner 的 DC 量（对话框就开在 owner 上，DPI 相同）。
+// --- 布局计算
+// 控件坐标全部在这里定，createControls 只按值摆放。窗口宽度取决于标签
+// 实测宽度，而宽度必须在 CreateWindowExW 之前给出，所以测量发生在窗口
+// 还不存在时：借 owner 的 DC 量（对话框开在 owner 上，DPI 相同）。
 struct EditorLayout {
     int leftLabelW = 68;   // 左列标签列宽（磁贴大小 / 标题显示 / 图标大小共用）
     int colorLabelW = 56;  // 「背景色」标签列宽（更短，色块要贴着它）
@@ -255,7 +231,6 @@ EditorLayout computeLayout(HWND host, HFONT font) {
     EditorLayout layout;
 
     // ---- 左列 ----
-    // 三个标签共用一列，取最宽的那个
     layout.leftLabelW = (std::max)(layout.leftLabelW,
                                    fitLabel("editor.tileSize", 68));
     layout.leftLabelW = (std::max)(layout.leftLabelW,
@@ -267,9 +242,8 @@ EditorLayout computeLayout(HWND host, HFONT font) {
     layout.iconScaleValueX =
         layout.sizeComboX + kIconScaleSliderWidth + 6;
 
-    // 左列两个下拉（磁贴大小 / 标题显示方式）共用一宽，取两边的长项。
-    // CBS_DROPDOWNLIST 选中项超宽是直接截断、不给省略号，用户看不到自己
-    // 选的是哪一档 —— 英文的「Follow global setting」正好比中文宽一倍。
+    // 左列两个下拉共用一宽，取两边最长项。CBS_DROPDOWNLIST 选中项超宽
+    // 直接截断不给省略号，英文项比中文宽一倍，必须实测。
     int comboW = kSizeComboWidth;
     for (int index = 0; index < 4; ++index) {
         comboW = (std::max)(comboW,
@@ -285,16 +259,15 @@ EditorLayout computeLayout(HWND host, HFONT font) {
     }
     layout.comboW = comboW;
 
-    // 左列右边界 = 预览块右沿、下拉右沿、背景色那行右沿三者取最大。
-    // 「图标大小」的百分比数字允许略微探出 —— 它右边就是右列标签，
-    // 中间还留着 10px，挤不着。
+    // 左列右边界 = 预览块、下拉、背景色行三者取最大；
+    // 「图标大小」的百分比数字允许略探出，右边还留着 10px。
     int leftRight = kPreviewX + kPreviewWidth;
     leftRight = (std::max)(leftRight, layout.sizeComboX + layout.comboW);
 
     layout.colorLabelW = fitLabel("editor.backgroundColor", 56);
     layout.swatchX = kPreviewX + layout.colorLabelW + 4;
     layout.clearX = layout.swatchX + kTileColorSwatchWidth + 6;
-    // 「默认」按钮：中文两个字刚好塞进 36，英文 Default 会顶到边上
+    // 「默认」按钮按文字加宽：中文两字塞进 36，英文 Default 会顶边
     layout.clearW =
         (std::max)(kTileColorClearWidth, measure(text("editor.defaultColor")) + 10);
     leftRight = (std::max)(leftRight, layout.clearX + layout.clearW);
@@ -310,11 +283,11 @@ EditorLayout computeLayout(HWND host, HFONT font) {
 
     // 字段宽度不压：窄下去提示行会多折一行，被固定高度裁掉
     layout.fieldW = kFieldWidth;
-    // 「浏览文件 / 浏览目录 / 系统项」按字段左沿递推，间距沿用原值
+    // 「浏览文件 / 浏览目录 / 系统项」按字段左沿递推
     layout.browseFileX = layout.fieldX;
     layout.browseDirX = layout.fieldX + 98;
     layout.builtinPickX = layout.fieldX + 198;
-    // 工作目录那行：输入框 + 右侧「浏览…」，右边缘与字段右沿对齐
+    // 工作目录行：输入框 + 右侧「浏览…」，右缘与字段右沿对齐
     layout.workDirEditW = layout.fieldW - 96;
     layout.workDirBrowseX = layout.fieldX + layout.fieldW - 86;
 
@@ -351,9 +324,9 @@ std::wstring trimmed(std::wstring value) {
     return value.substr(begin, end - begin + 1);
 }
 
-// 把一块区域用「预乘 ARGB 纯色」半透明覆盖（GDI 里做局部 alpha 混合）。
-// 用于磁贴预览上的标签底衬 —— 底衬之下既可能是磁贴底色，也可能是
-// 图标像素，靠 FillRect 填不出正确的混合结果。
+// 用预乘 ARGB 纯色做局部 alpha 混合（GDI 没有逐像素混合），
+// 用于磁贴预览的标签底衬：底衬下可能是磁贴底色也可能是图标像素，
+// FillRect 填不出正确的混合结果。
 void blendSolidRect(HDC target, const RECT& rect,
                     const std::uint32_t premultipliedArgb) {
     if (rect.right <= rect.left || rect.bottom <= rect.top) {
@@ -394,21 +367,16 @@ void blendSolidRect(HDC target, const RECT& rect,
     DeleteObject(pixel);
 }
 
-// 目标路径 → 类型。推断不出时返回 nullopt（调用方保留原类型）。
-//
-// 「判断不出」的典型情形：没有扩展名、也不存在的短名字 ——
-// 既可能是待创建的文件夹、也可能是裸命令名，还可能是没写协议的域名
-// （office.farxin.cn）。这种情况硬猜成「文件」会悄悄改坏磁贴行为
-// （右键菜单的文案、图标、是否允许「打开文件所在位置」都看类型），
-// 所以宁可返回 nullopt 让调用方沿用原值。
+// 目标路径 → 类型。判断不出返回 nullopt（调用方保留原类型）：无扩展名
+// 且不存在的短名字可能是文件夹、裸命令或域名，硬猜成「文件」会悄悄
+// 改坏依赖类型的行为（右键菜单文案、图标等）。
 std::optional<core::ItemType> inferItemTypeImpl(const std::wstring& target) {
     const std::wstring path = trimmed(target);
     if (path.empty()) {
         return std::nullopt;
     }
-    // 内置命令（"ktile:lock"）长得像 URL（带冒号前缀），PathIsURLW
-    // 会把它认成网址 —— 提前拦下，按应用处理（内置命令的执行语义
-    // 与应用一致：点击就跑）。
+    // 内置命令（"ktile:lock"）带冒号前缀，PathIsURLW 会认成网址，
+    // 提前拦下按应用处理（执行语义与应用一致）。
     if (!core::builtinIdFromTarget(path).empty()) {
         return core::ItemType::Application;
     }
@@ -416,9 +384,8 @@ std::optional<core::ItemType> inferItemTypeImpl(const std::wstring& target) {
         return core::ItemType::Url;
     }
 
-    // 相对 exe 目录的写法（"tools\app.exe"）要先解析，否则这里按
-    // 当前工作目录去找，永远找不到 —— 用户明明填了存在的路径，
-    // 类型却被推断成「文件」或推断不出来。
+    // 相对 exe 目录的路径（"tools\app.exe"）要先解析：否则按当前
+    // 工作目录去找永远找不到，类型会被推断错。
     const std::wstring resolved =
         platform::win32::resolveProgramRelativePath(path);
     const DWORD attributes = GetFileAttributesW(resolved.c_str());
@@ -440,9 +407,8 @@ std::optional<core::ItemType> inferItemTypeImpl(const std::wstring& target) {
         }
     }
 
-    // 像不像一条「路径」：带目录分隔符，或带盘符（C:）。
-    // 不像路径又没有扩展名判断依据的（"notepad" / "office.farxin.cn"）
-    // 一律交给调用方沿用原类型。
+    // 像路径 = 带目录分隔符或盘符；不像路径又无扩展名判断依据的
+    // （"notepad"、域名）交给调用方沿用原类型。
     const bool looksLikePath =
         path.find(L'\\') != std::wstring::npos ||
         path.find(L'/') != std::wstring::npos ||
@@ -457,12 +423,9 @@ std::optional<core::ItemType> inferItemTypeImpl(const std::wstring& target) {
     return std::nullopt;
 }
 
-// ---------------------------------------------------------------- 图标预览
-//
-// 预览要回答两个问题：
-//   1. 换成这张图后，磁贴上看起来是什么样
-//   2. 磁贴大小换成大/中/小之后，图标还剩多少空间给标题
-// 所以它不是「图片查看器」，而是「一块按真实比例画出来的磁贴」。
+// --- 图标预览
+// 预览是「按真实比例画出来的磁贴」而非图片查看器：
+// 能直接看到换图、换尺寸后的真实效果。
 
 struct PreviewLayout {
     RECT tile{};
@@ -471,12 +434,9 @@ struct PreviewLayout {
     bool hasLabel = false;
 };
 
-// 依据磁贴矩形与尺寸档位推导图标/标签位置。
-// 常量与 launcher_window.cpp 的 paintSingleTile 保持一致 ——
-// 预览与真实磁贴用的是同一套几何规则，改了那边记得同步这里。
-//
-// fillIcon = 用「用户导入的自定义图片」：图片铺满整块磁贴内框（含 2px 内缩，
-// 与 1x1 的「图标铺满」同一套规则）。系统图标仍是方框居中。
+// 依据磁贴矩形与尺寸档位推导图标/标签位置。常量与公式与
+// launcher_window.cpp 的 paintSingleTile 保持一致，改那边记得同步这里。
+// fillIcon = 用户导入的图片铺满整块磁贴内框（含 2px 内缩）；系统图标方框居中。
 PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
                                    const bool fillIcon,
                                    const int iconScalePercent) {
@@ -521,8 +481,8 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     float iconTop = top;
     float labelTop = bottomLabelTop;
 
-    // 统一规则（与 paintSingleTile 一致）：标签贴磁贴底边，图标在
-    // 标签上方区域（或整格，标签悬浮的尺寸）内上下左右居中。
+    // 统一规则（与 paintSingleTile 一致）：标签贴磁贴底边，
+    // 图标在标签上方区域（或整格）内居中。
     if (isWide) {
         const float base =
             (std::min)(height - iconTopGap * 2.0F, width - 8.0F);
@@ -567,7 +527,7 @@ PreviewLayout computePreviewLayout(const RECT& tile, const core::TileSize size,
     return layout;
 }
 
-// ---------------------------------------------------------------- 状态
+// --- 状态
 
 struct EditorDialogState {
     ItemEditorFields initial;
@@ -577,9 +537,8 @@ struct EditorDialogState {
     bool accepted = false;
     ItemEditorFields result;
 
-    // 窗口创建前就算好的控件坐标（见 computeLayout）+ 全程共用的对话框字体。
-    // 字体在这里就建好：算坐标要拿它量文字，而坐标得在 CreateWindowExW
-    // 之前定下来，WM_CREATE 里再建就晚了。销毁仍走 WM_DESTROY 的旧路径。
+    // 布局与字体在窗口创建前算好：量文字要拿字体，坐标必须在
+    // CreateWindowExW 之前定下，WM_CREATE 再建就晚了。销毁仍走 WM_DESTROY。
     EditorLayout layout;
     HFONT font = nullptr;
 
@@ -593,8 +552,7 @@ struct EditorDialogState {
     std::wstring customIcon;
     core::TileSize previewSize = core::TileSize::Small;
 
-    // 标题显示方式（下拉当前值）+ 设置里的「默认显示标题」。
-    // 后者是给「跟随全局设置」那一档用的 —— 不知道全局值就画不出真实预览。
+    // 标题显示方式当前值 + 设置里的全局值，后者供「跟随全局」档画真实预览。
     core::TileLabelMode labelMode = core::TileLabelMode::FollowGlobal;
     bool globalAlwaysShowLabels = true;
 
@@ -602,14 +560,13 @@ struct EditorDialogState {
     int iconScalePercent = 0;
     int globalIconScale = 90;
 
-    // 磁贴底色：本项显式色（空 = 跟随全局默认）+ 设置里的全局默认色。
-    // 预览与颜色选择器的初始值都按这个优先级来。
+    // 磁贴底色：本项显式色（空 = 跟随全局）+ 全局默认色，
+    // 预览与取色器初值都按这个优先级。
     std::optional<std::uint32_t> tileColor;
     std::optional<std::uint32_t> globalTileColor;
 
-    // 已解码的图标像素 + 供 AlphaBlend 使用的预乘 DIB。
-    // pixelsKey 记录这些像素来自哪个来源，避免每次重绘都重新解码
-    // （解码要走 WIC 开文件，几十毫秒级，放在 WM_PAINT 里会拖慢重绘）。
+    // 已解码图标像素 + 预乘 DIB。pixelsKey 记录像素来源，不变不重复解码
+    // （解码走 WIC 开文件，几十毫秒级，不能放进 WM_PAINT）。
     platform::win32::ImagePixels pixels;
     std::wstring pixelsKey;
     platform::win32::UniqueHBITMAP previewDib;
@@ -650,17 +607,14 @@ std::vector<std::wstring> splitArguments(const std::wstring& text) {
     return lines;
 }
 
-// ---------------------------------------------------------------- 取词与过滤器
+// --- 取词与过滤器
 
 const wchar_t* T(const char* key) {
     return infrastructure::i18n::trw(key).c_str();
 }
 
-// 合成 OPENFILENAMEW 的过滤器串：描述\0模式\0…\0。
-//
-// 不能写成一条字符串字面量：描述来自语言文件（运行时才知道），
-// 而分隔符是 NUL，只能 push_back。末尾多留一个 NUL 是 Win32 的约定
-// （双 NUL 结尾），少一个就会把后面的内存当过滤器继续读。
+// 合成 OPENFILENAMEW 过滤器串：描述\0模式\0…\0。描述来自语言文件，
+// 只能逐段拼接；末尾双 NUL 是 Win32 约定，少一个会把后面的内存当过滤器读。
 std::wstring buildFilter(const char* descriptionKey,
                          const wchar_t* patterns) {
     std::wstring filter;
@@ -675,12 +629,11 @@ std::wstring buildFilter(const char* descriptionKey,
     return filter;
 }
 
-// ---------------------------------------------------------------- 文件夹/文件浏览
+// --- 文件夹/文件浏览
 
-// 用 SHBrowseForFolderW 而不是 IFileOpenDialog(FOS_PICKFOLDERS)：
-// 两者都能选目录，但前者是纯 Win32 调用、不需要手动管 COM 接口生存期，
-// 且 Win7 一路可用 —— 与本项目「最朴素的 Win32」风格一致。
-// （进程已 CoInitializeEx(STA)，见 main.cpp。）
+// 用 SHBrowseForFolderW 而非 IFileOpenDialog(FOS_PICKFOLDERS)：纯 Win32、
+// 不用管 COM 接口生存期，Win7 一路可用。进程已 CoInitializeEx(STA)，
+// 见 main.cpp。
 std::wstring browseForFolder(HWND owner, const wchar_t* title) {
     BROWSEINFOW browse{};
     browse.hwndOwner = owner;
@@ -724,14 +677,13 @@ std::wstring browseForFile(HWND owner,
     return buffer;
 }
 
-// ---------------------------------------------------------------- 控件创建
+// --- 控件创建
 
 HWND addControl(HWND dialog, const wchar_t* windowClass, const wchar_t* text,
                 DWORD style, int x, int y, int width, int height, int id,
                 HFONT font) {
-    // 推按钮统一改自绘：系统按钮的灰底压在白色卡片上很扎眼。
-    // 复选框 / 单选框保持原生 —— 勾选态自绘要重做键盘与视觉状态，
-    // 收益不抵风险；它们的灰底由 WM_CTLCOLORBTN 压成白底即可。
+    // 推按钮统一自绘：系统灰底压在白卡片上很扎眼。复选框保持原生
+    // （自绘要重做键盘与视觉状态，收益不抵风险），灰底由 WM_CTLCOLORBTN 压成白底。
     if (windowClass != nullptr && wcscmp(windowClass, L"BUTTON") == 0) {
         const DWORD baseType = style & BS_TYPEMASK;
         if (baseType == BS_PUSHBUTTON || baseType == BS_DEFPUSHBUTTON) {
@@ -758,10 +710,9 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     };
 
     // ---- 左列：图标 / 磁贴预览 ----
-    // SS_OWNERDRAW 让我们自己画；SS_NOTIFY 让点击（STN_CLICKED）
-    // 能通知到父窗口 —— 这就是「点一下换图标」的实现方式。
-    // 不给 WS_TABSTOP：预览进了 Tab 顺序后，Enter 会被 IsDialogMessageW
-    // 当成「按下默认按钮」，用户想换图却把对话框保存了。
+    // SS_OWNERDRAW 自绘；SS_NOTIFY 让点击（STN_CLICKED）通知父窗口，
+    // 即「点一下换图标」。不给 WS_TABSTOP：预览进了 Tab 顺序后，
+    // Enter 会被 IsDialogMessageW 当成按下默认按钮，直接保存了对话框。
     addControl(dialog, L"STATIC", L"",
                SS_OWNERDRAW | SS_NOTIFY,
                kPreviewX, kPreviewY, kPreviewWidth, kPreviewHeight,
@@ -821,9 +772,7 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kIconScaleValueId, font);
 
     // ---- 左列：背景色 ----
-    // 色块（点击弹出内置色表）+「默认」清回全局默认。
-    // SS_NOTIFY 是让 STATIC 把点击通知（STN_CLICKED）发给父窗口的开关，
-    // 少了它色块只能看不能点。
+    // 色块（SS_NOTIFY 才能把点击发给父窗口）+「默认」清回全局。
     label(infrastructure::i18n::trw("editor.backgroundColor").c_str(), kPreviewX,
           kTileColorLabelY, layout.colorLabelW);
     addControl(dialog, L"STATIC", L"", SS_OWNERDRAW | SS_NOTIFY,
@@ -845,8 +794,7 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
                layout.fieldX, 51, layout.fieldW, kFieldHeight, kTargetId, font);
-    // 相对路径说明紧贴输入框下方：写在这儿才有人看见。塞进页脚那两句
-    // 长提示里，用户要改完路径、发现没生效才会去读（那时已经改错了）。
+    // 相对路径说明紧贴输入框：放在页脚提示里用户发现不了，改错了才回头读。
     addControl(dialog, L"STATIC",
                infrastructure::i18n::trw("editor.targetHint").c_str(),
                0, layout.fieldX, 108, layout.fieldW, 18, kTargetHintId, font);
@@ -856,10 +804,9 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.browseFolder").c_str(), WS_TABSTOP,
                layout.browseDirX, 80, kBrowseWidth, kBrowseHeight,
                kBrowseTargetDirectoryId, font);
-    // 「系统项…」只在新建时出现：内置命令是没法从文件系统浏览出来的，
-    // 必须有入口；修改已有项目时目标已经定了，换目标该走删除重加。
-    // 位置在两个浏览按钮右边 —— 曾与「浏览文件」同坐标叠放，按钮被盖住
-    // 找不到，教训：同排控件坐标必须互斥。
+    // 「系统项…」只在新建时出现：内置命令无法从文件系统浏览出来；
+    // 修改已有项目时换目标该走删除重加。位置在两个浏览按钮右侧，
+    // 同排控件坐标必须互斥，否则按钮会互相盖住。
     if (state->mode == ItemEditorMode::Create) {
         addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.systemItems").c_str(), WS_TABSTOP,
                    layout.builtinPickX, 80, kBrowseWidth, kBrowseHeight,
@@ -907,8 +854,7 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                0, layout.fieldX, 336, layout.fieldW, 34, kFooterHintId, font);
 
     // ---- 保存 / 取消 ----
-    // 新建时说「添加」而不是「保存」：用户心里做的是「加一个」，
-    // 按钮跟他想做的事对齐，比通用词更少一分犹豫。
+    // 新建时按钮文案用「添加」，与用户想做的事一致。
     const bool creating = state->mode == ItemEditorMode::Create;
     addControl(dialog, L"BUTTON", creating ? infrastructure::i18n::trw("common.add").c_str() : infrastructure::i18n::trw("common.save").c_str(),
                WS_TABSTOP | BS_DEFPUSHBUTTON,
@@ -923,14 +869,11 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                  1024, 0);
 }
 
-// ---------------------------------------------------------------- 预览刷新
+// --- 预览刷新
 
-// 需要时重新解码图标像素。
-//
-// 来源只有两种：
-//   自定义图标（用户选的图，存在 data\res）→ 直接解码该 PNG
-//   目标自身（exe 的图标 / 文件夹图标 / 网页图标）→ 走 icon_loader
-// 用 pixelsKey 做「来源指纹」，同一次打开对话框里只在来源变化时解码一次。
+// 需要时重新解码图标像素。来源：自定义图标直接解码 PNG；
+// 目标自身（exe/文件夹/网页图标）走 icon_loader。
+// pixelsKey 是来源指纹，同一次打开只在来源变化时解码一次。
 void updatePreviewPixels(HWND dialog, EditorDialogState* state) {
     const std::wstring target = trimmed(controlText(GetDlgItem(dialog, kTargetId)));
     const std::optional<core::ItemType> inferred = inferItemType(target);
@@ -958,7 +901,7 @@ void updatePreviewPixels(HWND dialog, EditorDialogState* state) {
             state->hasPixels = true;
         }
         // 自定义图片读不出来（被删/被占用）时静默回落到目标图标，
-        // 预览里看到的就是「保存前的样子」，不会突然变成空白
+        // 预览保持「保存前的样子」，不会突然空白
     }
 
     if (!state->hasPixels && !target.empty()) {
@@ -979,9 +922,9 @@ void updatePreviewPixels(HWND dialog, EditorDialogState* state) {
         state->pixels.height = 0;
     }
 
-    // 重建 AlphaBlend 用的 DIB：DIB 的 32bpp 数据必须是**预乘** alpha，
-    // 否则半透明边缘会泛白（这是 AlphaBlend + AC_SRC_ALPHA 的硬性要求）。
-    // 预乘规则与磁贴侧的 D2D 位图共用 icon_store 里的同一份实现。
+    // DIB 的 32bpp 数据必须是预乘 alpha，否则半透明边缘泛白
+    // （AlphaBlend + AC_SRC_ALPHA 的硬性要求）。预乘实现与磁贴侧
+    // 的 D2D 位图共用 icon_store 里的同一份。
     state->previewDib.reset();
     if (!state->hasPixels) {
         return;
@@ -1013,12 +956,9 @@ void updatePreviewPixels(HWND dialog, EditorDialogState* state) {
     state->previewDib.reset(dib);
 }
 
-// 用「覆盖（cover）+ 居中裁剪」把图标画进目标矩形。
-//
-// 宁可裁掉两边，也不要留白或压扁。图的比例与目标框一致时（例如 1:2 的竖图
-// 放进 1x2 磁贴）就是整张图铺满、一点都不裁；比例不符时才取源图中段。
-// 注意这里的「目标框」对自定义图片而言是**整块磁贴**（见 fillIcon），
-// 所以 128x128 的图放进 64x128 的磁贴时取的是源图中央的 64/128 竖条。
+// 覆盖（cover）+ 居中裁剪：宁可裁边，不留白不压扁；比例一致时整图铺满。
+// 目标框对自定义图片而言是整块磁贴（见 fillIcon），
+// 所以竖图放进 1x2 磁贴时取的是源图中央的竖条。
 void drawIconCover(HDC target, const RECT& destination,
                    const EditorDialogState* state) {
     const int destWidth = destination.right - destination.left;
@@ -1079,7 +1019,7 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         DeleteObject(frameBrush);
     }
 
-    // ---- 计算磁贴的显示矩形：按真实像素尺寸画，居中于预览框 ----
+    // ---- 磁贴的显示矩形：按真实像素尺寸画，居中于预览框 ----
     const int unit = scaleFor(dialog, 64);
     const int tileWidth = unit * core::tileSpanColumns(state->previewSize);
     const int tileHeight = unit * core::tileSpanRows(state->previewSize);
@@ -1105,9 +1045,8 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
     tile.right = tile.left + drawnWidth;
     tile.bottom = tile.top + drawnHeight;
 
-    // 自定义图片（存在 data\res 的相对路径）铺满整块磁贴；
-    // 用目标自身图标时仍是方框居中 —— 与 launcher_window.cpp 一致。
-    // 例外：内置项自绘的 builtin-*.png 是方图，走缩放分支。
+    // 自定义图片铺满整块磁贴，系统图标方框居中（与 launcher_window.cpp 一致）；
+    // 内置项自绘的 builtin-*.png 是方图，走缩放分支。
     const bool builtinIcon =
         state->hasCustomIcon() &&
         ([] (const std::wstring& icon) {
@@ -1132,8 +1071,8 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         tile, state->previewSize, fillIcon, effectiveScale);
 
     // ---- 磁贴底 + 边框 ----
-    // 底色按「本项显式色 > 全局默认色 > 预览默认灰」取，让用户选完
-    // 颜色立刻在预览里看到真实结果（与主窗口 resolveTileBackground 同序）。
+    // 底色按「本项显式色 > 全局默认色 > 预览默认灰」取，
+    // 与主窗口 resolveTileBackground 同序，选完颜色预览立刻见效。
     const std::uint32_t previewTileColor =
         state->tileColor.has_value()
             ? *state->tileColor
@@ -1158,11 +1097,9 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         DeleteObject(borderPen);
     }
 
-    // ---- 插件磁贴：交给主窗口的插件渲染路径画真实内容 ----
-    //
-    // 插件磁贴没有「目标图标」可画 —— 它显示的是插件的实时数据。
-    // 用 GDI 在这里重新实现一套文本/图标/进度条会与磁贴实现逐渐偏离，
-    // 所以直接复用主窗口的布局 + D2D 绘制。回调失败时才退回文字提示。
+    // ---- 插件磁贴 ----
+    // 没有目标图标可画，直接复用主窗口的插件渲染路径（布局 + D2D），
+    // 用 GDI 重实现会逐渐偏离；回调失败时退回文字提示。
     if (state->initial.type == core::ItemType::Plugin &&
         state->pluginPreview) {
         if (state->pluginPreview(dc, tile, state->previewSize)) {
@@ -1189,7 +1126,7 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
     // ---- 标题 ----
     std::wstring name = trimmed(controlText(GetDlgItem(dialog, kNameId)));
     if (name.empty()) {
-        // 名称留空时显示层会回落到目标名 —— 预览也照这个来，避免「预览没标题、
+        // 名称留空时显示层回落到目标名，预览照做，避免「预览没标题、
         // 实际有标题」的错觉
         const std::wstring target =
             trimmed(controlText(GetDlgItem(dialog, kTargetId)));
@@ -1201,13 +1138,10 @@ void paintPreview(HWND dialog, EditorDialogState* state, HDC dc,
         return;
     }
 
-    // ---- 标题是否画出来，取决于这块磁贴自己的设置 ----
-    //
-    // 预览画的是「安静状态」（鼠标不在磁贴上）的真实样子：
-    //   始终显示 / 跟随全局(默认显示标题=开) → 标题在
-    //   移入时显示 / 跟随全局(默认显示标题=关) → 标题不在
-    // 所以选了「移入时显示」后预览里的标题会消失 —— 那不是坏了，
-    // 而是如实告诉用户「平时它就长这样」。
+    // ---- 标题是否画出来 ----
+    // 预览画的是安静状态（鼠标不在磁贴上）的真实样子：
+    // 始终显示或全局默认开 → 标题在；移入时显示或全局默认关 → 标题不在。
+    // 选「移入时显示」后预览里的标题消失不是坏了，平时它就长这样。
     bool previewShowsLabel = state->globalAlwaysShowLabels;
     switch (state->labelMode) {
         case core::TileLabelMode::Always:
@@ -1253,23 +1187,22 @@ void refreshPreview(HWND dialog, EditorDialogState* state) {
     }
 }
 
-// 「类型」提示行已按反馈移除（类型由程序自动判断，不需要用户关心），
+// 「类型」提示行已移除（类型由程序判断，不需要用户关心），
 // inferItemType 仍用于保存时的类型决定。
 
 void updateResetIconButton(HWND dialog, const EditorDialogState* state) {
     if (state == nullptr) {
         return;
     }
-    // 没有自定义图标时这个按钮没有意义，置灰而不是藏起来
-    // （位置固定，不会让界面跳动）
+    // 无自定义图标时置灰而不是藏起来，位置固定界面不跳
     EnableWindow(GetDlgItem(dialog, kResetIconId),
                  state->hasCustomIcon() ? TRUE : FALSE);
 }
 
-// ---------------------------------------------------------------- 交互
+// --- 交互
 
-// 图标大小行的联动：勾选「按统一设置」→ 滑块置灰、数值显示全局值；
-// 取消勾选 → 滑块恢复本项覆盖值（初值取全局，避免从 50 起步吓人）。
+// 图标大小行联动：勾「按统一设置」滑块置灰并显示全局值，
+// 取消勾选恢复本项覆盖值（初值取全局，避免从 50 起步吓人）。
 void syncIconScaleControls(HWND dialog, EditorDialogState* state) {
     const bool followGlobal =
         SendMessageW(GetDlgItem(dialog, kIconScaleCheckId), BM_GETCHECK, 0,
@@ -1378,7 +1311,7 @@ bool saveDialog(HWND dialog, EditorDialogState* state) {
         return false;
     }
 
-    // 类型不问了：按目标推断。推断不出（无扩展名且不存在）时沿用原类型 ——
+    // 类型按目标推断；推断不出沿用原类型，
     // 否则「只改个名字」会把 Application 悄悄改成 File。
     const std::optional<core::ItemType> inferred = inferItemType(target);
 
@@ -1395,8 +1328,8 @@ bool saveDialog(HWND dialog, EditorDialogState* state) {
         BST_CHECKED;
     state->result.tileSize = state->previewSize;
     state->result.labelMode = state->labelMode;
-    // 空 = 跟随全局默认色；非空 = 本项显式色。对话框每次保存都完整
-    // 提交这一项（与尺寸、标题方式同一套「所见即所得」）。
+    // 空 = 跟随全局默认色；非空 = 本项显式色。每次保存完整提交，
+    // 与尺寸、标题方式同一套「所见即所得」。
     state->result.tileColor = state->tileColor;
 
     // 图标大小：勾选「按统一设置」→ 0（跟随全局）；否则取滑块值
@@ -1442,8 +1375,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                 RECT card{};
                 card.left = scaleFor(hwnd, kCardLeft);
                 card.top = scaleFor(hwnd, kCardTop);
-                // 卡片宽度跟着标签列走：英文标签撑宽窗口时卡片要一起变宽，
-                // 否则右列控件会掉到卡片外面（白卡片上飘着几个输入框）
+                // 卡片宽度跟着标签列走：英文标签撑宽窗口时卡片一起变宽，
+                // 否则右列控件掉出卡片
                 card.right = scaleFor(hwnd, state != nullptr
                                                 ? state->layout.cardRight
                                                 : kCardRight);
@@ -1455,8 +1388,7 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
         }
 
         case WM_CTLCOLORSTATIC: {
-            // 卡片内文字画在白底上；两处说明文字用次级灰，
-            // 与正文标签拉开层次。其余标签与提示都是同一个逻辑。
+            // 卡片内文字画在白底上；两处说明文字用次级灰，靠 ID 区分。
             HDC dc = reinterpret_cast<HDC>(wParam);
             const int controlId =
                 GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
@@ -1470,7 +1402,7 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
         }
 
         case WM_CTLCOLORBTN: {
-            // 复选框默认用 COLOR_BTNFACE 填底，在白卡片上就是一块灰方框。
+            // 复选框默认用 COLOR_BTNFACE 填底，在白卡片上是灰方块，压成白底。
             HDC dc = reinterpret_cast<HDC>(wParam);
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, dialog_style::text());
@@ -1483,9 +1415,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
             SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                               reinterpret_cast<LONG_PTR>(
                                   createStruct->lpCreateParams));
-            // 不能在这里 return TRUE：窗口标题是 DefWindowProcW 处理
-            // WM_NCCREATE 时从 CREATESTRUCT 里存进去的。老代码直接
-            // return TRUE，标题栏就一直空着（实测 GetWindowText 为空）。
+            // 这里不能 return TRUE：窗口标题由 DefWindowProcW 处理
+            // WM_NCCREATE 时从 CREATESTRUCT 存入，提前返回标题栏一直是空的。
             break;
         }
 
@@ -1493,8 +1424,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
             if (state == nullptr) {
                 break;
             }
-            // 字体在 showItemEditorDialog 里就建好了（算坐标要用它量文字），
-            // 这里只负责用与登记，销毁仍走 WM_DESTROY。
+            // 字体在 showItemEditorDialog 里建好（算坐标要用），
+            // 这里只登记，销毁走 WM_DESTROY。
             HFONT font = state->font;
             createControls(hwnd, state, font);
             populateControls(hwnd, state);
@@ -1520,8 +1451,7 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     return TRUE;
                 }
             }
-            // 其余 BS_OWNERDRAW 按钮：保存/添加用强调色主按钮，
-            // 浏览 / 重置 / 取消等一律白底细边。
+            // 其余自绘按钮：保存/添加用强调色主按钮，其余白底细边。
             if (draw != nullptr && draw->CtlType == ODT_BUTTON) {
                 wchar_t label[64] = {};
                 GetWindowTextW(draw->hwndItem, label, 64);
@@ -1576,8 +1506,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                         if (selection != CB_ERR) {
                             state->labelMode = core::tileLabelModeFromIndex(
                                 static_cast<int>(selection));
-                            // 预览要跟着变：选了「移入时显示」后标题应从预览里
-                            // 消失，否则用户看不出这个选项到底有没有生效
+                            // 预览要跟着变：选「移入时显示」后标题应从预览
+                            // 消失，否则看不出选项是否生效
                             InvalidateRect(GetDlgItem(hwnd, kPreviewId), nullptr,
                                            FALSE);
                         }
@@ -1591,11 +1521,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                         programFilter.c_str(), nullptr);
                     if (!selected.empty()) {
                         SetDlgItemTextW(hwnd, kTargetId, selected.c_str());
-                        // 浏览回来后必须主动刷预览：焦点此刻还在浏览按钮上，
-                        // 编辑框既不会有 EN_CHANGE 之后的 EN_KILLFOCUS，
-                        // EN_CHANGE 本身也只更新类型提示 —— 不补这一下，
-                        // 左侧预览会一直停在旧图标（往往是空的占位框），
-                        // 直到用户再点别处才「迟到」。
+                        // 浏览回来必须主动刷预览：焦点还在浏览按钮上，
+                        // 编辑框不会有 EN_KILLFOCUS，不刷就一直停在旧图标
                         refreshPreview(hwnd, state);
                     }
                     return 0;
@@ -1619,10 +1546,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     return 0;
                 }
                 case kBuiltinPickId: {
-                    // 选内置项目：名称/目标/图标三件一起回填。
-                    // 名称也回填 —— 内置项的 target 要么是命令串要么是
-                    // GUID 路径，名称派生逻辑对它们都会给出无意义的文本
-                    // （GUID 串/命令名），必须在源头写好。
+                    // 名称/目标/图标一起回填；名称也回填，内置项的 target
+                    // 是命令串或 GUID 路径，派生出的名称没有意义。
                     ui::BuiltinPickResult picked;
                     if (showBuiltinItemDialog(hwnd, &picked)) {
                         SetDlgItemTextW(hwnd, kTargetId,
@@ -1636,9 +1561,9 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                 }
                 case kIconScaleCheckId:
                     if (state != nullptr) {
-                        // 取消勾选瞬间，滑块要有合理的起步值：
-                        // 本项有过覆盖值 → 恢复它；一直跟随全局 → 从全局值
-                        // 起步（否则 state 里还是初值 0，会显示「0%」）
+                        // 取消勾选瞬间滑块要有合理起步值：
+                        // 有过覆盖值恢复它，一直跟随全局则从全局值起步
+                        // （state 里还是初值 0，会显示「0%」）
                         if (SendMessageW(GetDlgItem(hwnd, kIconScaleCheckId),
                                          BM_GETCHECK, 0, 0) == BST_UNCHECKED) {
                             state->iconScalePercent =
@@ -1655,16 +1580,14 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     }
                     return 0;
                 case kTileColorSwatchId:
-                    // STATIC 点击发的是 STN_CLICKED（双击还会补一个
-                    // STN_DBLCLK），只认前者，避免双击弹两次色板。
+                    // 只认 STN_CLICKED：双击补发的 STN_DBLCLK 会弹两次色板。
                     if (state != nullptr && notification == STN_CLICKED) {
                         const std::uint32_t initial =
                             state->tileColor.value_or(
                                 state->globalTileColor.value_or(
                                     kPreviewTileFillArgb));
-                        // 内置色表：点一格立刻回填并刷新预览。
-                        // 弹板保持打开，用户可以在几块颜色之间来回点着比较；
-                        // 点完直接点「保存」即可，不需要先关弹板。
+                        // 内置色表：点一格立刻回填并刷新预览，弹板保持
+                        // 打开，用户可在几块颜色间来回比较后直接保存。
                         showColorPalette(
                             hwnd, GetDlgItem(hwnd, kTileColorSwatchId),
                             initial,
@@ -1680,7 +1603,7 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     return 0;
                 case kTileColorClearId:
                     if (state != nullptr) {
-                        // 清回「跟随全局默认色」，不是清成某个固定灰
+                        // 清回「跟随全局默认色」，不是清成固定灰
                         state->tileColor.reset();
                         InvalidateRect(GetDlgItem(hwnd, kTileColorSwatchId),
                                        nullptr, TRUE);
@@ -1694,8 +1617,8 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                     }
                     return 0;
                 case kTargetId:
-                    // 目标图标要等焦点离开才重新提取 ——
-                    // 每敲一个字符就跑一次 shell 图标提取会明显卡顿
+                    // 目标图标等焦点离开才重新提取：
+                    // 每敲一个字符跑一次 shell 图标提取会明显卡顿
                     if (notification == EN_KILLFOCUS) {
                         refreshPreview(hwnd, state);
                     }
@@ -1738,10 +1661,9 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
             if (font != nullptr) {
                 DeleteObject(font);
             }
-            // 预览用的 DIB 挂在 state 上，随对话框销毁一起走
-            // 唤醒模态循环。绝不能用 PostQuitMessage —— 它投递的是
-            // 线程级粘性 WM_QUIT，会连带终止主消息循环
-            // （「设置窗口点确定后程序退出」就是它干的）。
+            // 预览用的 DIB 挂在 state 上随对话框销毁。用 PostMessageW 唤醒
+            // 模态循环；绝不能用 PostQuitMessage，它投递线程级粘性 WM_QUIT
+            // 会连带终止主消息循环。
             PostMessageW(hwnd, kEditorDialogCloseMessage, 0, 0);
             return 0;
         }
@@ -1774,7 +1696,7 @@ void ensureEditorDialogClass(const HINSTANCE instance) {
 
 }  // namespace
 
-// ---------------------------------------------------------------- 对外接口
+// --- 对外接口
 
 std::optional<core::ItemType> inferItemType(const std::wstring& target) {
     return inferItemTypeImpl(target);
@@ -1826,7 +1748,7 @@ bool showItemEditorDialog(HWND owner,
     RECT ownerRect{};
     GetWindowRect(owner, &ownerRect);
     // 字体与控件坐标都在这里先算：窗口宽度取决于标签实测宽度，
-    // 而宽度必须在 CreateWindowExW 之前给出来。
+    // 必须在 CreateWindowExW 之前给出。
     state.font = dialogFont();
     state.layout = computeLayout(owner, state.font);
     const int width = scaleFor(owner, state.layout.clientWidth);
@@ -1867,10 +1789,9 @@ bool showItemEditorDialog(HWND owner,
     UpdateWindow(dialog);
     SetForegroundWindow(dialog);
 
-    // 本地模态循环（与重命名/设置窗口同一套）：
-    //  - 退出条件是 IsWindow(dialog)，不依赖 WM_QUIT；
-    //  - 对话框自身的按键交给 IsDialogMessageW（Tab 切换、回车=保存、Esc=取消）；
-    //  - 其余消息照常派发，主窗口在对话框期间依然活着。
+    // 本地模态循环（与重命名/设置窗口同一套）：退出条件是 IsWindow(dialog)，
+    // 不依赖 WM_QUIT；对话框自身按键交给 IsDialogMessageW（Tab/回车/Esc），
+    // 其余消息照常派发，主窗口在对话框期间依然活着。
     MSG message{};
     while (IsWindow(dialog) && GetMessageW(&message, nullptr, 0, 0) > 0) {
         if (message.message == kEditorDialogCloseMessage) {

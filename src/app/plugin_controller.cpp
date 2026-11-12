@@ -32,8 +32,8 @@ void PluginController::initialize(const std::wstring& pluginDirectory,
     dataDirectory_ = dataDirectory;
     invalidate_ = std::move(invalidate);
 
-    // 插件（清单 + 图标）随发布包一起放在 plugin 目录里，主程序只负责扫描。
-    // 主程序不再内嵌默认清单/图标：不装插件时 exe 里没有任何插件资源。
+    // 插件清单与图标随发布包放在 plugin 目录，主程序只负责扫描；
+    // exe 内不内嵌任何插件资源。
     discoverPlugins();
 
     stopping_ = false;
@@ -322,9 +322,9 @@ void PluginController::refreshItems(const std::vector<core::LaunchItem>& items,
                 continue;
             }
 
-            // 命中 TTL：不重复请求。面板可见时，配置了 visibleRefreshSeconds
-            // 的插件改用前台节奏；其余插件仍按 refreshSeconds，避免一开面板
-            // 就整页重刷（HTTP 插件本来就有配额）。
+            // 命中 TTL 不重复请求。面板可见时，配置了 visibleRefreshSeconds
+            // 的插件改用前台节奏，其余仍按 refreshSeconds，避免一开面板就整页
+            // 重刷（HTTP 插件有配额）。
             int ttlSeconds = entry.manifest->refreshSeconds;
             if (visible && entry.manifest->visibleRefreshSeconds > 0) {
                 ttlSeconds = entry.manifest->visibleRefreshSeconds;

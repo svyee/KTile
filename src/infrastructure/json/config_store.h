@@ -1,16 +1,9 @@
 // KTile - 基础设施层：配置与数据的持久化
 //
-// 职责：在 core 领域模型与 JSON 文本之间做双向映射，并负责文件读写。
-//
-// 文件布局（均在 data 目录下）：
-//   items.json   —— 磁贴数据（ItemsDocument）
-//   config.json  —— 应用配置（ApplicationConfig）
-//
-// 容错策略：
-//   - 文件不存在：返回默认值 + ok=true（首次运行是正常情况）
-//   - 文件损坏：返回默认值 + ok=false，并把损坏文件改名备份（*.bak）
-//     这样用户的手工编辑出错时不会直接丢失全部数据。
-//
+// 在 core 领域模型与 JSON 文本之间做双向映射，并负责文件读写。
+// data 目录下 items.json（磁贴数据）、config.json（应用配置）。
+// 容错：文件不存在返回默认值 + ok=true（首次运行属正常）；文件损坏返回
+// 默认值 + ok=false，并把损坏文件改名备份（*.corrupt）。
 #pragma once
 
 #include "core/data_model.h"
@@ -64,7 +57,7 @@ private:
     // 原子写入：先写 .tmp 再替换，避免写入中途崩溃损坏原文件
     static bool writeFileText(const std::wstring& path, const std::string& text,
                               std::string& error);
-    // 把损坏文件改名加时间戳后缀
+    // 把损坏文件改名备份（加 .corrupt 后缀），只保留最近一次
     static void backupCorruptFile(const std::wstring& path);
 };
 

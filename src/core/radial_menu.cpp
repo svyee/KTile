@@ -8,7 +8,7 @@
 namespace ktile {
 namespace core {
 
-// ================================================================ 抑制键
+// --- 抑制键
 
 bool modifierIsTriggerModifier(HotkeyModifier held,
                               RadialTriggerModifier trigger) noexcept {
@@ -38,12 +38,12 @@ bool suppressionApplies(RadialTriggerModifier trigger) noexcept {
     return trigger == RadialTriggerModifier::None;
 }
 
-// ================================================================ 黑名单匹配
+// --- 黑名单匹配
 
 bool processNameEquals(const std::string& left,
                        const std::string& right) noexcept {
     // 进程名在 Windows 上大小写无关，逐字节折 ASCII 大写即可，不碰 locale。
-    // 非 ASCII 字节原样比较 —— 进程名实际都是 ASCII。
+    // 非 ASCII 字节原样比较，进程名实际都是 ASCII。
     if (left.size() != right.size()) return false;
     for (std::size_t i = 0; i < left.size(); ++i) {
         const unsigned char a = static_cast<unsigned char>(left[i]);
@@ -68,7 +68,7 @@ bool RadialConfig::isProcessBlocked(const std::string& processName) const noexce
     return isProcessBlockedBy(blacklist, processName);
 }
 
-// ================================================================ 几何计算
+// --- 几何计算
 
 std::uint8_t sectorFromAngle(float angleDeg, std::uint8_t sectorCount) noexcept {
     if (sectorCount < kMinSectors) sectorCount = kMinSectors;
@@ -173,7 +173,7 @@ float radialLabelWindowWidth(float cardWidth, float cardHeight, float corner,
     return lo * 2.0F;
 }
 
-// ================================================================ 配置校验
+// --- 配置校验
 
 bool validateRadialConfig(const RadialConfig& config) noexcept {
     const RadialMenu& menu = config.menu;

@@ -21,14 +21,13 @@ const wchar_t* T(const char* key) {
     return infrastructure::i18n::trw(key).c_str();
 }
 
-// 「移动到其他页面」子菜单最多列多少页。
-// 子菜单长到要滚动就不好用了 —— 页数超过这个数时，用户更适合用
-// 编辑对话框里的「所属页面」下拉（那里可以滚）。
+// 「移动到其他页面」子菜单最多列 32 页：再长就要滚动，用户更适合去
+// 编辑对话框的「所属页面」下拉（那里可以滚）。
 constexpr std::size_t kMaxTabMenuEntries = 32;
 
 }  // namespace
 
-// ---------------------------------------------------------------- 菜单
+// --- 菜单
 //
 // 结构（参照 HLaunch 并保留 KTile 特有的磁贴尺寸）：
 //     <项目名>            （禁用标题）
@@ -36,7 +35,7 @@ constexpr std::size_t kMaxTabMenuEntries = 32;
 //     运行/打开
 //     以管理员身份运行     （仅应用类型可用）
 //     打开文件所在位置     （网址类型不可用）
-//     跟随启动 ✓           （仅应用类型可用；已添加的显示勾，再点即移除）
+//     跟随启动             （仅应用类型可用；已添加的显示勾，再点即移除）
 //     ─────────────
 //     磁贴大小 >
 //     标题显示 >
@@ -65,8 +64,8 @@ TileMenuCommand showTileContextMenu(HWND owner,
 
     entries.push_back(PopupMenuEntry::separator());
 
-    // ---- 启动类 ----
-    // 网址用「打开」、文件夹用「打开」、其余「运行」——文字贴合语义。
+    // --- 启动类
+    // 网址用「打开」、文件夹用「打开」、其余「运行」，文字贴合语义。
     const wchar_t* runText =
         item.type == core::ItemType::Url ? T("tilemenu.openUrl")
         : item.type == core::ItemType::Folder ? T("tilemenu.openFolder")
@@ -87,13 +86,11 @@ TileMenuCommand showTileContextMenu(HWND owner,
         T("tilemenu.openLocation"),
         item.type != core::ItemType::Url));
 
-    // ---- 跟随启动 ----
+    // --- 跟随启动
     //
-    // 勾选式：已加入清单的打勾，再点一次就是移除 —— 与设置窗口里的
-    // 「移除」等效，省得为一个勾去翻两层设置页。
-    //
-    // 只对可执行目标开放：网址、文件夹在 KTile 启动时自动弹出来是骚扰；
-    // 插件磁贴没有可执行文件，也无从「启动」。
+    // 勾选式：已加入清单的打勾，再点一次即移除，与设置窗口里的「移除」
+    // 等效，省得为一个勾去翻两层设置页。只对可执行目标开放：网址、
+    // 文件夹开机自动弹出是骚扰，插件磁贴无可执行文件，无从「启动」。
     PopupMenuEntry follow = PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::ToggleFollowStartup),
         T("tilemenu.followStartup"), followingStartup);
@@ -102,7 +99,7 @@ TileMenuCommand showTileContextMenu(HWND owner,
 
     entries.push_back(PopupMenuEntry::separator());
 
-    // ---- 磁贴大小子菜单（当前尺寸打勾） ----
+    // --- 磁贴大小子菜单（当前尺寸打勾）
     const auto checkFor = [&item](const core::TileSize size) {
         return item.tileSize == size;
     };
@@ -127,10 +124,10 @@ TileMenuCommand showTileContextMenu(HWND owner,
 
     entries.push_back(PopupMenuEntry::parent(T("tilemenu.tileSize"), std::move(sizeEntries)));
 
-    // ---- 标题显示子菜单（当前方式打勾） ----
+    // --- 标题显示子菜单（当前方式打勾）
     //
-    // 每块磁贴单独控制：小磁贴想干净、大磁贴想常显，都用这一项切换，
-    // 不必钻进「修改项目」对话框（那个入口更深）。
+    // 每块磁贴单独控制：小磁贴想干净、大磁贴想常显都用这一项切换，
+    // 不必钻进「修改项目」对话框。
     std::vector<PopupMenuEntry> labelEntries;
     labelEntries.push_back(PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::LabelFollowGlobal),
@@ -151,10 +148,10 @@ TileMenuCommand showTileContextMenu(HWND owner,
 
     entries.push_back(PopupMenuEntry::parent(T("tilemenu.labelMode"), std::move(labelEntries)));
 
-    // ---- 移动到其他页面子菜单 ----
+    // --- 移动到其他页面子菜单
     //
-    // 只有一页时不显示：无处可移，多一个永远是空的子菜单只会添乱。
-    // 当前页自己不出现在列表里 —— 「移动到本页」没有意义。
+    // 只有一页时不显示：无处可移，空子菜单只会添乱。当前页不出现在
+    // 列表里：「移动到本页」没有意义。
     if (tabNames.size() > 1) {
         std::vector<PopupMenuEntry> tabEntries;
         const std::size_t targetCount = (std::min)(tabNames.size(), kMaxTabMenuEntries);
@@ -176,11 +173,10 @@ TileMenuCommand showTileContextMenu(HWND owner,
         }
     }
 
-    // ---- 复制到其他页面子菜单 ----
+    // --- 复制到其他页面子菜单
     //
-    // 与「移动」并列放在它下面：目标页与条件完全一致（只有一页时无处
-    // 可放，当前页不出现在列表里），但语义不同 —— 移动是搬家，复制是
-    // 克隆一份（原磁贴留在本页，目标页多出一个内容相同的新磁贴）。
+    // 目标页与条件与「移动」完全一致，语义不同：移动是搬家，复制是
+    // 克隆（原磁贴留在本页，目标页多出内容相同的新磁贴）。
     if (tabNames.size() > 1) {
         std::vector<PopupMenuEntry> copyEntries;
         const std::size_t targetCount = (std::min)(tabNames.size(), kMaxTabMenuEntries);
@@ -244,7 +240,7 @@ TileMenuCommand showTileContextMenu(HWND owner,
     }
 }
 
-// ---------------------------------------------------------------- 删除确认
+// --- 删除确认
 
 bool confirmItemRemoval(HWND owner, const std::wstring& itemName,
                         const bool alsoFollowsStartup) {

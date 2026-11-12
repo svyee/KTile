@@ -1,12 +1,7 @@
 // KTile - C++17 兼容层：算法工具
 //
-// 提供 HLaunch 中使用 C++20 <ranges> 的等效替代。
-// 避免在业务代码里到处写冗长的迭代器循环，同时保持 C++17 可编译。
-//
-// 设计要点：
-//  - 全部为薄封装，行为对齐 std::ranges 对应算法
-//  - 返回索引而非迭代器（业务侧更常需要索引）
-//  - 不使用 C++17 之后的特性
+// HLaunch 中 C++20 <ranges> 写法的 C++17 等效替代。全部为薄封装，行为对齐
+// std::ranges 对应算法；返回索引而非迭代器，业务侧更常需要索引。
 //
 #pragma once
 
@@ -19,7 +14,7 @@
 namespace ktile {
 namespace base {
 
-// ---------------------------------------------------------------- 查找
+// --- 查找
 
 // 在 [begin,end) 中查找首个满足谓词的元素，返回迭代器
 template <typename It, typename Pred>
@@ -68,7 +63,7 @@ std::size_t findIndex(const Container& container, const T& wanted) {
     return size;
 }
 
-// ---------------------------------------------------------------- 判定
+// --- 判定
 
 // 任意元素满足谓词
 template <typename Container, typename Pred>
@@ -104,7 +99,7 @@ bool contains(const Container& container, const T& value) {
     return std::find(container.begin(), container.end(), value) != container.end();
 }
 
-// ---------------------------------------------------------------- 排序
+// --- 排序
 
 // 稳定排序（按投影键），对齐 std::ranges::stable_sort
 template <typename Container, typename Key>
@@ -138,7 +133,7 @@ void stableSortWith(Container& container, Compare compare) {
     std::stable_sort(container.begin(), container.end(), compare);
 }
 
-// ---------------------------------------------------------------- 变换/过滤
+// --- 变换/过滤
 
 // 映射：生成新容器（保留顺序）
 template <typename Result, typename Container, typename Mapper>
@@ -164,7 +159,7 @@ std::vector<typename Container::value_type> filter(const Container& container, P
     return out;
 }
 
-// ---------------------------------------------------------------- 极值
+// --- 极值
 
 // 按投影键求最小值元素索引，空容器返回 size
 template <typename Container, typename Key>
@@ -198,7 +193,7 @@ std::size_t maxIndexBy(const Container& container, Key key) {
     return best;
 }
 
-// ---------------------------------------------------------------- 去重
+// --- 去重
 
 // 判断值是否在容器内唯一出现（用于 ID 冲突检测）
 template <typename Container, typename T>

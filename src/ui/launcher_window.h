@@ -1,17 +1,9 @@
 // KTile - UI 层：启动器主窗口
 //
-// 职责：
-//   1. 创建无边框窗口
-//   2. 管理 Direct2D / DirectWrite 渲染资源
-//   3. 把磁贴布局结果绘制到屏幕
-//   4. 处理鼠标/键盘交互
-//
-// 设计说明：
-//   - D2D 资源按「设备无关」与「设备相关」分离：工厂等长期持有，
-//     渲染目标在窗口尺寸变化/D2D 设备丢失时重建。
-//   - 布局计算委托给 core::calculateTileLayout（纯算法，已单测）。
-//   - Win7 兼容：D2D 1.0 / DWrite 在 Win7 上可用（需 Platform Update，
-//     Win7 SP1 默认已含）。
+// 无边框窗口 + D2D/DWrite 渲染，布局计算委托 core::calculateTileLayout
+//（纯算法，已单测）。D2D 资源分设备无关（工厂，长期持有）与设备相关
+//（渲染目标，尺寸变化/设备丢失时重建）。D2D 1.0 / DWrite 在 Win7 SP1
+// 可用（需 Platform Update，默认已含）。
 //
 #pragma once
 
@@ -46,19 +38,15 @@ struct TileMetrics {
     float cellSize = 64.0F;
     // 磁贴之间的间隙
     float cellGap = 6.0F;
-    // 直角磁贴 —— 图标直接铺满整格，不加圆角裁切
+    // 0 = 直角磁贴，图标直接铺满整格，不加圆角裁切
     float cornerRadius = 0.0F;
     // 标签字体大小
     float labelFontSizeSmall = 11.0F;
     float labelFontSizeLarge = 13.0F;
     // 内边距
-    //
-    // outerPadding 管左右与顶部基准（顶部实际留白还要减去标题带内控件的
-    // 上偏移，见 kHeaderContentTopInset）；bottomPadding 单独管底边 ——
-    // 底边只跟「网格最后一行到窗口下缘」有关，和左右没必要绑成同一个数。
-    //
+    // 内边距。outerPadding 管左右与顶部基准（顶部实际留白还要减去
+    // kHeaderContentTopInset）；bottomPadding 只管底边，与左右不必绑同一数。
     // 高度公式：outerPadding + bottomPadding + headerHeight + 标签条 + 网格。
-    // 左右边框窄、上下也窄，磁贴区自然更贴近窗口边缘。
     float outerPadding = 10.0F;
     float bottomPadding = 6.0F;
     float headerHeight = 36.0F;
@@ -84,25 +72,17 @@ struct TilePalette {
     std::uint32_t hoverBorder = 0x00000000;
 };
 
-// 标签条度量（DIP）。
-//
-// 放在头文件而不是某个 .cpp 的匿名命名空间：窗口尺寸计算
-// （launcher_window_behavior.cpp）与绘制/命中（launcher_window.cpp）
-// 必须用同一组数字，否则「窗口按 A 高度算、标签按 B 高度画」，
-// 差几个像素就是一条永久存在的错位缝。
+// 标签条度量（DIP）。放在头文件：窗口尺寸计算（launcher_window_behavior.cpp）
+// 与绘制/命中（launcher_window.cpp）必须用同一组数字，否则窗口按 A 高度算、
+// 标签按 B 高度画，出现永久错位缝。
 inline constexpr float kTabBarHeight    = 26.0F;
 inline constexpr float kTabBarGapTop    = 4.0F;   // 与标题带的间距
 inline constexpr float kTabBarGapBottom = 6.0F;   // 与磁贴网格的间距
 
-// ================================================================ 动画支持
-//
-// 拖拽动画的核心思想是「偏移量插值」而不是「每帧重跑布局」：
-// 每块磁贴维护一个视觉偏移（当前渲染位置 − 布局位置），动画只改这个偏移。
-// 好处：
-//   1. 动画结束后偏移归零，绘制结果与静态完全一致，不会浮点累积错位
-//   2. 布局算法（二维装箱）只在落点真正变化时算一次，不是每帧
-//
-// 动画由 SetTimer(约 60fps) 驱动，全部使用 Win7 可用 API。
+// --- 动画支持
+// 拖拽动画只插值视觉偏移（渲染位置 − 布局位置），不每帧重跑布局：
+// 结束时偏移归零，绘制与静态完全一致，也不会浮点累积错位；布局算法
+// 只在落点变化时算一次。SetTimer（约 60fps）驱动，全部用 Win7 可用 API。
 struct TileAnimation {
     // 当前视觉偏移（DIP）
     float offsetX = 0.0F;
@@ -118,7 +98,7 @@ struct TileAnimation {
     // 时长（毫秒），0 表示无动画
     std::uint32_t durationMs = 0;
 
-    // 本轮动画是否已结束（读的时候顺带推进状态）
+    // 本轮动画是否已结束
     bool settled() const noexcept { return durationMs == 0; }
 
     // 把偏移直接落到终点并结束动画
@@ -157,9 +137,8 @@ public:
     using WindowMovedHandler = std::function<void(int x, int y)>;
 
     // ---- 插件磁贴 ----
-    //
-    // UI 只负责「把数据画出来」，插件数据的发现/刷新/缓存全部在 app 层。
-    // 这样 UI 不依赖 infrastructure / WinHTTP，core 的布局引擎也能单独测试。
+    // UI 只负责把数据画出来，插件发现/刷新/缓存在 app 层：UI 不依赖
+    // infrastructure / WinHTTP，core 的布局引擎也能单独测试。
     using PluginViewProvider = std::function<core::PluginView(const core::LaunchItem&)>;
     using PluginCatalogProvider =
         std::function<std::vector<core::PluginCatalogEntry>()>;
@@ -193,12 +172,8 @@ public:
     std::uint16_t gridColumns() const noexcept { return gridColumns_; }
     std::uint16_t gridRows() const noexcept { return gridRows_; }
 
-    // 是否显示磁贴文字标签。
-    //
-    // 语义分层（避免「一个开关毁掉布局信息」）：
-    //   关闭时 —— 小/横向磁贴不再在悬停时弹出名字；
-    //   大/纵向磁贴本来就常显名字，同样一并隐藏，保持行为一致。
-    // 关闭后再开回来，悬停显示的行为自动恢复（不改任何数据）。
+    // 是否显示磁贴文字标签。关闭时大/纵向磁贴的常显标题也一并隐藏；
+    // 再开回来行为自动恢复，不改任何数据。
     void setShowTileLabels(const bool show) {
         showTileLabels_ = show;
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -207,17 +182,13 @@ public:
 
     // 图标相对磁贴内框的统一缩放百分比（50~100，默认 90）。
     // 单项可在编辑对话框里覆盖（LaunchItem.iconScalePercent）。
-    // 只改绘制矩形，不动磁贴布局与图标位图缓存 —— 无需重算布局。
+    // 只改绘制矩形，不动磁贴布局与图标位图缓存，无需重算布局。
     void setTileIconScalePercent(const int percent) {
         tileIconScalePercent_ = std::clamp(percent, 50, 100);
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
-    // 标题是否「默认显示」。
-    //
-    // false 时所有尺寸都退回「鼠标移入才浮出标题」——适合 1x1 小磁贴密集、
-    // 且不想让黑色标题条盖住图标的用户。true（默认）时标题常驻，
-    // 一眼就能认出每个磁贴是什么。
+    // 标题是否默认显示。false 时所有尺寸都改为移入才浮出标题，true（默认）常驻。
     void setAlwaysShowTileLabels(const bool always) {
         alwaysShowTileLabels_ = always;
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -234,8 +205,8 @@ public:
     }
     bool tabBarAtBottom() const noexcept { return tabBarAtBottom_; }
 
-    // 窗口出现位置。只影响「下次摆放」——show() 与 applyWindowPlacement()
-    // 会按这个策略算坐标，设置窗口打开期间不会自己乱动。
+    // 窗口出现位置。只影响下次摆放：show() 与 applyWindowPlacement()
+    // 按这个策略算坐标，设置窗口打开期间不会自己乱动。
     void setWindowPlacement(const core::WindowPlacement placement) {
         placement_ = placement;
     }
@@ -268,24 +239,18 @@ public:
     // 绘制策略：cover 等比铺满 + 主题 backgroundDim 压暗层。
     void setBackgroundImage(const std::wstring& absolutePath);
 
-    // 主窗口整体不透明度（50~100%，100 = 完全不透明）。
-    //
-    // 走 WS_EX_LAYERED + SetLayeredWindowAttributes(LWA_ALPHA)：系统在
-    // 窗口与桌面合成时统一乘一个 alpha，窗口内容本身仍是「不透明绘制」，
-    // 因此与 D2D 每帧 Clear 到不透明底的策略不冲突（帧间残影照旧不存在）。
-    // 100% 时把 WS_EX_LAYERED 撤掉 —— 少一层合成，正常使用零开销。
+    // 主窗口整体不透明度（50~100，100 = 完全不透明）。
+    // 走 WS_EX_LAYERED + LWA_ALPHA：系统在合成时统一乘 alpha，内容仍按
+    // 不透明绘制，与每帧 Clear 到不透明底的策略不冲突。100% 时撤掉该样式。
     void setWindowOpacityPercent(int percent);
     int windowOpacityPercent() const noexcept { return windowOpacityPercent_; }
 
     // 磁贴背景不透明度（0~100，-1 = 跟随皮肤 tileFill 自带的 alpha）。
-    //
-    // 只影响「磁贴底色」这一层，与上面的整窗透明度是两个独立的旋钮：
-    // 整窗透明度是窗口与桌面合成时乘的系数，这里是磁贴底自己画多浓。
+    // 只影响磁贴底色层，与整窗透明度（合成时乘的系数）相互独立。
     void setTileOpacityPercent(int percent);
     int tileOpacityPercent() const noexcept { return tileOpacityPercent_; }
-    // 当前实际生效的磁贴背景不透明度（0~100）。
-    // 「跟随皮肤」时换算成皮肤 tileFill 的 alpha —— 设置窗口要显示这个
-    // 真实值，否则滑块会停在一个和观感对不上的位置。
+    // 当前实际生效的磁贴背景不透明度（0~100）。跟随皮肤时由 tileFill 的
+    // alpha 换算，设置窗口显示的滑块位置才与观感一致。
     int effectiveTileOpacityPercent() const;
 
     // 所有磁贴的默认背景色（ARGB）。空 = 跟随皮肤。
@@ -298,10 +263,8 @@ public:
         return defaultTileColor_;
     }
 
-    // 丢弃图标缓存。
-    //
-    // 「修改项目」改过目标或自定义图标后必须调用：缓存键是 item.id，
-    // 而 id 不变、图标变了，不主动作废就会一直显示旧图标。
+    // 丢弃图标缓存。「修改项目」改过目标或图标后必须调用：缓存键是
+    // item.id，id 不变，不作废会一直显示旧图标。
     void invalidateIconCache() { clearIconCache(); }
 
     // 当前布局结果（供设置窗口统计「已占用的行列」）
@@ -329,11 +292,9 @@ public:
         pluginViewProvider_ = std::move(handler);
     }
 
-    // 把一块插件磁贴渲染进任意 HDC（编辑对话框的左上角预览用）。
-    //
-    // 复用主窗口同一套「布局引擎 → 绘制指令 → 图标解析」，所以预览看到
-    // 的就是磁贴真实的显示效果（含局部彩色图标）。target 是物理像素矩形，
-    // 按 96 DPI 解释；size 决定选哪一档布局（small/wide/tall/large）。
+    // 把插件磁贴渲染进任意 HDC（编辑对话框预览用）。与主窗口同一套
+    // 布局与绘制路径，预览即真实效果（含局部彩色图标）。target 是物理
+    // 像素矩形；size 决定选哪一档布局（small/wide/tall/large）。
     bool renderPluginPreview(HDC dc, const RECT& target,
                              const core::PluginView& view,
                              core::TileSize size);
@@ -355,11 +316,9 @@ public:
     }
 
     // ---- 标签页（多页面分标） ----
-    //
-    // 语义：每个标签页持有自己独立的一套磁贴（含各自的网格坐标），
-    // 因此同一个程序可以同时出现在两页上 —— 这是「分标」的核心诉求，
-    // 去重只在**同一页内**有效（见 app 层的拖入去重）。
-    // 面板同一时刻只显示一页：activeTabIndex_。
+    // 每页持有独立的磁贴集合（含网格坐标），同一程序可同时出现在两页上，
+    // 去重只在同一页内有效（见 app 层的拖入去重）。面板同一时刻只显示
+    // activeTabIndex_ 一页。
     std::size_t tabCount() const noexcept { return document_.tabs.size(); }
     std::size_t activeTabIndex() const noexcept { return activeTabIndex_; }
     // 当前页的 id（多用于持久化「上次在哪一页」）。无页时返回空串。
@@ -374,10 +333,8 @@ public:
     void cycleActiveTab(int delta);
 
     // ---- 标签页数据操作 ----
-    //
     // 全部走 core::tab_operations，改完立即通知 documentChangedHandler_
-    // （app 层据此落盘），与磁贴尺寸/位置变更同一套约定。
-    // 名字为空时自动取名「页面 N」。
+    // 供 app 层落盘。名字为空时自动取名「页面 N」。
     std::size_t createTab(const std::string& rawName);
     bool renameTab(std::size_t index, const std::string& rawName);
     // 删除（连同页内磁贴）。只剩一页时拒绝。
@@ -386,21 +343,13 @@ public:
     bool moveTab(std::size_t from, std::size_t to);
 
     // ---- 拖入添加的落点预览 ----
-    //
-    // 从资源管理器/浏览器拖文件进来时，面板**只画新磁贴将占据的那一格**
-    // （与拖动已有磁贴同一套虚线框，只是换成强调色），并让被压住的磁贴
-    // 做让位预演。松手即落在这一格，压到谁就把谁挤开。
-    //
-    // 为什么不再铺满内容区 + 居中写「松开鼠标即可添加」：
-    //   1. 提示条横贯整块面板，把磁贴全挡住，用户反而看不清要放到哪儿
-    //   2. 个别拖拽来源（实测 Directory Opus）在放下后会补发一次
-    //      DragEnter 却永远不给 DragLeave，提示条就会留在屏幕上不消失
-    // 落点框是「所见即所得」的，松手前后的画面完全一致，没有歧义。
-    //
-    // newItemSize：新磁贴的尺寸（用设置里的默认尺寸），决定框的大小。
-    // screenPoint：光标屏幕坐标（OLE 给的就是屏幕坐标）。
-    // 只有左键真的按着才点亮 —— 真实拖拽必然按着左键，而上面那种
-    // 「放下后补发的 DragEnter」此刻按键已经松开，据此直接忽略，残影无从产生。
+    // 拖文件进来时只画新磁贴将占据的那一格（强调色虚线框）并让被压住的
+    // 磁贴做让位预演，松手即落在这一格。铺满内容区加提示条的方案被否决：
+    // 提示条挡住磁贴，且个别来源（Directory Opus）放下后补发 DragEnter
+    // 却不给 DragLeave，提示条会残留不消失。
+    // newItemSize：新磁贴尺寸（决定框大小）；screenPoint：光标屏幕坐标。
+    // 只有左键真的按着才点亮：真实拖拽必然按着左键，补发的 DragEnter
+    // 到达时按键已松开，据此忽略，残影无从产生。
     void setFileDropTarget(bool active, core::TileSize newItemSize,
                            POINTL screenPoint);
     bool fileDropActive() const noexcept { return fileDropActive_; }
@@ -414,29 +363,20 @@ public:
     void refresh();
 
     // 按当前网格尺寸重算窗口大小并立即应用（不抢焦点、不改可见性）。
-    //
-    // 网格列/行数决定客户区尺寸（见 calculateWindowRect）。设置窗口里
-    // 改网格时要「所见即所得」，所以必须立刻改窗口大小 —— 光调
-    // recomputeLayout() 只会重排磁贴，窗口还是旧尺寸，超出的磁贴会被
-    // 裁掉，看起来像设置没生效。
+    // 只调 recomputeLayout() 的话窗口仍是旧尺寸，放不下的磁贴被裁掉，
+    // 看起来像设置没生效。
     void applyGridGeometry();
 
     // ---- 调试辅助（供 --debug-shot 使用） ----
-    //
-    // 本机的自动化抓屏链路对 WS_EX_NOACTIVATE 的 D2D 窗口不可靠：
-    // PrintWindow 依赖窗口实现 WM_PRINT（HwndRenderTarget 不实现），
-    // 屏幕 BitBlt 又要求窗口真的显示在物理屏幕上且未被遮挡。
-    // 因此改为让程序自己把 D2D 输出渲染到 WIC 位图并落盘 —— 拿到的
-    // 是渲染器的真实输出，完全绕开窗口合成环节。
-    //
-    // 这两个方法只在调试路径上调用，不影响正常运行时的渲染流程。
+    // PrintWindow 对 D2D 窗口不可靠（HwndRenderTarget 不实现 WM_PRINT），
+    // 屏幕 BitBlt 又要求窗口可见且未遮挡，所以由程序把 D2D 输出渲染到
+    // WIC 位图落盘，绕开窗口合成。仅调试路径调用，不影响正常渲染流程。
 
     // 模拟悬停到指定客户区坐标（<0 表示清除悬停）
     void debugSetHover(int clientX, int clientY);
 
-    // 模拟「有文件拖到窗口上」：点亮落点预览（客户区坐标，<0 表示清除）。
-    // 真实拖入需要人工按住鼠标，自动化里用这个办法把那一刻的视觉拍下来。
-    // 与真实路径的差别只有一处：不检查「左键是否按着」。
+    // 模拟文件拖到窗口上：点亮落点预览（客户区坐标，<0 表示清除），
+    // 供自动化拍下拖入视觉。与真实路径的唯一差别是不检查左键是否按着。
     void debugSetFileDropPreview(int clientX, int clientY);
 
     // 模拟拖拽状态：source 为被拖动的磁贴坐标，target 为落点坐标
@@ -464,14 +404,10 @@ public:
     // 返回 false 表示落点非法、放不下或位置未变化
     bool moveItemToSpot(std::size_t fromIndex, const core::Dropspot& spot);
 
-    // 供 app 层调用：把若干**新项目**插到光标所在的格子上。
-    //
-    // 语义与拖动磁贴完全一致 —— 「落点即结果」：
-    //   - 新磁贴直接占住光标所在那格（光标在格 (3,2) 就落在 (3,2)）
-    //   - 压住的已有磁贴按同一套避让规则让到附近的空位，其余原地不动
-    //   - 多个项目一起拖入时，最后一个正好落在光标格，先前那些被它挤开
-    // dropPoint 为屏幕坐标（落在网格外时夹到边界）；
-    // 不给坐标（自动化/调试入口）时按老规矩交给布局引擎找第一个空位。
+    // 把若干新项目插到光标所在的格子上，语义与拖动磁贴一致（落点即结果）：
+    // 新磁贴占住光标格，压住的已有磁贴按同一套避让规则让位，多项目时
+    // 最后一个正好落在光标格。dropPoint 为屏幕坐标（网格外夹到边界）；
+    // 不给坐标（自动化/调试入口）时交给布局引擎找第一个空位。
     // 返回 false 表示一个都没能加入（id 冲突/目标为空）。
     bool insertNewItemsAt(std::vector<core::LaunchItem> items,
                           std::optional<POINTL> dropPoint);
@@ -491,10 +427,8 @@ public:
     }
 
     // ---- 磁贴锁定（防误拖） ----
-    //
-    // 语义：锁定时磁贴不可拖拽排序，点击启动不受影响。与「钉住」是
-    // 两件事 —— 钉住管窗口会不会收起，锁定管磁贴能不能被拖动。
-    // 会话级状态（不落盘）：每次唤出默认解锁，符合「先解锁才整理」的直觉。
+    // 锁定时磁贴不可拖拽排序，点击启动不受影响。与钉住是两件事：
+    // 钉住管窗口收不收起，锁定管磁贴能不能拖。会话级状态，不落盘。
     bool tilesLocked() const noexcept { return tilesLocked_; }
     void setTilesLocked(bool locked);
 
@@ -503,22 +437,15 @@ public:
     bool hideIfUnpinned();
 
     // ---- 模态交互保护 ----
-    //
-    // 设置窗口（或文件对话框）打开期间置位。语义与「钉住」相同：
-    // 点击窗口外不收起，但**不改变用户的钉子偏好**、不落盘、不换钉子图标。
-    //
-    // 为什么需要：设置窗口是主窗口的 owned 弹窗，用户点它内部的下拉列表时，
-    // 下拉列表是独立顶层窗口、不在主窗口的 owner 链上，会被外部点击监视
-    // 判成「点了外面」→ 主窗口当场收起，皮肤就看不到实时效果了。
+    // 设置窗口（或文件对话框）打开期间置位：点击窗口外不收起，但不改变
+    // 钉子偏好、不落盘。必要性：设置窗口的下拉列表是独立顶层窗口，不在
+    // owner 链上，会被外部点击监视判成「点了外面」而收起主窗口。
     void setModalGuard(bool active);
     bool modalGuard() const noexcept { return modalGuard_; }
 
     // ---- 搜索过滤 ----
-    //
-    // 语义：查询串为空 = 不过滤（全部磁贴正常显示）。
-    // 非空时，不匹配的磁贴**仍在原位**，只是被显著淡化 ——
-    // 刻意不做「隐藏 + 重排」，因为磁贴靠位置形成空间记忆，
-    // 一搜索就重排会让用户彻底失去方位感（Win10 开始菜单也不用重排）。
+    // 查询串为空 = 不过滤。非空时不匹配的磁贴仍在原位，只是显著淡化；
+    // 刻意不隐藏加重排：磁贴靠位置形成空间记忆，重排会毁掉方位感。
     void setSearchQuery(const std::string& query);
     const std::string& searchQuery() const noexcept { return searchQuery_; }
     // 清空搜索（等价于 setSearchQuery("")）
@@ -576,14 +503,12 @@ private:
     void paintTiles();
 
     // ---- 活动标签页 ----
-    //
-    // 所有「当前页」的读写都从这里走。历史教训：早先各处直接写
-    // document_.tabs.front()，一旦引入活动页就会到处漏改，而且漏掉的地方
-    // 表现为「某处操作动到了第一页」——极难排查。
+    // 所有「当前页」的读写都从这里走，禁止直接写 document_.tabs.front()：
+    // 引入活动页后漏改一处就表现为「操作动到了第一页」，极难排查。
     core::Tab* activeTab();
     const core::Tab* activeTab() const;
-    // 活动页的磁贴。文档意外为空时返回一个共享的空表，
-    // 调用方不必到处判空（加载器与 removeTab 都保证至少一页）。
+    // 活动页的磁贴。文档意外为空时返回共享的空表，调用方不必判空
+    //（加载器与 removeTab 都保证至少一页）。
     std::vector<core::LaunchItem>& activeItems();
     const std::vector<core::LaunchItem>& activeItems() const;
     // 把 activeTabIndex_ 夹回合法范围（文档变化后调用）
@@ -592,17 +517,15 @@ private:
     void resetTransientForTabSwitch();
 
     // ---- 标签条几何 ----
-    // 网格内容区的 Y 起点（DIP）：标题带 + 标签条之下。
-    // 所有磁贴绘制与命中测试都必须用它 —— 少改一处就会「画在这里、
-    // 点在那里」。
+    // 网格内容区的 Y 起点（DIP）。所有磁贴绘制与命中测试都必须用它，
+    // 各写各的算式会出现「画在这里、点在那里」。
     float gridOriginY() const;
     // 客户区物理尺寸（已按最大窗口夹取）；跟随网格配置，与窗口位置无关
     void windowSizePixels(int* width, int* height) const;
     // 标签条占据的矩形（客户区 DIP）
     D2D1_RECT_F tabBarRect() const;
-    // 当前客户区高度（DIP）。底部标签条需要按窗口下缘反推位置；
-    // 用实际客户区而不是配置推算，窗口被 kMaximumWindowHeightDip
-    // 夹住时也能画在正确的位置。
+    // 当前客户区高度（DIP）。用实际客户区而非配置推算：窗口高度被
+    // kMaximumWindowHeightDip 夹住时，底部标签条仍贴住真实下缘。
     float clientHeightDip() const;
     // 标签条右端固定的三个小按钮（＋、◀、▶）
     D2D1_RECT_F newTabButtonRect() const;
@@ -668,9 +591,8 @@ private:
     ID2D1Bitmap* acquireAppIconBitmap();
 
     // ---- 搜索框 Edit 控件 ----
-    // 文本输入交给真正的系统 Edit 控件：IME 中文、光标、选区、退格
-    // 全部是系统原生行为，不再手画手维护（历史教训：手画方案在中文
-    // 输入上问题不断）。面板只在它底下画框与占位提示。
+    // 文本输入交给系统 Edit 控件，IME 中文/光标/选区全是原生行为
+    //（手画方案在中文输入上问题不断，已否决）。面板只画框与占位提示。
     bool createSearchEdit(HINSTANCE instance);
     void ensureSearchEditResources();
     // 从 Edit 控件读回文本并更新过滤查询（EN_CHANGE 驱动）
@@ -700,14 +622,10 @@ private:
     IDWriteTextFormat* pluginTextFormat(float fontSize);
     // 用 DWrite 实测文本宽度（供布局引擎做省略号截断）
     float measurePluginText(const std::string& text, float fontSize);
-    // 画一枚插件图标。解析顺序：
-    //   插件目录里的 .svg（支持局部彩色）→ 插件目录里的图片（png 等）
-    //   → fallbackId 重复以上顺序。
-    // 图标资源完全由插件自带，主程序不内嵌任何插件图标；
-    // 都失败时留空（不画方框）。
-    //
-    // target/brush 显式传入而不是用成员：主窗口与编辑对话框预览用的是
-    // 各自的 D2D 渲染目标，D2D 1.0 的笔刷不能跨目标复用。
+    // 画一枚插件图标。解析顺序：插件目录 .svg（支持局部彩色）→
+    // 插件目录图片（png 等）→ fallbackId 重复以上。图标资源完全由插件
+    // 自带，都失败时留空（不画方框）。target/brush 显式传入：主窗口与
+    // 预览用各自的渲染目标，D2D 1.0 的笔刷不能跨目标复用。
     void drawPluginIcon(const std::string& iconId, const std::string& fallbackId,
                         const std::string& pluginDirectory,
                         ID2D1RenderTarget* target,
@@ -779,13 +697,10 @@ private:
     void currentOffset(std::size_t itemIndex,
                        float& offsetX, float& offsetY) const;
 
-    // 根据光标位置求出落点（被拖项将占据的格子）。
-    //
-    // 与「命中哪块磁贴」不同：这里做的是矩形贴合 + 夹取 ——
-    //   - 光标落在某块磁贴的矩形内 → 贴合到它的格子
-    //   - 光标落在两块磁贴之间 / 整个面板右侧的空白带 → 当作「新建格子」
-    //   - 结果再按被拖项的跨度夹进网格范围
-    // 只有这样，把磁贴拖到右边空白处再松手才可能成功（不会「弹回去」）。
+    // 根据光标位置求出落点（被拖项将占据的格子）。与命中磁贴不同，这里
+    // 做矩形贴合加夹取：落在磁贴上贴合到它的格子，落在磁贴之间或右侧
+    // 空白带视为新建格子，最后按被拖项跨度夹进网格。没有这一步，拖到
+    // 空白处松手会弹回去。
     core::Dropspot resolveDropspot(std::size_t dragIndex, int clientX, int clientY) const;
 
     // 落点变化 → 更新 dropspotPreview_ 并重绘；压到已有磁贴时播挤开动画
@@ -796,16 +711,13 @@ private:
                                           int clientX, int clientY) const;
 
     // 落点预览的实际执行体：算落点、播让位预演、重绘。
-    // setFileDropTarget 与 debugSetFileDropPreview 共用它 ——
-    // 两者的差别只在「要不要检查左键按着」，其余一模一样。
+    // setFileDropTarget 与 debugSetFileDropPreview 共用它，
+    // 差别只在「要不要检查左键按着」。
     void applyFileDropTarget(bool active, core::TileSize newItemSize,
                              POINTL screenPoint);
 
-    // 把 items 里「还没有显式坐标」的项按当前屏幕布局（layout_）补上坐标。
-    //
-    // 为什么必须补：避让布局只对**有坐标**的项做「冻结原位、冲突才让位」，
-    // 没坐标的项会被当成「新来的」，统统挤到落点附近重新排 —— 那会让
-    // 整个面板跟着跳。补一次坐标，「只动该动的」这条承诺才成立。
+    // 给 items 里没有显式坐标的项按当前布局补坐标。避让布局只对有坐标
+    // 的项冻结原位，没坐标的会被当成新项挤到落点附近重排，整个面板跟着跳。
     void materializeGridPositions(std::vector<core::LaunchItem>& items) const;
 
     // 把「谁该挪到哪」翻译成偏移动画（拖动磁贴与拖入新项目共用）。
@@ -860,12 +772,9 @@ private:
     platform::win32::ComPtr<IDWriteTextFormat> fallbackFormat_;
 
     // D2D 设备相关资源（尺寸变化时重建）
-    //
-    // hwndTarget_ 持有窗口渲染目标的生命周期；renderTarget_ 是当前生效的
-    // 渲染目标（通常是 hwndTarget_，调试导出时临时指向离屏目标）。
-    // 之所以分开：绘制代码只依赖 ID2D1RenderTarget 接口，而调试导出需要
-    // 把同一套绘制逻辑跑在一个 WIC 渲染目标上 —— 用一个可切换的裸指针
-    // 比在每个绘制点写条件分支清晰得多。
+    // hwndTarget_ 持有窗口渲染目标生命周期；renderTarget_ 是当前生效目标，
+    // 通常指向 hwndTarget_，调试导出时临时指向 WIC 离屏目标。绘制代码
+    // 只依赖 ID2D1RenderTarget 接口，用可切换指针比逐点分支清晰。
     platform::win32::ComPtr<ID2D1HwndRenderTarget> hwndTarget_;
     ID2D1RenderTarget* renderTarget_ = nullptr;
     platform::win32::ComPtr<ID2D1SolidColorBrush> brush_;
@@ -873,13 +782,11 @@ private:
     platform::win32::ComPtr<ID2D1SolidColorBrush> borderBrush_;
 
     // ---- 标签条状态 ----
-    //
-    // activeTabIndex_  ：当前显示的页（与 document_.tabs 同下标）
-    // firstVisibleTab_ ：标签条滚动窗口的起始页（页多到放不下时用）
-    // hoveredTab_      ：鼠标悬停的页（-1 表示无）—— 只影响视觉
-    // tabBarButtonHover_：悬停在标签条右端固定按钮上（1=＋ 2=◀ 3=▶ 0=无）
-    // 另外三个 hover 之外的状态（按下）不单独记：标签条的点击是
-    // 「按下即生效」，没有需要跟手的拖拽，弹起时不必再判定一次。
+    // activeTabIndex_：当前显示的页（与 document_.tabs 同下标）
+    // firstVisibleTab_：滚动窗口起始页（页多到放不下时用）
+    // hoveredTab_：悬停页（-1 无），只影响视觉
+    // tabBarButtonHover_：悬停按钮（1=＋ 2=◀ 3=▶ 0=无）
+    // 按下状态不单独记：标签条点击按下即生效，弹起时无需再判定。
     std::size_t activeTabIndex_ = 0;
     std::size_t firstVisibleTab_ = 0;
     int hoveredTab_ = -1;
@@ -905,15 +812,9 @@ private:
     void advanceLabelMarquee();
 
     // ---- 拖拽状态 ----
-    //
-    // 拖拽分两阶段：
-    //   1) 按下但未超过阈值：只是普通点击预备，不动视觉
-    //   2) 超过拖拽阈值：进入拖拽，跟手磁贴浮起 + 显示落点虚线框
-    // 这样短按（点开应用）与长拖（排序）不会互相干扰。
-    //
-    // 关键设计：拖拽**期间不改动任何磁贴的位置**，只显示一个落点框。
-    // 松手才真正提交。这条规则来自 Win10 开始菜单的实际行为 ——
-    // 它的磁贴同样只在松手后归位，拖拽过程中面板保持静止。
+    // 按下先不动视觉，位移超过 kDragThresholdDip 才升级为拖拽（磁贴浮起
+    // 加落点框），短按启动与长拖排序互不干扰。拖拽期间不改任何磁贴位置，
+    // 只画落点框，松手才提交（对齐 Win10 开始菜单的行为）。
     bool dragActive_ = false;
     std::optional<std::size_t> dragSource_;   // 被拖动的项
     POINT dragStartPoint_{};                  // 按下时的客户区坐标（物理像素）
@@ -948,7 +849,7 @@ private:
     // 重新算字号，格式对象必须复用，否则每秒几十次 CreateTextFormat。
     std::map<int, platform::win32::ComPtr<IDWriteTextFormat>> pluginTextFormats_;
     // pluginIconCache_：key = 图标 id + 像素尺寸。几何按目标尺寸直接建，
-    // 绘制时只做平移 —— 与钉子/锁图标的做法一致，任意 DPI 都清晰。
+    // 绘制时只做平移，与钉子/锁图标的做法一致，任意 DPI 都清晰。
     std::map<std::string, platform::win32::SvgGlyph> pluginIconCache_;
     // 插件目录里的图片图标（PNG/JPG/ICO...）：完整路径 → 预乘位图。
     std::map<std::wstring, platform::win32::ComPtr<ID2D1Bitmap>> pluginBitmapCache_;
@@ -1017,11 +918,9 @@ private:
     bool lockHovered_ = false;
     bool lockPressed_ = false;
 
-    // 钉子图形（Lucide pin）的 D2D 几何缓存。
-    // 几何以「按钮左上角」为原点、用 DIP 建一次，绘制时整体平移 ——
-    // 所以窗口移动、改列数、换 DPI 都不需要重建。
-    // 两份几何：线框（常态描边）与实心（钉住态填充）—— D2D 的
-    // FillGeometry 会跳过 HOLLOW 起始的图元，实心版必须单独建。
+    // 钉子图形（Lucide pin）的 D2D 几何缓存：以按钮左上角为原点、DIP 建
+    // 一次，绘制时平移，窗口移动/改列数/换 DPI 都不需重建。线框与实心
+    // 两份：FillGeometry 会跳过 HOLLOW 起始的图元，实心版必须单独建。
     platform::win32::ComPtr<ID2D1PathGeometry> pinGeometry_;
     platform::win32::ComPtr<ID2D1PathGeometry> pinFillGeometry_;
     platform::win32::ComPtr<ID2D1StrokeStyle> pinStrokeStyle_;
@@ -1039,14 +938,11 @@ private:
     platform::win32::OutsideClickMonitor outsideClickMonitor_;
 
     // ---- 搜索状态 ----
-    // 键盘输入说明：文本输入由子 Edit 控件（searchEdit_）承担 ——
-    // 窗口有焦点，唤出时 show() 把焦点交给 Edit，此后 WM_KEYDOWN /
-    // WM_CHAR / WM_IME_* 都由系统按普通输入框的方式直送，IME 中文、
-    // 光标、选区、退格全是系统原生行为。点到别的程序焦点自然移走，
-    // 输入随之停止：普通窗口的天然行为，无需任何闸门。
-    //
-    // searchQuery_：当前查询串（UTF-8）。空表示不过滤。
-    // 文本来源是 Edit 控件（EN_CHANGE 读回），程序侧改动会反向同步。
+    // 文本输入由子 Edit 控件承担：唤出时 show() 把焦点交给它，WM_KEYDOWN /
+    // WM_CHAR / WM_IME_* 由系统直送，IME 中文是原生行为；焦点移走输入
+    // 自然停止，无需闸门。
+    // searchQuery_：查询串（UTF-8），空表示不过滤。文本来自 Edit 控件
+    //（EN_CHANGE 读回），程序侧改动会反向同步。
     std::string searchQuery_;
     // ---- 搜索框 Edit 控件与配套 GDI 资源 ----
     static constexpr int kSearchEditId = 9001;
@@ -1060,7 +956,7 @@ private:
     bool searchEditSync_ = false;
     // visibleMask_：与「当前 Tab 的 items」一一对应，true 表示匹配。
     // 用掩码而不是过滤后的索引列表：掩码可以直接用 itemIndex 下标访问，
-    // 而布局结果里的 placement.itemIndex 正是原索引 —— 不需要映射转换。
+    // 而布局结果里的 placement.itemIndex 正是原索引，不需要映射转换。
     std::vector<bool> visibleMask_;
     // searchActive_：搜索框是否处于「焦点」状态（外框强调蓝 + 底衬加深）
     bool searchActive_ = false;
@@ -1075,16 +971,10 @@ private:
     std::optional<core::Dropspot> fileDropSpot_;
 
     // ---- 「外部点击」的延迟判定 ----
-    //
-    // 场景：用户从资源管理器里拖一个文件丢进面板。
-    // 那次拖动是「在窗口外按下鼠标」开始的 —— 若按老规矩立刻收起窗口，
-    // 拖动还没到窗口上方它就已经消失了，拖放功能等于不存在。
-    //
-    // 所以按下后先不下结论，而是启动一个短定时器反复探一下：
-    //   - 按钮很快松开、光标几乎没动 → 就是普通的「点外面关窗口」，照旧收起
-    //   - 按钮还按着且光标移动了一段 → 判定为在拖东西，保持窗口可见
-    // 探测有次数上限（见 kOutsideProbeMaxAttempts），
-    // 免得用户长按某个滚动条时窗口一直不收。
+    // 从资源管理器拖文件进来时，按下鼠标发生在窗口外：立即收起会让拖放
+    // 没机会落进窗口。按下后先探测：很快松开且光标几乎没动按普通点击
+    // 收起；仍按着且移动了判定为拖动，保持可见。探测有次数上限，长按
+    // 滚动条时窗口最终仍会收起。
     bool outsideProbeActive_ = false;
     POINT outsideProbeDownPoint_{};
     int outsideProbeAttempts_ = 0;
@@ -1097,24 +987,17 @@ private:
     static constexpr int kOutsideProbeDragThresholdPx = 10;
 
     // ---- 拖入落点框的看门狗 ----
-    //
-    // 拖入预览本该由 DragLeave / Drop 撤掉，但个别拖拽来源（实测
-    // Directory Opus）结束拖动时会补发一次 DragEnter 却从不给 DragLeave。
-    // 双重兜底：
-    //   1. setFileDropTarget 只在「左键按着」时才点亮 —— 补发的那一次
-    //      按键已经松开，直接忽略（残影根本不会出现）
-    //   2. 点亮期间每 250ms 查一次左键，松开即撤（对付「按着时确实离开
-    //      了窗口但对方没发 Leave」的漏网情形）
+    // 个别拖拽来源（Directory Opus）结束拖动时补发 DragEnter 却不给
+    // DragLeave，预览会残留。双重兜底：setFileDropTarget 只在左键按着时
+    // 点亮（补发那次按键已松开，直接忽略）；点亮期间每 250ms 查左键，
+    // 松开即撤。
     static constexpr UINT_PTR kFileDropGuardTimerId = 4;
     static constexpr UINT kFileDropGuardPollMs = 250;
 
     // ---- 启动后一次性工作集裁剪 ----
-    //
-    // 初始化（建位图、加载字体、shell 图标提取）摸过的物理页，在面板
-    // 显示之前都用不上。交给系统回收：常驻形态是「隐藏等热键」，任务
-    // 管理器里的占用从 ~40MB 掉到个位数。唤出时按需换入，首绘多几毫秒。
-    // 用延迟定时器而不是直接调：启动末尾还有消息泵里的首次渲染会把页
-    // 立刻换回来，白裁。
+    // 初始化摸过的物理页在面板显示前用不上，交给系统回收：隐藏待机时
+    // 内存从 ~40MB 降到个位数，唤出时按需换入。用延迟定时器而非直接调：
+    // 启动末尾的首次渲染会把页立刻换回来，直接调等于白裁。
     static constexpr UINT_PTR kStartupTrimTimerId = 5;
     static constexpr UINT_PTR kMarqueeTimerId = 6;
     static constexpr UINT kStartupTrimDelayMs = 3000;

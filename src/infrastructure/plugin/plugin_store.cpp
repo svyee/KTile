@@ -25,7 +25,7 @@ using core::PluginSourceKind;
 using core::PluginSourceSpec;
 using core::PluginValue;
 
-// ---------------------------------------------------------------- 文件
+// --- 文件
 
 bool readFileText(const std::wstring& path, std::string& out) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
@@ -111,7 +111,7 @@ bool writeFileAtomic(const std::wstring& path, const std::string& text,
     return true;
 }
 
-// ---------------------------------------------------------------- JSON → PluginValue
+// --- JSON → PluginValue
 
 PluginValue toPluginValue(const json::JsonValue& node) {
     switch (node.type()) {
@@ -176,7 +176,7 @@ void writePluginValue(json::JsonWriter* writer, const PluginValue& value) {
     }
 }
 
-// ---------------------------------------------------------------- 清单解析
+// --- 清单解析
 
 std::string stringOr(const json::JsonValue& value,
                      const std::string& fallback) {
@@ -372,7 +372,7 @@ bool parseSource(const json::JsonValue& value, PluginSourceSpec* out,
 
 }  // namespace
 
-// ================================================================ PluginStore
+// --- PluginStore
 
 const PluginManifest* PluginStore::find(const std::string& id) const noexcept {
     for (const PluginManifest& manifest : manifests_) {
@@ -549,7 +549,7 @@ bool parsePluginManifest(const std::string& text,
     return true;
 }
 
-// ================================================================ 缓存
+// --- 缓存
 
 std::string pluginCacheFileName(
     const std::string& id,

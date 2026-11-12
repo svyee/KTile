@@ -7,7 +7,7 @@
 namespace ktile {
 namespace core {
 
-// ================================================================ OccupancyGrid
+// --- OccupancyGrid
 
 OccupancyGrid::OccupancyGrid(const std::uint16_t columns, const std::uint16_t rows)
     : columns_(columns > 0 ? columns : 1),
@@ -78,7 +78,7 @@ void OccupancyGrid::clear() noexcept {
     std::fill(cells_.begin(), cells_.end(), false);
 }
 
-// ================================================================ 自由函数
+// --- 自由函数
 
 bool canPlaceTile(const OccupancyGrid& grid,
                   const std::uint16_t column,
@@ -115,9 +115,8 @@ std::uint16_t calculateRequiredRows(const std::vector<LaunchItem>& items,
     if (items.empty() || columns == 0) {
         return 0;
     }
-    // 保守估算：把所有磁贴按跨度面积展开后除以列数，向上取整；
-    // 同时不低于任一磁贴的纵向跨度（Tall 1x2 无论列数多少都占 2 行）。
-    // 用于给用户一个「至少需要这么多行」的提示，不保证一定能排下。
+    // 保守估算：总面积除以列数向上取整，且不低于最高的纵向跨度
+    // （Tall 1x2 在任何列数下都占 2 行）。只用于提示，不保证排得下。
     std::uint64_t totalCells = 0;
     std::uint16_t widestSpan = 1;
     std::uint16_t tallestSpan = 1;
@@ -141,13 +140,13 @@ std::uint16_t calculateRequiredColumns(const std::vector<LaunchItem>& items) noe
     for (const auto& item : items) {
         widest = std::max(widest, tileSpanColumns(item.tileSize));
     }
-    // 返回「容纳所有磁贴所需的最小列数」= 最宽磁贴的跨度。
-    // 注意：这里不保底 4 列 —— 全部是 Small 磁贴时 1 列也是合法的。
-    // 界面默认列数由 AppearanceConfig 决定，与此函数无关。
+    // 返回容纳所有磁贴所需的最小列数，即最宽磁贴的跨度。
+    // 不保底 4 列，全是 Small 时 1 列也合法；界面默认列数由
+    // AppearanceConfig 决定，与此函数无关。
     return widest;
 }
 
-// ================================================================ 核心布局算法
+// --- 核心布局算法
 
 namespace {
 
@@ -204,16 +203,10 @@ TileLayoutResult calculateTileLayout(const TileLayoutRequest& request) {
     OccupancyGrid grid(columns, rows);
     result.placements.reserve(items.size());
 
-    // ------------------------------------------------------------
-    // 第一阶段：放置有显式坐标的项（尊重用户拖拽结果）
-    //
-    // 这样能保证用户手动摆好的位置不会因为其他项的增删而改变，
-    // 这是「稳定优先」原则的体现。
-    //
-    // 冲突处理：多个项声明了重叠的显式位置时，按「面积大者优先，
-    // 同面积则索引靠前者优先」的规则裁决，落败者退回自动放置。
-    // 这避免了大磁贴被小磁贴挤走这种反直觉的结果。
-    // ------------------------------------------------------------
+    // --- 第一阶段：放置有显式坐标的项（尊重用户拖拽结果）
+    // 手动摆好的位置不因其他项增删而变。多个项声明了重叠位置时按
+    // 「面积大者优先，同面积索引靠前者优先」裁决，落败者退回自动放置，
+    // 避免大磁贴被小磁贴挤走。
     std::vector<bool> handled(items.size(), false);
 
     if (request.preserveExplicitPositions) {
@@ -260,12 +253,8 @@ TileLayoutResult calculateTileLayout(const TileLayoutRequest& request) {
         }
     }
 
-    // ------------------------------------------------------------
-    // 第二阶段：自动放置剩余项（贪心 + 行优先）
-    //
-    // 保持原有的项目顺序，逐个寻找第一个可容纳位置。
-    // 找不到位置时先尝试扩大行数，仍失败则记入 overflow。
-    // ------------------------------------------------------------
+    // --- 第二阶段：自动放置剩余项（贪心 + 行优先）
+    // 保持项目顺序逐个找第一个可容纳位置；放不下先扩行，仍失败记入 overflow。
     for (std::size_t i = 0; i < items.size(); ++i) {
         if (handled[i]) {
             continue;
@@ -313,9 +302,7 @@ TileLayoutResult calculateTileLayout(const TileLayoutRequest& request) {
         result.placements.push_back(placement);
     }
 
-    // ------------------------------------------------------------
-    // 第三阶段：保持输出与输入索引对应（便于调用方直接按索引取值）
-    // ------------------------------------------------------------
+    // --- 第三阶段：输出与输入索引对齐，调用方可直接按下标取值
     std::vector<TilePlacement> byIndex(items.size());
     std::vector<bool> filled(items.size(), false);
     for (const auto& placement : result.placements) {
@@ -325,8 +312,7 @@ TileLayoutResult calculateTileLayout(const TileLayoutRequest& request) {
         }
     }
 
-    // 未放置的项也补一个默认占位（跨度正确，坐标 0,0，标记 autoPlaced）
-    // 这样调用方总能按索引安全访问，无需额外判空。
+    // 未放置的项补一个默认占位（跨度正确，坐标 0,0），调用方可按索引安全访问。
     for (std::size_t i = 0; i < items.size(); ++i) {
         if (!filled[i]) {
             TilePlacement placeholder;
@@ -356,7 +342,7 @@ TileLayoutResult calculateTileLayout(const TileLayoutRequest& request) {
     return result;
 }
 
-// ================================================================ 拖拽重排
+// --- 拖拽重排
 
 bool moveItem(std::vector<LaunchItem>& items,
               const std::size_t fromIndex,
@@ -371,8 +357,8 @@ bool moveItem(std::vector<LaunchItem>& items,
         return false;
     }
 
-    // 抽出再插入：用 rotate 一次完成，避免反复 erase/insert 的拷贝开销。
-    // [first, middle) 与 [middle, last) 交换 —— 对单个元素即「移动」语义。
+    // 抽出再插入：rotate 一次完成，避免反复 erase/insert 的拷贝开销。
+    // [first, middle) 与 [middle, last) 交换，对单个元素即「移动」语义。
     if (fromIndex < toIndex) {
         std::rotate(items.begin() + static_cast<std::ptrdiff_t>(fromIndex),
                     items.begin() + static_cast<std::ptrdiff_t>(fromIndex + 1),
@@ -403,15 +389,13 @@ bool isMeaningfulMove(const std::size_t fromIndex,
     return fromIndex != toIndex;
 }
 
-// ================================================================ 避让式布局
+// --- 避让式布局
 
 namespace {
 
-// 就近搜索候选位置。
-//
-// 按「距离目标区域中心的曼哈顿距离」升序枚举候选格，保证第一个可用位置
-// 就是视觉上最近的那个。距离相同时，按「行优先」稳定排序（先上后下、
-// 先左后右），让结果可预测、不随机跳。
+// 就近搜索候选位置：按到目标区域中心的曼哈顿距离升序枚举，
+// 保证第一个可用位置就是视觉上最近的；距离相同按行优先稳定排序，
+// 结果可预测、不随机跳。
 struct CandidateSite {
     std::uint16_t column = 0;
     std::uint16_t row = 0;
@@ -452,8 +436,8 @@ void collectCandidateSites(const std::uint16_t columns,
             CandidateSite site;
             site.column = column;
             site.row = row;
-            // 纵向距离加权更高：磁贴横向排布更常见，上下挪动视觉干扰更大，
-            // 因此「左/右挪一格」比「上/下挪一格」更优先。
+            // 纵向距离加权更高：横向排布更常见，上下挪动视觉干扰更大，
+            // 因此左右挪一格比上下挪一格更优先。
             site.distance = dx * 2 + dy * 3;
             out.push_back(site);
         }
@@ -496,24 +480,11 @@ bool findNearestFreeRegion(const OccupancyGrid& grid,
     return false;
 }
 
-// 为「被挤开」的磁贴找一个最不突兀的落点。
-//
-// 为什么不是单纯按阅读顺序扫：
-//   纯阅读顺序（从左到右、从上到下）有个反直觉的后果 —— 一个贴着右边缘的
-//   磁贴被挤时，即使它左边、上边紧挨着就是空位，也会被甩到「下一行的最左边」。
-//   这种大跨度位移视觉上非常跳，用户很难预料。
-//
-// 因此改成「由近及远、同轴优先」的螺旋式搜索：
-//   对每个步长 d = 1, 2, 3, ...，依次尝试同一行向右 / 向左、
-//   同一列向上 / 向下的位置，命中即返回。
-//
-// 这样保证两个性质：
-//   1. 位移尽可能小   —— 步长递增，绝不会「旁边有位置却跳到远处」
-//   2. 方向有优先级   —— 同样距离下，右 > 左 > 上 > 下
-//      （向右优先对齐 Win10 磁贴腾挪手感；左右整体优先于上下，
-//        因为横向排布更常见，上下挪动视觉干扰更大）
-//
-// 四方向全部探完仍未命中，才退到阅读顺序回卷做最终兜底。
+// 为被挤开的磁贴找最不突兀的落点。
+// 不用纯阅读顺序扫描：贴着右边缘的磁贴被挤时，即使左边就是空位也会被甩到
+// 下一行最左边，位移太跳。改成由近及远、同轴优先：每个步长依次试右、左、
+// 上、下，命中即返回（向右优先对齐 Win10 腾挪手感，横向排布更常见）。
+// 四方向全探完才退回阅读顺序回卷兜底。
 bool findBestFreeRegionForDisplaced(const OccupancyGrid& grid,
                                     const std::uint16_t spanColumns,
                                     const std::uint16_t spanRows,
@@ -542,7 +513,7 @@ bool findBestFreeRegionForDisplaced(const OccupancyGrid& grid,
         maxColumn > maxRow ? maxColumn : maxRow);
 
     for (std::uint16_t step = 1; step <= maxStep; ++step) {
-        // ---- 同一行向右（最高优先） ----
+        // --- 同一行向右
         if (static_cast<std::uint32_t>(centerColumn) + step <= maxColumn) {
             const std::uint16_t column =
                 static_cast<std::uint16_t>(centerColumn + step);
@@ -553,7 +524,7 @@ bool findBestFreeRegionForDisplaced(const OccupancyGrid& grid,
             }
         }
 
-        // ---- 同一行向左 ----
+        // --- 同一行向左
         if (step <= centerColumn) {
             const std::uint16_t column =
                 static_cast<std::uint16_t>(centerColumn - step);
@@ -564,7 +535,7 @@ bool findBestFreeRegionForDisplaced(const OccupancyGrid& grid,
             }
         }
 
-        // ---- 同一列向上 ----
+        // --- 同一列向上
         if (step <= centerRow) {
             const std::uint16_t row =
                 static_cast<std::uint16_t>(centerRow - step);
@@ -575,7 +546,7 @@ bool findBestFreeRegionForDisplaced(const OccupancyGrid& grid,
             }
         }
 
-        // ---- 同一列向下 ----
+        // --- 同一列向下
         if (static_cast<std::uint32_t>(centerRow) + step <= maxRow) {
             const std::uint16_t row =
                 static_cast<std::uint16_t>(centerRow + step);
@@ -587,7 +558,7 @@ bool findBestFreeRegionForDisplaced(const OccupancyGrid& grid,
         }
     }
 
-    // ---- 兜底：阅读顺序回卷（同一行/列全被堵死时才可能走到这里） ----
+    // --- 兜底：阅读顺序回卷，同行同列全被堵死时才会走到这里
     for (int pass = 0; pass < 2; ++pass) {
         for (std::uint16_t row = 0; row <= maxRow; ++row) {
             for (std::uint16_t column = 0; column <= maxColumn; ++column) {
@@ -639,10 +610,8 @@ TileLayoutResult calculateAvoidanceLayout(const AvoidanceRequest& request) {
 
     OccupancyGrid grid(columns, rows);
 
-    // ---- 步骤 1：被拖项先落位，占据目标区域 ----
-    //
-    // 先占位（而不是最后占），这样后续磁贴的避让都是相对于「A 已经在这里」
-    // 来算的，语义更直观。
+    // --- 步骤 1：被拖项先落位，占据目标区域
+    // 先占位（而不是最后占），后续磁贴的避让都相对「它已经在这里」来算。
     const std::uint16_t dragSpanColumns =
         std::max<std::uint16_t>(1, request.dragSpanColumns);
     const std::uint16_t dragSpanRows =
@@ -672,13 +641,9 @@ TileLayoutResult calculateAvoidanceLayout(const AvoidanceRequest& request) {
         result.placements.push_back(placement);
     }
 
-    // ---- 步骤 2：其余磁贴按「冻结原坐标 → 冲突才让位」处理 ----
-    //
-    // 被拖项占据目标格后，只有与目标区域重叠的磁贴需要让位。
-    // 让位规则：按阅读顺序（从左到右、从上到下）从自己位置之后
-    // 找第一个放得下的空位 —— 右边的空位天然优先于下方，
-    // 更优先于跳到画面另一头（Win10 组内腾挪的手感）。
-    // 全部读完放不下才回卷/扩行。未受影响的磁贴坐标完全不动。
+    // --- 步骤 2：其余磁贴冻结原坐标，与目标区域冲突才让位
+    // 让位交给 findBestFreeRegionForDisplaced 就近找位，放不下再扩行。
+    // 未受影响的磁贴坐标完全不动。
 
     auto overlapArea = [&](const std::size_t index) -> std::uint32_t {
         const auto& item = items[index];
@@ -704,7 +669,7 @@ TileLayoutResult calculateAvoidanceLayout(const AvoidanceRequest& request) {
                static_cast<std::uint32_t>(bottom - top);
     };
 
-    // 冲突面积大的先处理，减少连环挤压；无冲突的按索引稳定排序
+    // 冲突面积大的先处理，减少连环挤压；同面积按索引稳定排序
     std::vector<std::size_t> order;
     order.reserve(items.size());
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -750,7 +715,7 @@ TileLayoutResult calculateAvoidanceLayout(const AvoidanceRequest& request) {
         }
     }
 
-    // 第二轮：为「被压住」的磁贴按阅读顺序向后找位置
+    // 第二轮：为被压住的磁贴就近找位
     for (const std::size_t i : order) {
         if (placed[i]) {
             continue;
@@ -759,7 +724,7 @@ TileLayoutResult calculateAvoidanceLayout(const AvoidanceRequest& request) {
         const std::uint16_t sc = tileSpanColumns(item.tileSize);
         const std::uint16_t sr = tileSpanRows(item.tileSize);
 
-        // 扫描起点 = 自己原来的位置（原地已被占，从「之后」找）
+        // 扫描起点是自己原来的位置，原地已被占，从之后找
         std::uint16_t centerColumn = dragColumn;
         std::uint16_t centerRow = dragRow;
         if (item.hasGridPosition()) {
@@ -836,7 +801,7 @@ TileLayoutResult calculateAvoidanceLayout(const AvoidanceRequest& request) {
         placed[i] = true;
     }
 
-    // ---- 步骤 3：输出按输入索引对齐 ----
+    // --- 步骤 3：输出按输入索引对齐
     std::vector<TilePlacement> byIndex(items.size());
     std::vector<bool> filled(items.size(), false);
     for (const auto& placement : result.placements) {

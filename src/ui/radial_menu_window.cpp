@@ -54,12 +54,11 @@ bool hasExtensionCi(const std::filesystem::path& path, const wchar_t* ext) {
     return true;
 }
 
-// ---------------------------------------------------------------- 快捷动作图标
+// --- 快捷动作图标
 //
-// Shortcut 类型（Ctrl+C 这类）没有可提取的文件图标，但恰恰是默认菜单里
-// 用得最多的一类。这里内嵌少量 Lucide 形状，让「复制/粘贴/剪切/撤销」
-// 这些最常见的组合键也能显示图标；认不出的组合退回键盘图标。
-// 形状来自 Lucide（ISC License），24x24 viewBox。
+// Shortcut 类型（Ctrl+C 这类）没有可提取的文件图标，但默认菜单里用得最多。
+// 内嵌少量 Lucide 形状（ISC License，24x24 viewBox），认不出的组合退回
+// 键盘图标。
 constexpr const wchar_t* kGlyphCopy =
     L"<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\" />"
     L"<path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\" />";
@@ -231,11 +230,9 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
     if (windowSizePx_ < 120) windowSizePx_ = 120;
 
     // 把窗口夹到屏幕工作区内，避免鼠标在边缘时整圈被裁掉一半。
-    // 夹完之后做两件事（参考 StarPie 的边缘处理）：
-    // 1. centerScreen_ 同步成实际窗口中心（命中测试的锚点）；
-    // 2. SetCursorPos 把光标挪到实际中心——这样「光标相对轮盘中心」
-    //    仍是原点，用户拖动时的方向记忆不受夹取影响。若只挪窗口不动
-    //    光标，光标会留在屏幕边缘，向左扇区的方向映射全错位。
+    // 夹完后 centerScreen_ 同步成实际窗口中心（命中测试锚点），并把光标
+    // 挪到实际中心：只挪窗口不动光标，光标留在屏幕边缘，「光标相对轮盘
+    // 中心」不再是原点，扇区方向映射全错位。
     int left = centerScreen.x - windowSizePx_ / 2;
     int top = centerScreen.y - windowSizePx_ / 2;
     HMONITOR monitor = MonitorFromPoint(centerScreen, MONITOR_DEFAULTTONEAREST);
@@ -303,8 +300,7 @@ void RadialMenuWindow::releaseAt(POINT screenPoint) {
     if (highlightedValid_ && actionHandler_ != nullptr) {
         actionHandler_(highlightedSector_);
     }
-    // 没命中扇区就是取消：什么都不做，直接收起。补发原生右键的事已经
-    // 不归这里管了（见头文件 releaseAt 的说明）。
+    // 没命中扇区就是取消：直接收起。补发原生右键不归这里管（见头文件）。
     hide();
 }
 
@@ -326,18 +322,17 @@ bool RadialMenuWindow::isVisible() const noexcept {
     return hwnd_ != nullptr && IsWindowVisible(hwnd_) != FALSE;
 }
 
-// ================================================================ 图标
+// --- 图标
 
 ID2D1Bitmap* RadialMenuWindow::iconForAction(const core::RadialAction& action) {
     const bool vectorOnly = (action.type == core::RadialActionType::Shortcut ||
                              action.type == core::RadialActionType::Builtin);
     const std::string custom = action.icon.value_or(std::string());
 
-    // 快捷键 / 内置命令本身没有可提取的文件图标，但插件可以塞一张位图给它
-    // （图标外置是插件的核心诉求，插件里几乎全是快捷键动作 —— 这里要是
-    //   一律返回 nullptr，插件作者放的图标就全部白发）。
-    // 只认可解码位图：SVG 走 customGlyphForAction，让 loadIconFromFile 去
-    // 处理 .svg 只会拿到「图片文件」的通用空白页图标。
+    // 快捷键/内置命令没有可提取的文件图标，但插件可以放位图（插件里几乎
+    // 全是快捷键动作，图标外置是核心诉求，一律 nullptr 会让图标全部白发）。
+    // 只认可解码位图：SVG 走 customGlyphForAction，loadIconFromFile 处理
+    // .svg 只会拿到通用的空白页图标。
     if (vectorOnly) {
         if (custom.empty()) return nullptr;
         if (!platform::win32::isDecodableImageFile(base::utf8ToWideLossy(custom))) {
@@ -398,11 +393,11 @@ ID2D1Bitmap* RadialMenuWindow::iconForAction(const core::RadialAction& action) {
     return inserted.first->second.get();
 }
 
-// ================================================================ 矢量图标
+// --- 矢量图标
 //
-// 快捷键（Ctrl+C 等）与内置命令（ktile:lock 等）没有可提取的文件图标，
-// 但都可以映射到 Lucide 形状。几何按 24x24 基准建一次，之后靠
-// SetTransform 平移到卡片位置 —— 旋转/缩放动画不会让图标模糊。
+// 快捷键（Ctrl+C 等）与内置命令（ktile:lock 等）没有文件图标，都映射到
+// Lucide 形状。几何按 24x24 基准建一次，之后靠 SetTransform 平移到卡片
+// 位置，旋转/缩放动画不会让图标模糊。
 
 const platform::win32::SvgGlyph* RadialMenuWindow::customGlyphForAction(
     const core::RadialAction& action) {
@@ -436,8 +431,8 @@ const platform::win32::SvgGlyph* RadialMenuWindow::customGlyphForAction(
         }
         platform::win32::SvgGlyph glyph;
         // 与内置 Lucide 图标同一约定：24x24 用户单位。放不进 24 框的 SVG
-        // （比如自己画的 512 viewBox）会得到一个大到看不见的图形，插件文档
-        // 里把这条写清楚了 —— 不做自动缩放，因为无法从标记里可靠取到 viewBox。
+        // 会得到大到看不见的图形（插件文档已写明）；不做自动缩放，
+        // 无法从标记里可靠取到 viewBox。
         const float scale = kIconSizeDip / 24.0F;
         if (!platform::win32::buildSvgGlyph(d2dFactory_.get(), markup.c_str(),
                                             scale, 0.0F, 0.0F, &glyph)) {
@@ -486,11 +481,11 @@ const platform::win32::SvgGlyph* RadialMenuWindow::glyphForAction(
     return &inserted.first->second;
 }
 
-// ================================================================ D2D 资源
+// --- D2D 资源
 
 IDWriteTextFormat* RadialMenuWindow::labelFormatForSize(float size) {
-    // 量化成 0.5 DIP 步进：字号是算出来的浮点数，直接用 float 当 map 键
-    // 会因为 8.799999 和 8.800001 各建一份格式。
+    // 量化成 0.5 DIP 步进：直接用 float 当 map 键，8.799999 和 8.800001
+    // 会各建一份格式。
     int step = static_cast<int>(std::lround(size * 2.0F));
     if (step < static_cast<int>(kLabelMinFontDip * 2.0F)) {
         step = static_cast<int>(kLabelMinFontDip * 2.0F);
@@ -523,8 +518,8 @@ float RadialMenuWindow::measureLabelWidth(const std::wstring& text, float fontDi
     if (format == nullptr || text.empty()) {
         return 0.0F;
     }
-    // 让 DirectWrite 自己量：中英混排、全角标点、连字都会让「字符数 x 字号」
-    // 这种估算偏得离谱，偏小就溢出、偏大又把字白缩一圈。
+    // 让 DirectWrite 自己量：中英混排、全角标点、连字都会让
+    // 「字符数 x 字号」的估算偏小溢出、偏大白缩一圈。
     platform::win32::ComPtr<IDWriteTextLayout> layout;
     const HRESULT hr = dwriteFactory_->CreateTextLayout(
         text.c_str(), static_cast<UINT32>(text.size()), format, 4096.0F, 4096.0F,
@@ -554,14 +549,9 @@ RadialMenuWindow::LabelLayout RadialMenuWindow::layoutLabel(
     layout.fontStep = baseStep;
     layout.naturalWidth = measureLabelWidth(text, kLabelFontDip);
 
-    // 差一点点：逐个字号往下试，缩到放得下为止。
-    //
-    // 只试到 kLabelMinFontDip（8.5 DIP）：这个幅度（10 → 8.5）在轮盘上几乎
-    // 看不出来，却能把「10 DIP 差半个字」这类最常见的情况整整齐齐收进卡片，
-    // 不必让每一格都滚动。
-    //
-    // 为什么不按比例一次算好字号：算出来的字号落地时会被量化到 0.5 DIP，
-    // 差一点点就可能仍然超出（47.5 > 47），于是「算过了却还要滚」，白缩一圈。
+    // 差一点点：逐个字号往下试，只试到 8.5 DIP（10 → 8.5 看不出来）。
+    // 不按比例一次算好字号：算出的字号落地会量化到 0.5 DIP，差一点仍会
+    // 超出，「算过了却还要滚」，白缩一圈。
     if (windowWidth > 0.0F && layout.naturalWidth > windowWidth) {
         for (int step = baseStep - 1; step >= minStep; --step) {
             const float fontDip = static_cast<float>(step) / 2.0F;
@@ -572,8 +562,7 @@ RadialMenuWindow::LabelLayout RadialMenuWindow::layoutLabel(
                 break;
             }
         }
-        // 缩到下限也放不下：那就用最小字号去滚，而不是拿 10 DIP 去滚 ——
-        // 字号小的那份要滚的距离更短，看到的字更多。
+        // 缩到下限也放不下：用最小字号去滚，要滚的距离更短，看到的字更多。
         if (layout.fontStep == baseStep) {
             const float fontDip = static_cast<float>(minStep) / 2.0F;
             const float measured = measureLabelWidth(text, fontDip);
@@ -589,9 +578,9 @@ RadialMenuWindow::LabelLayout RadialMenuWindow::layoutLabel(
 }
 
 float RadialMenuWindow::labelWindowWidthFor(std::uint8_t index, bool hasIcon) {
-    // 窗口宽度由角度决定：花瓣斜过来之后，短边挡在文字带前面。正上方最宽
-    // （47 DIP），斜下方 135°/315° 最窄（33 DIP）。没有图标时文字带回到卡片
-    // 中间，能宽出来不少。
+    // 窗口宽度由角度决定：花瓣斜过来后短边挡在文字带前面，正上方最宽
+    // （47 DIP），135°/315° 最窄（33 DIP）。没有图标时文字带回卡片中间，
+    // 能宽出不少。
     const float sectorWidth = 360.0F / static_cast<float>(menu_.sectorCount);
     const float angle = static_cast<float>(index) * sectorWidth;
     const float bandCenter =
@@ -609,8 +598,8 @@ float RadialMenuWindow::marqueeOffsetDip(float overflowDip) const {
     float t = std::fmod(marqueeMs_, cycle);
     if (t < 0.0F) t += cycle;
 
-    // 往返：停 → 左移到尾 → 停 → 回开头。两端都留停顿，第一段尤其重要：
-    // 轮盘是「看一眼就选」的界面，字一上来就滑走等于没写成。
+    // 往返：停 → 左移到尾 → 停 → 回开头，两端都停顿；第一段尤其重要，
+    // 字一上来就滑走等于没写成。
     if (t < kMarqueeHoldMs) return 0.0F;
     t -= kMarqueeHoldMs;
     if (t < moveMs) {
@@ -633,8 +622,8 @@ void RadialMenuWindow::syncMarqueeTimer() {
     if (hwnd_ == nullptr) return;
     if (frameHasScroll_ && !marqueeRunning_) {
         marqueeRunning_ = true;
-        // 从 0 起算（show() 里也清过）：停留期从第一帧开始，用户看到的一定
-        // 是标签开头，而不是滚到一半的中段。
+        // 从 0 起算（show() 里也清过）：停留期从第一帧开始，用户看到的
+        // 一定是标签开头。
         marqueeStartTick_ = GetTickCount64();
         SetTimer(hwnd_, kMarqueeTimerId, kMarqueeTickMs, nullptr);
     } else if (!frameHasScroll_ && marqueeRunning_) {
@@ -709,10 +698,9 @@ bool RadialMenuWindow::createDeviceResources() {
             D2D1::ColorF(1.0F, 1.0F, 1.0F, 0.97F), cellBrush_.put());
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(1.0F, 1.0F, 1.0F, 0.06F), emptyCellBrush_.put());
-        // 空槽位的轮廓必须用「深色」而不是白色：
-        // 填了动作的卡片是近乎不透明的白卡 + 深色描边，浅壁纸上靠描边显形；
-        // 空槽位如果也画白色描边，在浅壁纸上就彻底消失，用户会以为自己只有
-        // 4 个扇区（其实是 8 个，另外 4 个只是没配）。白色填充留给深壁纸。
+        // 空槽位轮廓必须用深色而不是白色：填了动作的卡片在浅壁纸上靠深色
+        // 描边显形，空槽位画白描边会彻底消失，用户会以为自己只有 4 个扇区。
+        // 白色填充留给深壁纸。
         renderTarget_->CreateSolidColorBrush(
             D2D1::ColorF(0.06F, 0.09F, 0.16F, 0.11F), emptyOutlineBrush_.put());
         renderTarget_->CreateSolidColorBrush(
@@ -754,8 +742,8 @@ void RadialMenuWindow::discardDeviceResources() {
     hubBorderBrush_.reset();
     glyphAccentBrush_.reset();
     glyphStrokeStyle_.reset();
-    // 排版缓存与格式缓存一起清：格式来自旧的 DWrite 工厂，工厂都重建了，
-    // 留着的旧结果虽然还能用，但换机器/换字体后量出来的宽度会不一样
+    // 排版缓存与格式缓存一起清：格式来自旧的 DWrite 工厂，换机器/换字体
+    // 后量出来的宽度会不一样。
     labelFormats_.clear();
     labelLayoutCache_.clear();
     wicFactory_.reset();
@@ -777,7 +765,7 @@ void RadialMenuWindow::discardDeviceResources() {
     }
 }
 
-// ================================================================ 绘制
+// --- 绘制
 
 void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     const float sectorWidth = 360.0F / static_cast<float>(menu_.sectorCount);
@@ -791,20 +779,16 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     const bool empty = index >= menu_.actions.size() ||
                        menu_.actions[index].isEmpty();
 
-    // 卡片：挂在半径 kCellCenterRadiusDip 的圆上，并像花瓣一样**沿径向旋转**
-    // —— 正上方那张正着，右侧的朝右倒，下方那张整个倒过来。这个倾斜是外观的
-    // 主体，去掉之后就成了普通的一圈方块。
-    //
-    // 旋转的代价是卡片里的水平文字能占的宽度随角度变化（见 labelWindowWidthFor）：
-    // 50x46 的卡片转到 45° 时只剩 38 DIP，转到 135° 只剩 33 DIP。所以文字宽度
-    // 必须按角度算、放不下就滚动，不能像以前那样按卡片宽排 —— 那正是「字顶出
-    // 按钮」的根源。
+    // 卡片挂在半径 kCellCenterRadiusDip 的圆上，并像花瓣一样沿径向旋转：
+    // 正上方正着，右侧朝右倒，下方整个倒过来。旋转的代价是水平文字可占
+    // 宽度随角度变化（见 labelWindowWidthFor），文字宽度必须按角度算、
+    // 放不下就滚动，按卡片宽排正是「字顶出按钮」的根源。
     const D2D1_POINT_2F pos =
         D2D1::Point2F(centerX + pointOnCircle(angle, kCellCenterRadiusDip).x,
                       centerY + pointOnCircle(angle, kCellCenterRadiusDip).y);
 
-    // 卡片矩形先在「正上方」摆好，再整体绕菜单中心转到自己的角度 ——
-    // 不能直接摆在 pos 上再转，那会转两次（pos 已经是转过的位置）。
+    // 卡片矩形先在正上方摆好，再整体绕菜单中心转到自己的角度；
+    // 直接摆在 pos 上再转会转两次（pos 已是转过的位置）。
     const float cellCenterY = centerY - kCellCenterRadiusDip;
     const D2D1_RECT_F rect = D2D1::RectF(
         centerX - kCellWidthDip * 0.5F, cellCenterY - kCellHeightDip * 0.5F,
@@ -812,9 +796,8 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(
         rect, kCellCornerDip, kCellCornerDip);
 
-    // 高亮只改颜色不放大：放大单元格会让鼠标相对扇区边界的几何关系
-    // 跟着变化（本单元格外扩会盖住相邻扇区的判定角），扫过边界时容易
-    // 出现「在两个扇区之间来回跳」的抖动。
+    // 高亮只改颜色不放大：放大单元格会让鼠标相对扇区边界的几何关系跟着
+    // 变化，扫过边界时出现两个扇区来回跳的抖动。
     const float popScale = animScale_;
     const D2D1_MATRIX_3X2_F base =
         D2D1::Matrix3x2F::Scale(popScale, popScale, center);
@@ -822,8 +805,8 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
         base * D2D1::Matrix3x2F::Rotation(angle, center);
 
     // 伪阴影（D2D 1.0 没有模糊效果，用偏移的半透明圆角矩形近似）。
-    // 偏移写在旋转**之后**（矩阵右乘 Translation）：光是同一个方向来的，
-    // 阴影就该永远朝屏幕下方，不能跟着花瓣各倒各的。
+    // 偏移写在旋转之后（矩阵右乘 Translation）：阴影永远朝屏幕下方，
+    // 不跟着花瓣各倒各的。
     const D2D1_ROUNDED_RECT shadow = D2D1::RoundedRect(rect, kCellCornerDip,
                                                         kCellCornerDip);
     if (!empty) {
@@ -834,8 +817,7 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
     renderTarget_->SetTransform(rotated);
 
     if (empty) {
-        // 空槽位只画一个很淡的轮廓：环的"骨架"要看得见，但不能抢戏，
-        // 也不能像实心灰块那样堆成一团。
+        // 空槽位只画很淡的轮廓：环的骨架要看得见，但不能抢戏。
         renderTarget_->FillRoundedRectangle(rounded, emptyCellBrush_.get());
         renderTarget_->DrawRoundedRectangle(rounded, emptyOutlineBrush_.get(),
                                             1.0F);
@@ -847,14 +829,14 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
             highlighted ? 2.0F : 1.0F);
     }
 
-    // 图标和文字保持正向（不随花瓣旋转）：旋转过的中英文认起来要费脑，
-    // 而轮盘是「一眼扫过去」的界面。倾斜感由卡片提供就够了。
+    // 图标和文字保持正向，不随花瓣旋转：旋转过的中英文认起来费脑，
+    // 倾斜感由卡片提供。
     renderTarget_->SetTransform(base);
 
     if (!empty && index < menu_.actions.size()) {
         const core::RadialAction& action = menu_.actions[index];
-        // 图标解析顺序：动作自带的 SVG（插件目录里的）→ 可提取的位图/文件图标
-        // → 内置 Lucide 符号。自带的排第一，是因为插件作者放图标就是要它生效。
+        // 图标解析顺序：动作自带 SVG（插件目录）→ 可提取的文件图标 →
+        // 内置 Lucide 符号。自带的排第一：插件作者放图标就是要它生效。
         const platform::win32::SvgGlyph* glyph = customGlyphForAction(action);
         ID2D1Bitmap* icon =
             (glyph != nullptr) ? nullptr : iconForAction(action);
@@ -867,9 +849,8 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
         if (hasIcon) {
             const float half = kIconSizeDip * 0.5F;
-            // 图标中心在卡片中心上方 9 DIP：19 DIP 的图标占 -18.5~+0.5，
-            // 标签带占 +2~+16，两者留 1.5 DIP 的间隙，整组在 46 高的卡片里
-            // 上下各余 6.5 / 7 DIP，看起来是居中的。
+            // 图标中心在卡片中心上方：与标签带之间留出间隙，
+            // 整组在卡片里看起来居中。
             const float iconCenterY = pos.y + kIconCenterOffsetDip;
 
             if (icon != nullptr) {
@@ -879,10 +860,9 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
                 renderTarget_->DrawBitmap(icon, dest, 1.0F,
                                           D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
             } else {
-                // 几何按 24x24 建立、已经缩放到 kIconSizeDip。
-                // 用弧长质心（光学中心）居中：Lucide 图标在 24 框里的留白
-                // 不固定，剪刀左重右轻、撤销箭头尾重头轻这类形状如果按
-                // 包围盒或 20x20 框居中，视觉重心会偏到一边，和下方文字对不齐。
+                // 用弧长质心（光学中心）居中：Lucide 图标在 24 框里留白
+                // 不固定，按包围盒居中会让剪刀这类形状的重心偏到一边，
+                // 和下方文字对不齐。
                 float anchorX, anchorY;
                 if (glyph->hasCentroid) {
                     anchorX = glyph->centroid.x;
@@ -897,10 +877,9 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
                      glyph->bounds.bottom > glyph->bounds.top);
                 const float tx = anchorValid ? pos.x - anchorX : pos.x - half;
                 const float ty = anchorValid ? iconCenterY - anchorY : iconCenterY - half;
-                // 注意矩阵顺序：D2D 行向量约定下 A * B 是「先 A 后 B」。
-                // 必须先平移（把锚点送到 pos）再绕菜单中心缩放，写成
-                // base * Translation 会让平移量逃过缩放——高亮 popScale=1.06
-                // 时图标被甩到左上约 9 DIP（出现动画期间也会暂时偏移）。
+                // D2D 行向量约定下 A * B 是先 A 后 B：必须先平移（把锚点
+                // 送到 pos）再绕菜单中心缩放，写成 base * Translation 会让
+                // 平移量逃过缩放，高亮时图标被甩到左上约 9 DIP。
                 renderTarget_->SetTransform(
                     D2D1::Matrix3x2F::Translation(tx, ty) * base);
                 if (glyph->strokeGeometry) {
@@ -912,9 +891,8 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
                     renderTarget_->FillGeometry(glyph->fillGeometry.get(),
                                                 iconBrush);
                 }
-                // 显式带颜色的图层（插件 SVG 里写 stroke="#e5484d" 之类）：
-                // 保留它自己的 RGB，只继承当前图标的透明度 —— 高亮反色时
-                // 彩色图标不该忽明忽暗地跳成别的颜色。
+                // 带颜色的图层（插件 SVG 里写 stroke="#e5484d" 之类）保留
+                // 自身 RGB，只继承当前透明度，高亮反色时不跳成别的颜色。
                 if (!glyph->colorLayers.empty() && glyphAccentBrush_.valid()) {
                     const D2D1_COLOR_F base = iconBrush->GetColor();
                     for (const platform::win32::SvgColorLayer& layer :
@@ -938,15 +916,15 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
         if (!action.name.empty()) {
             const std::wstring wideName = base::utf8ToWideLossy(action.name);
-            // 标签带的宽度不是卡片宽度：卡片斜着，能容下多宽由角度决定。
-            // 没有图标时文字带回到卡片中间，能宽出十来 DIP。
+            // 标签带宽度不是卡片宽度：卡片斜着，能容多宽由角度决定；
+            // 没有图标时文字带回卡片中间，能宽出十来 DIP。
             const float bandCenter =
                 hasIcon ? kLabelCenterOffsetDip : 0.0F;
             const float windowWidth = labelWindowWidthFor(index, hasIcon);
 
             if (windowWidth > 1.0F) {
-                // 缓存键带扇区下标：同一个「复制路径」在正上方能放下、
-                // 在斜下方要滚动，窗口宽度不同就是两份排版。
+                // 缓存键带扇区下标：同一标签在正上方和斜下方窗口宽度
+                // 不同，是两份排版。
                 std::string cacheKey = std::to_string(index);
                 cacheKey += hasIcon ? "|1|" : "|0|";
                 cacheKey += action.name;
@@ -957,8 +935,8 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
 
                 float offset = 0.0F;
                 if (overflow > 0.5F) {
-                    // 记下来交给 render()：只要有任何一格在滚，就把跑马灯
-                    // 定时器开起来；全都不滚就一个定时器都不留。
+                    // 交给 render()：有任何一格在滚就开跑马灯定时器，
+                    // 全都不滚就一个定时器都不留。
                     frameHasScroll_ = true;
                     offset = marqueeOffsetDip(overflow);
                 }
@@ -970,20 +948,17 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
                     winLeft, winTop, winLeft + windowWidth,
                     winTop + kLabelHeightDip);
 
-                // 硬裁剪。这个窗口是「按卡片形状算出来的、整条都在卡片里」的
-                // 区域，所以裁到它之外的字一定在卡片外 —— 无论字号、滚动相位、
-                // 中文标点怎么折腾，都不可能再出现「字跑到按钮外面」。
-                //
-                // 先把变换复位再推裁剪框：不依赖「PushAxisAlignedClip 会不会
-                // 套用当前变换」这个各版本说法不一的细节。坐标仍是 DIP ——
-                // 渲染目标已经 SetDpi，DIP→像素由它负责，这里不要乘缩放。
+                // 硬裁剪：窗口按卡片形状算出、整条都在卡片内，裁剪后字不
+                // 可能跑到卡片外。先把变换复位再推裁剪框，不依赖
+                // PushAxisAlignedClip 是否套用当前变换这个版本相关的细节；
+                // 坐标仍是 DIP，渲染目标已 SetDpi，这里不要乘缩放。
                 renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
                 renderTarget_->PushAxisAlignedClip(
                     window, D2D1_ANTIALIAS_MODE_ALIASED);
                 renderTarget_->SetTransform(base);
 
-                // 排版框至少和窗口一样宽，文字才会在窗口里居中；
-                // 超宽时框就是文字的自然宽度，从窗口左沿开始往外排。
+                // 排版框至少和窗口一样宽，文字才在窗口里居中；超宽时用
+                // 文字自然宽度，从窗口左沿往外排。
                 const float drawWidth = (layout.naturalWidth > windowWidth)
                                             ? layout.naturalWidth
                                             : windowWidth;
@@ -1029,9 +1004,8 @@ void RadialMenuWindow::render() {
     if (!renderTarget_) return;
 
     drawToDib();
-    // 绘制过程会顺手告诉我们「这一帧有没有超宽标签」，据此决定跑马灯
-    // 定时器要不要继续跑 —— 放在 drawToDib 之后，就不必在 show() 里
-    // 额外量一遍文字（那还得把图标先解析一次才能知道文字带在哪）。
+    // 绘制过程会记下「这一帧有没有超宽标签」，据此同步跑马灯定时器；
+    // 放在 drawToDib 之后，show() 里就不必额外量一遍文字。
     syncMarqueeTimer();
 
     POINT srcPos = {0, 0};
@@ -1039,7 +1013,7 @@ void RadialMenuWindow::render() {
     BLENDFUNCTION blend{};
     blend.BlendOp = AC_SRC_OVER;
     // 出现动画期间整体淡入：SourceConstantAlpha 与逐像素 alpha 相乘，
-    // 不需要在绘制时给每个图元乘透明度。
+    // 不必给每个图元乘透明度。
     blend.SourceConstantAlpha =
         static_cast<BYTE>(animAlpha_ * 255.0F + 0.5F);
     blend.AlphaFormat = AC_SRC_ALPHA;
@@ -1048,8 +1022,8 @@ void RadialMenuWindow::render() {
                         &blend, ULW_ALPHA);
 }
 
-// 把菜单内容画进离屏 DIB。render() 在此基础上做 UpdateLayeredWindow；
-// debugExportPng() 在此基础上直接存盘。这样两套输出共用同一条绘制路径，
+// 把菜单内容画进离屏 DIB：render() 在此基础上 UpdateLayeredWindow，
+// debugExportPng() 在此基础上存盘，两套输出共用同一条绘制路径，
 // 调试截图就是屏幕上看到的内容。
 void RadialMenuWindow::drawToDib() {
     renderTarget_->SetDpi(static_cast<float>(dpi_), static_cast<float>(dpi_));
@@ -1060,8 +1034,8 @@ void RadialMenuWindow::drawToDib() {
     renderTarget_->BeginDraw();
     renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0));
 
-    // 每帧重置：这一帧画完就知道「有没有标签需要滚动」，
-    // render() 据此决定跑马灯定时器开不开。
+    // 每帧重置：画完就知道这一帧有没有标签需要滚动，render() 据此
+    // 决定跑马灯定时器开不开。
     frameHasScroll_ = false;
 
     for (std::uint8_t i = 0; i < menu_.sectorCount; ++i) {
@@ -1123,7 +1097,7 @@ bool RadialMenuWindow::debugExportPng(const wchar_t* fileName) {
     return true;
 }
 
-// ================================================================ 窗口过程
+// --- 窗口过程
 
 LRESULT CALLBACK RadialMenuWindow::windowProcThunk(HWND hwnd, UINT message,
                                                    WPARAM wParam, LPARAM lParam) {

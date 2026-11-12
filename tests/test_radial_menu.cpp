@@ -17,7 +17,7 @@ static int g_failures = 0;
         }                                                        \
     } while (false)
 
-// ---------------------------------------------------------------- sectorFromAngle
+// --- sectorFromAngle
 
 static void testSectorFromAngle4() {
     // 4 扇区：0°=上, 90°=右, 180°=下, 270°=左
@@ -65,7 +65,7 @@ static void testSectorFromAngle6() {
     CHECK(sectorFromAngle(300.0F, 6) == 5);
 }
 
-// ---------------------------------------------------------------- hitTestSector
+// --- hitTestSector
 
 static void testHitTestCenter() {
     // 在内圈半径内 → nullopt
@@ -114,7 +114,7 @@ static void testHitTestAtRadiusBoundary() {
     CHECK(!r.has_value());
 }
 
-// ---------------------------------------------------------------- 配置查找
+// --- 配置查找
 
 static RadialConfig makeTestConfig() {
     RadialConfig config;
@@ -123,7 +123,7 @@ static RadialConfig makeTestConfig() {
     config.menu.actions[0].type = RadialActionType::Shortcut;
     config.menu.actions[0].modifiers = {HotkeyModifier::Control};
     config.menu.actions[0].key = "C";
-    // 故意一条大写一条小写，用来盯大小写不敏感
+    // 一条大写一条小写，验证大小写不敏感
     config.blacklist = {"game.exe", "MSTSC.EXE"};
     return config;
 }
@@ -150,7 +150,7 @@ static void testProcessNameEquals() {
     CHECK(!processNameEquals("chrome", "chrome.exe"));
 }
 
-// ---------------------------------------------------------------- 配置校验
+// --- 配置校验
 
 static void testValidateConfig() {
     RadialConfig config = makeTestConfig();
@@ -186,7 +186,7 @@ static void testValidateThreshold() {
     CHECK(!validateRadialConfig(config));
 }
 
-// ---------------------------------------------------------------- 空槽位
+// --- 空槽位
 
 static void testEmptyAction() {
     RadialAction a;
@@ -195,7 +195,7 @@ static void testEmptyAction() {
     CHECK(!a.isEmpty());
 }
 
-// ---------------------------------------------------------------- 枚举转换
+// --- 枚举转换
 
 static void testActionTypeKey() {
     CHECK(std::string(radialActionTypeKey(RadialActionType::Shortcut)) == "shortcut");
@@ -219,7 +219,7 @@ static void testTriggerModifierKey() {
     CHECK(radialTriggerModifierFromKey("none") == RadialTriggerModifier::None);
 }
 
-// ---------------------------------------------------------------- 抑制键
+// --- 抑制键
 
 static void testSuppressionConflict() {
     RadialTriggerConfig trigger;
@@ -258,7 +258,7 @@ static void testSuppressionConflict() {
 
 // 抑制键只在「触发修饰键 = 无」时参与判断。
 //
-// 设置页据此灰掉整组复选框，钩子据此跳过这段判断 —— 两处必须同一条规则，
+// 设置页据此灰掉整组复选框，钩子据此跳过这段判断，两处必须同一条规则，
 // 否则会出现「界面灰了但实际还在生效」的隐藏行为。
 static void testSuppressionApplies() {
     CHECK(suppressionApplies(RadialTriggerModifier::None));
@@ -278,7 +278,7 @@ static void testValidateRejectsSuppressionConflict() {
     CHECK(validateRadialConfig(config));
 }
 
-// ---------------------------------------------------------------- 轮盘插件
+// --- 轮盘插件
 
 // 造一个最小可用插件
 static RadialPlugin makePlugin(const char* id, std::vector<std::string> processes,
@@ -360,11 +360,10 @@ static void testValidateRadialPlugin() {
     CHECK(!validateRadialPlugin(nine));
 }
 
-// ---------------------------------------------------------------- 标签窗口
+// --- 标签窗口
 //
-// 花瓣卡片里的文字是水平的，卡片却是斜的：能放多宽随角度变。这组用例钉住的
-// 是「算出来的窗口整条都在卡片里」，因为绘制层拿它当硬裁剪边界用 —— 算宽了，
-// 字就会跑到按钮外面（这正是 1.2.1 之前那个 bug）。
+// 文字水平而卡片倾斜，窗口宽度随角度变。绘制层拿它当硬裁剪边界，
+// 算宽了字会跑到按钮外，用例钉住「窗口整条都在卡片里」。
 
 static bool nearf(float a, float b, float eps = 0.01F) {
     return std::fabs(a - b) <= eps;
@@ -390,8 +389,8 @@ static void testLabelWindowNarrowsWhenRotated() {
 }
 
 static void testLabelWindowMirrorSymmetry() {
-    // 45° 与 315° 是左右镜像，窗口宽度必须一样。不一样就说明端点判断只算了
-    // 一侧（踩过：只检查右端时，左端会悄悄顶出卡片，函数却报「放得下」）。
+    // 45° 与 315° 是左右镜像，宽度必须一样；只检查单侧端点时另一侧
+    // 会悄悄顶出卡片
     for (float offset : {0.0F, 8.0F}) {
         CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 45.0F, offset, 14.0F),
                     radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 315.0F, offset, 14.0F)));
@@ -413,11 +412,11 @@ static void testLabelWindowDegenerate() {
     CHECK(nearf(radialLabelWindowWidth(0.0F, 48.0F, 14.0F, 0.0F, 0.0F, 14.0F), 0.0F));
     CHECK(nearf(radialLabelWindowWidth(50.0F, 0.0F, 14.0F, 0.0F, 0.0F, 14.0F), 0.0F));
     CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 0.0F, 0.0F, 0.0F), 0.0F));
-    // 文字带整个跑到卡片外：没有可用窗口，不能返回负数糊弄调用方
+    // 文字带整个在卡片外：无可用窗口，不能返回负数
     CHECK(nearf(radialLabelWindowWidth(50.0F, 48.0F, 14.0F, 0.0F, 100.0F, 14.0F), 0.0F));
 }
 
-// ---------------------------------------------------------------- 入口
+// --- 入口
 
 int wmain() {
     testSectorFromAngle4();

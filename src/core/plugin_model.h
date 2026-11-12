@@ -2,15 +2,11 @@
 
 // 插件领域模型
 //
-// 设计取舍：
-//   - 插件不是可执行脚本，而是 data/plugins/<id>/plugin.json 的声明式清单。
-//     解析 JSON 属于 infrastructure 的职责，这里只保留与格式无关的模型，
-//     保证 core 仍然只依赖标准库、可以脱离 Win32 做单元测试。
-//   - 数据统一表示成 PluginValue（轻量 JSON 树），而不是字符串/字符串映射：
-//     插件返回的数组和嵌套对象（天气 3 天预报、系统指标列表）需要保持结构，
-//     repeat 布局才能在渲染期按数组长度动态展开。
-//   - 布局是受限的两层树：容器（row/column/repeat）+ 叶子（slots）。
-//     禁止像素坐标/字号/任意画布，避免插件把磁贴画成不可控的界面。
+// 插件不是可执行脚本，而是 data/plugins/<id>/plugin.json 的声明式清单；
+// 解析 JSON 属于 infrastructure，这里只保留与格式无关的模型，core 仅依赖
+// 标准库、可脱离 Win32 单测。数据统一为 PluginValue（轻量 JSON 树），数组
+// 与嵌套对象保持结构，repeat 布局才能按数组长度动态展开。布局是受限的
+// 两层树（容器 row/column/repeat + 叶子 slots），禁止像素坐标/字号/任意画布。
 
 #include <cstddef>
 #include <cstdint>
@@ -22,7 +18,7 @@
 namespace ktile {
 namespace core {
 
-// ================================================================ 通用值
+// --- 通用值
 
 struct PluginValue {
     enum class Type : std::uint8_t {
@@ -69,7 +65,7 @@ struct PluginValue {
     std::string displayString() const;
 };
 
-// ================================================================ 插件声明
+// --- 插件声明
 
 enum class PluginSourceKind : std::uint8_t {
     Builtin = 0,
@@ -190,7 +186,7 @@ struct PluginManifest {
 const PluginLayoutSpec* selectPluginLayout(const PluginManifest& manifest,
                                            int tileWidth, int tileHeight) noexcept;
 
-// ================================================================ 运行结果
+// --- 运行结果
 
 struct PluginSnapshot {
     PluginValue data;

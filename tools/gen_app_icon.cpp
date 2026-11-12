@@ -1,15 +1,9 @@
-// KTile - 构建辅助工具：把 icon.png 转成多尺寸 app.ico
+// KTile - 构建辅助工具：icon.png 转多尺寸 app.ico
 //
-// 用法：
-//   gen_app_icon.exe <source.png> <output.ico>
-//
-// 为什么自己写：项目不引入任何第三方图像库（PIL/ImageMagick），
-// 而 Windows 自带的 WIC 就能完成「解码 -> 高质量缩放 -> PNG 编码」，
-// 只依赖系统 DLL，随用随编，不增加产品运行时体积。
-//
-// 产出格式：标准 ICO 容器，16/24/32/48/64/128/256 七个尺寸，每帧都是
-// PNG 压缩（Vista 起支持，Win7 没问题）。256 及以上必须用 PNG，
-// 小尺寸也用 PNG 可以省下大量体积、且缩放质量由 WIC 保证。
+// 用法：gen_app_icon.exe <source.png> <output.ico>
+// 不引第三方图像库，用系统 WIC 完成「解码 -> 缩放 -> PNG 编码」。
+// 产出标准 ICO：16/24/32/48/64/128/256 七帧，全部 PNG 压缩（256 及以上
+// 必须 PNG；小尺寸用 PNG 省体积，缩放质量由 WIC 保证）。
 #include <Windows.h>
 #include <wincodec.h>
 

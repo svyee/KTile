@@ -36,10 +36,9 @@ std::string formatGuid(const GUID& value) {
     return std::string(text, static_cast<std::size_t>(written));
 }
 
-// 兜底序列：CoCreateGuid 万一失败（系统 COM 组件异常），
-// 也不能让「添加项目」失败 —— 用「时间戳 + 进程内自增」拼一个。
-// 它不保证跨机器唯一，但在本机数据文件里绝对够用，
-// 且比「返回空串导致添加被拒」体验好得多。
+// 兜底序列：CoCreateGuid 失败（系统 COM 组件异常）时也不能让「添加项目」
+// 失败，用「时间戳 + 进程内自增」拼一个。不保证跨机器唯一，但本机数据
+// 文件里够用，比返回空串导致添加被拒好得多。
 LONG g_fallbackCounter = 0;
 
 std::string fallbackId() {

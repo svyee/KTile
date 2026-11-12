@@ -11,12 +11,10 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// ---------------------------------------------------------------- 工具
+// --- 工具
 
-// 把 HGLOBAL 包成 RAII 的锁定视图（配对调用 GlobalLock/GlobalUnlock）。
-//
-// 为什么不用 wil::unique_hglobal_locked：项目不引 WIL（体积与依赖约束），
-// 手动包一层只有几行。
+// 把 HGLOBAL 包成 RAII 的锁定视图（配对 GlobalLock/GlobalUnlock）。
+// 不用 wil::unique_hglobal_locked：项目不引 WIL，手动包几行即可。
 class ScopedGlobalLock {
 public:
     explicit ScopedGlobalLock(const HGLOBAL handle) noexcept : handle_(handle) {
@@ -157,7 +155,7 @@ std::wstring readAnsiText(IDataObject* dataObject, const CLIPFORMAT format) {
         return std::wstring();
     }
 
-    // 按系统 ANSI 代码页解码 —— 这类格式本身就是 ANSI 语义
+    // 按系统 ANSI 代码页解码，这类格式本身就是 ANSI 语义
     const int wideLength = MultiByteToWideChar(
         CP_ACP, 0, text, static_cast<int>(length), nullptr, 0);
     if (wideLength <= 0) {
@@ -188,9 +186,8 @@ std::vector<std::wstring> readDroppedPaths(IDataObject* dataObject) {
         return paths;
     }
 
-    // CF_HDROP 的 HGLOBAL 直接就是一个 HDROP，
-    // 用 DragQueryFileW 解析（不要自己解 DROPFILES 结构体 —— 长路径、
-    // 多文件、Unicode/ANSI 两种布局都由它负责）。
+// CF_HDROP 的 HGLOBAL 直接就是 HDROP，用 DragQueryFileW 解析，不自解
+// DROPFILES 结构体：长路径、多文件、Unicode/ANSI 两种布局都由它负责。
     const auto drop = reinterpret_cast<HDROP>(medium.get().hGlobal);
     const UINT count = DragQueryFileW(drop, 0xFFFFFFFFU, nullptr, 0);
     paths.reserve(count);
@@ -225,13 +222,12 @@ std::wstring readDroppedUrl(IDataObject* dataObject) {
     if (!value.empty()) {
         return value;
     }
-    // 纯文本兜底：有些来源只给 CF_UNICODETEXT。
-    // 不校验它「像不像网址」—— 用户拖一段路径文本过来往往也是想要的，
-    // 类型推断交给 ui::inferItemType。
+    // 纯文本兜底：有些来源只给 CF_UNICODETEXT。不校验是否像网址，用户
+    // 拖一段路径文本往往也是想要的，类型推断交给 ui::inferItemType。
     return readWideText(dataObject, CF_UNICODETEXT);
 }
 
-// ---------------------------------------------------------------- IDropTarget
+// --- IDropTarget
 
 class OleDropTarget final : public IDropTarget {
 public:
@@ -282,11 +278,10 @@ public:
 
     HRESULT __stdcall DragOver(DWORD /*keyState*/, POINTL point,
                                DWORD* effect) noexcept {
-        // 不改 canDrop_：进窗口时的判断已经定了，这里只回报效果。
+        // 不改 canDrop_：进窗口时已判定，这里只回报效果。
         setEffect(effect);
-        // 顺手把「还悬停在窗口上」再回报一次 —— UI 侧据此更新落点格
-        // 并续上看门狗定时器（见 setFileDropTarget）：没有这一下，
-        // 悬停期间落点框不跟手，看门狗还会把预览误清。
+        // 再回报一次悬停状态：UI 据此更新落点格并续看门狗定时器
+        //（见 setFileDropTarget），否则悬停期间落点框不跟手、预览被误清。
         lastPoint_ = point;
         notifyState(true);
         return S_OK;
@@ -324,7 +319,7 @@ public:
             }
             return S_OK;
         } catch (...) {
-            // COM 边界不能抛异常出去 —— ole32 的调用方不会接。
+            // COM 边界不能抛异常出去；ole32 的调用方不会接。
             canDrop_ = false;
             pendingCount_ = 0;
             if (effect != nullptr) {
@@ -339,8 +334,8 @@ private:
         if (effect == nullptr) {
             return;
         }
-        // 只接受「复制」。拖放语义是「往面板里加一份快捷方式」，
-        // 绝不动源文件（*effect 里可能同时置了 MOVE 位）。
+        // 只接受「复制」：拖放语义是往面板加一份快捷方式，绝不动源文件
+        //（*effect 里可能同时置了 MOVE 位）。
         *effect = (canDrop_ && ((*effect & DROPEFFECT_COPY) != 0))
                       ? DROPEFFECT_COPY
                       : DROPEFFECT_NONE;
@@ -368,7 +363,7 @@ private:
 
 }  // namespace
 
-// ---------------------------------------------------------------- 对外接口
+// --- 对外接口
 
 bool canAcceptDrop(IDataObject* dataObject) noexcept {
     if (dataObject == nullptr) {
@@ -443,9 +438,8 @@ bool DropTarget::registerForWindow(const HWND window,
         return false;
     }
 
-    // 引用计数从 1 开始（构造函数里），RegisterDragDrop 内部会再 AddRef；
-    // 因此这里成功后必须把自己持有的那一份交出去一份引用给成员指针，
-    // 失败则释放，避免泄漏。
+    // 引用计数从 1 开始，RegisterDragDrop 内部会再 AddRef；成功后把自己
+    // 持有的那一份交给成员指针，失败则释放，避免泄漏。
     auto* target = new OleDropTarget(std::move(handler),
                                      std::move(stateHandler));
 

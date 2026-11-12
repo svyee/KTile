@@ -29,7 +29,7 @@ static int g_failures = 0;
         }                                                                 \
     } while (false)
 
-// ---------------------------------------------------------------- 构造数据
+// --- 构造数据
 
 static PluginValue makeWeatherRoot() {
     PluginValue root = PluginValue::makeObject();
@@ -52,7 +52,7 @@ static PluginValue makeWeatherRoot() {
     return root;
 }
 
-// ---------------------------------------------------------------- 路径
+// --- 路径
 
 static void testResolvePath() {
     const PluginValue root = makeWeatherRoot();
@@ -111,7 +111,7 @@ static void testRepeatLocals() {
     CHECK(pluginResolvePath(shadowContext, "days.date") != nullptr);
 }
 
-// ---------------------------------------------------------------- 模板
+// --- 模板
 
 static void testTemplate() {
     const PluginValue root = makeWeatherRoot();
@@ -154,7 +154,7 @@ static void testNumberResolution() {
     CHECK(pluginResolveNumber("abc", context, 7.0) == 7.0);
 }
 
-// ---------------------------------------------------------------- 参数与颜色
+// --- 参数与颜色
 
 static void testParamTemplate() {
     const std::vector<std::pair<std::string, std::string>> params = {
@@ -174,7 +174,7 @@ static void testColorParsing() {
     CHECK(pluginParseColor("#zzz", 7U) == 7U);
 }
 
-// ---------------------------------------------------------------- main
+// --- main
 
 int wmain() {
     testResolvePath();

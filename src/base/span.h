@@ -13,7 +13,7 @@
 namespace ktile {
 namespace base {
 
-// ---------------------------------------------------------------- Span
+// --- Span
 // 非拥有视图，替代 std::span。仅需覆盖 HLaunch 用到的只读场景。
 template <typename T>
 class Span {
@@ -67,7 +67,7 @@ private:
     std::size_t size_;
 };
 
-// ---------------------------------------------------------------- 字符串工具
+// --- 字符串工具
 
 // ASCII 空白判定（不处理 Unicode 空白）
 inline bool isSpaceChar(char c) noexcept {
@@ -148,7 +148,7 @@ inline bool startsWith(const std::wstring& value, const std::wstring& prefix) {
            value.compare(0, prefix.size(), prefix) == 0;
 }
 
-// ---------------------------------------------------------------- UTF-8 <-> UTF-16
+// --- UTF-8 <-> UTF-16
 // 实现放在 base/text_convert.h + text_convert.cpp，这里透传方便使用。
 
 #include "base/text_convert.h"

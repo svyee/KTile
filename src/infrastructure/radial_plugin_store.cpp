@@ -19,10 +19,8 @@ namespace {
 namespace fs = std::filesystem;
 
 // 把清单里的相对图标路径解析成绝对路径（相对插件目录）。
-//
-// 为什么加载期就定死：渲染层只知道「icon 是个路径」，如果留相对路径，运行期
-// 还得知道它相对谁 —— 用户配置的图标相对 data 目录，插件的相对插件目录，
-// 一旦混了就是「图标全丢，但没人报错」。这里一次性转成绝对路径，两边统一。
+// 必须在加载期定死：用户配置的图标相对 data 目录、插件的相对插件目录，
+// 渲染层如果还要区分两者，一旦混了就是图标全丢且无人报错。
 void resolveIconPath(core::RadialAction* action, const fs::path& directory) {
     if (action == nullptr || !action->icon.has_value()) {
         return;
@@ -70,8 +68,8 @@ void loadOne(const fs::path& directory, const std::string& id,
     }
     const json::JsonValue& root = parsed.root;
 
-    // 版本比本程序新：字段语义可能已经变了，宁可整份不加载也不猜。
-    // （反过来的情况不拦 —— 老插件缺字段，走默认值就行。）
+    // 版本比本程序新：字段语义可能已变，宁可整份不加载也不猜。反之老插件
+    // 缺字段走默认值，不拦。
     const std::uint32_t schema = root.find("schemaVersion").asUint32(
         core::kRadialPluginSchemaVersion);
     if (schema > core::kRadialPluginSchemaVersion) {
@@ -134,8 +132,8 @@ void RadialPluginStore::discover(const std::wstring& root) {
             directories.push_back(entry.path());
         }
     }
-    // 排序一下：目录遍历顺序在不同文件系统上不一致，先排好再加载，
-    // 至少让「同优先级按 id 取名」这类规则有稳定的输入。
+    // 目录遍历顺序在不同文件系统上不一致，先排序，让「同优先级按 id 取名」
+    // 这类规则有稳定输入。
     std::sort(directories.begin(), directories.end());
 
     for (const auto& directory : directories) {

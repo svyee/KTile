@@ -1,13 +1,9 @@
 // KTile - Win32 平台层：启动项目
 //
-// 把「怎么把一条 LaunchItem 跑起来」收进平台层：
-//   - Application 只说「启动这个，要不要管理员」
-//   - 拼参数、选 ShellExecute 语义、报错，都在这里
-//
-// 统一用 ShellExecuteW 而不是 CreateProcessW：
-//   ShellExecuteW 天然覆盖四类目标 —— exe 直接跑、文档走文件关联、
-//   文件夹开资源管理器、URL 走默认浏览器；.lnk 也能解析。
-//   CreateProcessW 只能跑可执行文件，其余三类都要自己分流。
+// 拼参数、选 ShellExecute 语义、报错都收在这里，Application 层只说
+// 「启动这个，要不要管理员」。统一用 ShellExecuteW：天然覆盖 exe、
+// 文档关联、文件夹、URL 四类目标，.lnk 也能解析；CreateProcessW 只能
+// 跑可执行文件，其余三类要自己分流。
 //
 #pragma once
 
@@ -30,7 +26,7 @@ struct LaunchResult {
 // 以普通权限启动项目。
 //
 // item.runAsAdministrator 为 true 时自动走 runas（UAC 提权）；
-// forceAdministrator 用于右键菜单的「以管理员身份运行」——
+// forceAdministrator 用于右键菜单的「以管理员身份运行」，
 // 它无视项目自身的设置，强制提权一次。
 LaunchResult launchItem(const core::LaunchItem& item, bool forceAdministrator = false);
 
@@ -41,10 +37,9 @@ LaunchResult launchItem(const core::LaunchItem& item, bool forceAdministrator = 
 LaunchResult revealItemInExplorer(const core::LaunchItem& item);
 
 // 用系统默认程序打开一个文件（例如插件的 radial.json）。
-//
-// 没有文件关联时用记事本兜底：JSON 是纯文本，记事本在任何 Windows 上都有，
-// 而 .json 在精简版系统里确实可能没有关联。用户点「打开 JSON」的诉求是
-// 「我要改它」，不是「看看是哪个程序弹出来」—— 所以宁可换程序也要打开。
+// 没有文件关联时用记事本兜底：JSON 是纯文本，记事本任何 Windows 都有，
+// 而 .json 在精简版系统里可能没有关联；用户要的是能改它，宁可换程序
+// 也要打开。
 LaunchResult openPathWithDefaultProgram(const std::wstring& path);
 
 // 在资源管理器中打开一个目录（不选中任何项）。

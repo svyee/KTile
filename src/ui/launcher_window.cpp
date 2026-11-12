@@ -43,15 +43,12 @@ constexpr UINT kBlankMenuSettingsId = 3101;
 constexpr UINT kBlankMenuAddItemId = 3102;
 constexpr UINT kBlankMenuNewTabId = 3103;
 constexpr UINT kBlankMenuAboutId = 3104;
-// 「添加插件」子菜单的命令 ID 段：3101..3104 之后，取 3201 起。
-// 命令 ID 与插件下标按下标偏移换算（子菜单项数量有限，不会溢出）。
+// 「添加插件」子菜单命令 ID 段：命令 ID = 3201 + 插件下标。
 constexpr UINT kBlankMenuPluginBaseId = 3201;
 
-// 默认配色已迁移到 ui/theme.h 的 ThemeColors（皮肤系统）。
-// 磁贴底色：中性深灰玻璃 —— 对浅色/彩色图标都能保证对比度。
-// hover / pressed 在此基础上提亮，反馈明显。
-
-// 标签底衬（scrim）颜色由主题派生（ThemeColors::labelScrim）：
+// 默认配色已迁移到 ui/theme.h 的 ThemeColors（皮肤系统）：磁贴底色为
+// 中性深灰玻璃，对浅色/彩色图标都有对比度，hover/pressed 在此基础上提亮。
+// 标签底衬（scrim）颜色由主题派生（ThemeColors::labelScrim）。
 
 // 从 ARGB 整数构造 D2D 颜色
 D2D1_COLOR_F colorFromArgb(const std::uint32_t argb) {
@@ -80,10 +77,8 @@ COLORREF searchEditTextColorRef(const ThemeColors& theme) {
 // 兜底首字的基准字号（绘制时按磁贴尺寸做矩阵缩放）
 constexpr float kFallbackBaseFontSize = 24.0F;
 
-// 拖拽判定阈值（DIP）。
-//
-// 按下后移动超过该距离才升级为拖拽。目的是把「点击启动」与「拖动排序」
-// 区分开：没有阈值的话，手抖一两像素就会把启动操作变成排序。
+// 拖拽判定阈值（DIP）：移动超过该距离才升级为拖拽，否则手抖一两像素
+// 就会把点击启动变成排序。
 constexpr float kDragThresholdDip = 6.0F;
 
 // 标签跑马灯：33ms 一帧（≈30fps）、每帧 0.8 DIP（约 24 DIP/秒）、
@@ -92,24 +87,14 @@ constexpr UINT kMarqueeIntervalMs = 33;
 constexpr float kMarqueeStepDip = 0.8F;
 constexpr int kMarqueePauseTicks = 18;
 
-// 落点防抖（毫秒）。
-//
-// 鼠标停在两格交界附近时，命中测试结果会在相邻磁贴间反复切换，
-// 若每次都立刻重排，「挤开」动画会来回抖动。这里要求落点稳定
-// 一小段时间后才确认，视觉上更安定。
+// 落点防抖（毫秒）：光标停在两格交界时命中结果会反复切换，要求落点
+// 稳定一小段时间才确认，否则挤开动画来回抖动。
 constexpr std::uint64_t kDropDebounceMs = 80;
 
-// 拖拽视觉反馈配色
-//
-// 落点占位框画在「被拖项将要占据的格子」上，而不是「光标下那块磁贴」上。
-// 这是 Win10 的做法：用户看到的虚线框就是松手后磁贴的真实位置，
-// 一目了然且不会误导（拖 2x2 到 1x1 上时框会明显更大）。
-//
-// 两套颜色各管一件事：
-//   - 挪动已有磁贴 → 中性白虚线（「把那块搬到这里」）→ text 派生
-//   - 拖入新项目   → 强调色（「这里会长出一块新的」）→ accent 派生
-// 同一套几何、同一种虚线节奏，只是颜色不同 —— 学一次就够。
-//（颜色改由 ThemeColors 派生，见 paintDropSpotFrame。）
+// 落点占位框画在「被拖项将占据的格子」上而非光标下的磁贴上（Win10 做法）：
+// 用户看到的虚线框就是松手后的真实位置。挪动已有磁贴用中性白（text 派生），
+// 拖入新项目用强调色（accent 派生），几何与虚线节奏相同，
+// 颜色由 ThemeColors 派生（见 paintDropSpotFrame）。
 constexpr float kDropTargetDashSpan = 6.0F;              // 虚线段长
 constexpr float kDropTargetDashGap  = 4.0F;              // 虚线间隔
 constexpr float kDropTargetBorderWidth = 1.6F;
@@ -121,21 +106,14 @@ constexpr float kLiftedShadowAlpha = 0.38F;          // 投影强度
 
 // 窗口背景色（深色，完全不透明）。
 //
-// 曾经写成 0xF0（94% 不透明）——这在「非分层窗口」上没有任何美学效果
-//（GDI 呈现会忽略 alpha），却制造了一个极难排查的 bug：
-// D2D 的 HWND 渲染目标不保证帧间清屏，每帧用半透明刷子 FillRectangle
-// 等于把 94% 深色混合到**上一帧的画面**上，旧内容以 6% 持续透出。
-// 平时重绘频繁（悬停/动画每帧都盖）看不出来；一旦某个状态切换后窗口
-// 空闲（例如切标签页），残影就一直停在屏幕上，直到下一次重绘才被
-// 逐帧稀释 —— 用户看到的就是「约 0.5 秒的旧页图标淡残影」。
+// 必须完全不透明：D2D 的 HWND 渲染目标不保证帧间清屏，每帧用半透明刷子
+// FillRectangle 等于把颜色持续混到上一帧画面上，窗口空闲时旧内容会长期
+// 透出残影。GDI 呈现也会忽略 alpha，半透明没有任何效果。
 constexpr std::uint32_t kWindowBackground = 0xFF1E1E1E;
 
-// ---------------------------------------------------------------- 钉子按钮
-//
-// 位置与尺寸都在标题带内（见 pinButtonRect），所以钉子永远不会与磁贴重叠。
-// 图形用 Lucide 的 pin（core/lucide_icons.h）描边绘制，不依赖字体字形 ——
-// Win7 的 Segoe UI Symbol 对图钉字符 U+1F4CC 支持不稳定，用字符会出现
-// 方框或空白；同时它与「添加系统项目」里那批图标是同一套线条语言。
+// --- 钉子按钮
+// 图形用 Lucide 的 pin（core/lucide_icons.h）描边绘制，不用字体字形：
+// Win7 的 Segoe UI Symbol 对 U+1F4CC 支持不稳定，会画成方框或空白。
 constexpr float kPinButtonSize  = 22.0F;   // 命中/绘制方形边长
 constexpr float kPinHitPadding  = 4.0F;    // 命中容差（向外扩）
 constexpr float kPinBaselineNudge = 0.0F;  // 垂直微调：让图钉视觉重心居中
@@ -146,21 +124,17 @@ constexpr float kPinGlyphScale = kPinGlyphBox / 24.0F;
 constexpr float kPinStrokeWidth = 2.0F * kPinGlyphScale;
 
 // 锁定按钮（防误拖磁贴）：钉子左侧的小锁，尺寸/线宽/命中容差全部沿用
-// 钉子的常量 —— 两个按钮并排，视觉密度必须一致。
+// 钉子的常量，两个按钮并排视觉密度必须一致。
 constexpr float kLockButtonGap = 4.0F;  // 与钉子的间距
 
-// 标题带内控件（搜索框 / 锁 / 钉子）距标题带顶部的固定留白。
-//
-// 刻意不用「垂直居中」：headerHeight 特意比控件高，多出来的空间全给下方，
-// 这样搜索框上方的窗口边距可以收窄，而它与磁贴之间又能拉开距离。
+// 标题带内控件（搜索框 / 锁 / 钉子）距标题带顶部的固定留白。不用垂直居中：
+// 多出的空间全给下方，搜索框上方边距收窄，与磁贴又能拉开距离。
 constexpr float kHeaderContentTopInset = 2.0F;
-// 钉子颜色改由 ThemeColors 派生（paintPinButton）。
+// 钉子颜色由 ThemeColors 派生（paintPinButton）。
 
-// ---------------------------------------------------------------- 搜索框
-//
-// 位置：标题带内、钉子左侧，两者互不重叠（见 searchBoxRect 的右边界）。
-// 之所以放在标题带：磁贴从 outerPadding + headerHeight 开始，标题带是
-// 唯一恒为空白的区域，搜索框放这里永远不会盖住磁贴。
+// --- 搜索框
+// 放在标题带内、钉子左侧：磁贴从 outerPadding + headerHeight 开始，
+// 标题带是唯一恒为空白的区域，搜索框不会盖住磁贴。
 constexpr float kSearchBoxHeight = 22.0F;   // 与钉子等高的视觉节奏
 constexpr float kSearchBoxRadius = 3.0F;    // 轻微圆角，柔和但仍是直角系
 constexpr float kSearchBoxRightGap = 10.0F; // 搜索框右边缘与钉子左边缘的间距
@@ -171,37 +145,24 @@ const wchar_t* searchPlaceholder() {
     return infrastructure::i18n::trw("launcher.searchPlaceholder").c_str();
 }
 
-// 搜索框左端的应用图标（品牌位）。
-//
-// 尺寸与搜索框（22 DIP）成比例：16 DIP 的图标在框内上下一共留 3 DIP，
-// 视觉上「嵌在框里」而不是「贴在框外」。图标右侧留 kSearchIconTextGap，
-// 输入文字与占位提示都从这里起排。
+// 搜索框左端的应用图标（品牌位）。16 DIP 图标在 22 DIP 框内上下各留
+// 3 DIP，视觉上嵌在框里；右侧留 kSearchIconTextGap，输入文字与占位
+// 提示从这里起排。
 constexpr float kSearchIconSize = 16.0F;
 constexpr float kSearchIconLeftGap = 4.0F;
 constexpr float kSearchIconTextGap = 4.0F;
 
-// 搜索框字号。
-//
-// 比磁贴小标签（通常 11~12）略大一点：搜索框是交互控件，
-// 文字大一些更容易看清输入内容，也与 22px 高的框更协调。
+// 搜索框字号：比磁贴小标签略大，交互控件文字更易读，与 22px 框协调。
 constexpr float kSearchFontSize = 13.0F;
 
 // 不匹配搜索的磁贴淡化到多少（alpha 乘数）
 constexpr float kSearchDimOpacity = 0.18F;
 
-// ---------------------------------------------------------------- 标签条
-//
-// 位置：标题带（搜索框 + 钉子）之下、磁贴网格之上，独占一行。
-//
-// 为什么单独占一行而不是塞进标题带：标题带只有 28 DIP，已经被搜索框
-// （左）与钉子（右）占满；页名是用户自己起的词组（「办公」「游戏」「开发工具」），
-// 挤进去只能显示一两个字，等于没显示。
-//
-// 为什么放在标题带下方而不是窗口最顶部：搜索框与钉子是**面板级**控件
-// （作用于整个面板），标签是**内容级**控件（切换网格里的内容）。
-// 让内容级的东西紧贴内容，层级关系一眼可见。
-// 标签条高度与上下间距定义在 launcher_window.h（kTabBarHeight 等）——
-// 窗口尺寸计算也要用，放这里 .cpp 的匿名命名空间会让 behavior.cpp 看不到。
+// --- 标签条
+// 独占一行，位于标题带之下、网格之上：标题带已被搜索框与钉子占满，
+// 页名挤不进去；标签是内容级控件，紧贴内容层级更清楚。
+// 高度与间距常量在 launcher_window.h（kTabBarHeight 等）：窗口尺寸计算
+// 也要用，放 .cpp 的匿名命名空间会让 behavior.cpp 看不到。
 
 // 标签宽度 = 文字宽度 + 左右内边距，再夹到 [min, max]。
 // 夹下限：单字页名（「1」「图」）也要有个像样的点击块；
@@ -221,25 +182,15 @@ constexpr float kTabFontSize = 12.5F;
 constexpr float kTabUnderlineHeight = 2.0F;
 constexpr float kTabButtonStrokeWidth = 1.4F;
 
-// ---------------------------------------------------------------- 选中框
+// --- 选中框
 constexpr float kSelectionFrameWidth = 2.0F;
 constexpr float kSelectionFrameInset = 1.0F;
 // 颜色跟主题强调色走（theme_.selectionFrame()）
 
-// ---------------------------------------------------------------- 磁贴配色
-//
-// 设计取舍：磁贴底色**不用**高饱和纯色。
-//
-// 原因：Windows 程序的 exe 图标绝大多数是为「浅色/白底」设计的
-// （记事本、命令提示符、任务管理器等都是浅色线条），直接压在
-// #1E7145 这类深绿上会糊成一片，反而更看不清。
-//
-// 因此改为：
-//   底色 = 深灰玻璃（保证任意图标都有对比度）
-//   标识 = 顶部 4px 强调色条 + 悬停时的强调色描边
-//   无图标的磁贴 = 强调色圆角底衬 + 白色首字（此时高饱和是安全的）
-//
-// 强调色仍按名称哈希分配，保持「一眼可辨」的视觉区分度。
+// --- 磁贴配色
+// 底色不用高饱和纯色：exe 图标多为浅色线条设计，压在深绿上会糊成一片。
+// 改为深灰玻璃底保证对比度，强调色条与悬停描边做标识；无图标的磁贴用
+// 强调色圆角底衬加白色首字，此时高饱和是安全的。强调色按名称哈希分配。
 
 constexpr std::uint32_t kTileAccentPalette[] = {
     0xFF2D7DD2,  // 蓝
@@ -321,7 +272,7 @@ std::wstring fallbackGlyphText(const core::LaunchItem& item) {
 
 }  // namespace
 
-// ================================================================ 生命周期
+// --- 生命周期
 
 LauncherWindow::LauncherWindow() = default;
 
@@ -375,11 +326,9 @@ bool LauncherWindow::create(HINSTANCE instance,
     // WS_EX_TOOLWINDOW: 不出现在 Alt+Tab
     // WS_EX_TOPMOST:    置顶显示（启动器需要）
     //
-    // 注意：这里**故意不加** WS_EX_NOACTIVATE。曾经加过，代价是窗口永远
-    // 拿不到焦点，键盘输入只能靠全局钩子 + 隐藏 IME 宿主窗口转发，
-    // 于是「在别的程序里打字漏进搜索框」「闸门开关补丁」等问题层出不穷。
-    // 现在它是普通的有焦点窗口：唤出时 show() 把焦点拿过来，
-    // 失焦时系统自动停止投递按键 —— 行为正确且零维护。
+    // 故意不加 WS_EX_NOACTIVATE（曾用过）：窗口拿不到焦点，键盘输入只能
+    // 靠全局钩子加隐藏 IME 宿主转发，问题层出不穷。现在是普通有焦点窗口，
+    // 失焦时系统自动停止投递按键，行为正确且零维护。
     hwnd_ = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         kWindowClassName,
@@ -417,7 +366,7 @@ void LauncherWindow::trimWorkingSet() {
                              static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
 }
 
-// ================================================================ 窗口过程
+// --- 窗口过程
 
 LRESULT CALLBACK LauncherWindow::windowProcThunk(HWND hwnd, UINT message,
                                                   WPARAM wParam, LPARAM lParam) {
@@ -469,8 +418,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                 ensureBackgroundBitmap();
             }
             updateLayout();
-            // 窗口宽度变了 → 标签条能放下的页数也变了（网格尺寸由设置
-            // 窗口调整时会走到这里），让活动页重新回到视野内。
+            // 宽度变了标签条能放下的页数也变了（设置窗口调网格会走到
+            // 这里），让活动页重新回到视野内。
             ensureActiveTabVisible();
             InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;
@@ -485,9 +434,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
         }
 
         case WM_EXITSIZEMOVE: {
-            // 用户拖动标题带结束：记住新位置，供「上一次的位置」策略使用。
-            // 只有拖动/系统移动会走这个分支，程序自己 SetWindowPos 不会，
-            // 所以不会把「按策略摆好的位置」反过来污染记录。
+            // 用户拖动结束：记住新位置，供「上一次的位置」策略使用。
+            // 程序自己 SetWindowPos 不触发这条消息，不会污染记录。
             RECT moved{};
             if (GetWindowRect(hwnd_, &moved) != FALSE) {
                 lastWindowPos_.x = moved.left;
@@ -558,12 +506,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             }
 
             // ---- 拖拽升级：按下后移动超过阈值才进入拖拽 ----
-            //
-            // 阈值存在的意义：区分「点击启动」与「拖动排序」。若不加阈值，
-            // 手抖 1~2px 就会把一次启动变成一次排序，体验很差。
-            // 阈值按 DPI 缩放，保证高 DPI 下手感一致。
-            // 磁贴锁定时禁止升级为拖拽：按下仍记录（点击启动/键盘同步
-            // 不受影响），但位移只会被忽略 —— 想整理布局先解锁。
+            // 阈值区分点击启动与拖动排序，按 DPI 缩放保证手感一致。
+            // 磁贴锁定时禁止升级：按下仍记录（点击/键盘不受影响），位移忽略。
             if (pressedItem_.has_value() && !dragActive_ && !tilesLocked_) {
                 const float threshold = kDragThresholdDip * scale;
                 const float dx = static_cast<float>(
@@ -604,8 +548,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             }
 
             if (dragActive_) {
-                // 拖拽中：只更新落点虚线框，**不动任何磁贴**。
-                // 这是对齐 Win10 的行为 —— 排布变化全部推迟到松手时。
+                // 拖拽中只更新落点虚线框，不动任何磁贴，排布变化推迟到松手
+                //（对齐 Win10 行为）。
                 updateDropspotPreview();
                 InvalidateRect(hwnd_, nullptr, FALSE);
             } else {
@@ -626,15 +570,11 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
 
         case WM_CAPTURECHANGED: {
             // 捕获被系统或其他窗口抢走（前台切换、弹菜单、显示器切换等）。
-            //
-            // 这是「拖拽卡死」的兜底出口：捕获丢了以后 WM_LBUTTONUP 不会
-            // 再送到本窗口，若不在这里收尾，dragActive_ 会一直为真 ——
-            // 表现就是用户说的「松开鼠标后图标还跟着鼠标走」。
-            //
-            // 这里按「提交」处理而不是取消：捕获丢失是外部原因，
-            // 用户本意仍是把磁贴放到虚线框处。lParam 为抢走捕获的窗口句柄，
-            // 若就是本窗口（例如我们自己在松手时调 ReleaseCapture），
-            // 说明是正常流程，状态已清，不会重复提交。
+            // 拖拽卡死的兜底出口：捕获丢了之后 WM_LBUTTONUP 不会再送达，
+            // 不在这里收尾 dragActive_ 会一直为真，磁贴跟着鼠标走。
+            // 按「提交」处理：捕获丢失是外部原因，用户本意仍是放到落点框处。
+            // lParam 为抢走捕获的窗口，若是本窗口（松手时自己
+            // ReleaseCapture）说明是正常流程，状态已清，不会重复提交。
             if (dragActive_ &&
                 reinterpret_cast<HWND>(lParam) != hwnd_) {
                 const auto source = dragSource_;
@@ -677,9 +617,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
         }
 
         // ---- 滚轮：在标签条上滚动 = 上一页/下一页 ----
-        //
-        // 与浏览器一致的手感，且不管页多页少都成立
-        //（页少时就是快速切换，页多时切换会把目标页滚进视野）。
+        // 与浏览器手感一致；页多时切换会把目标页滚进视野。
         case WM_MOUSEWHEEL: {
             POINT cursor{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             if (ScreenToClient(hwnd_, &cursor) == FALSE) {
@@ -708,14 +646,9 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             const float yDip = y / scale;
 
             // ---- 标题带空白 = 窗口的「标题栏」：按住拖动整块面板 ----
-            //
-            // 窗口是无边框的 WS_POPUP，没有系统标题栏。这里把标题带里
-            // 搜索框/钉子以外的区域（含搜索框上方那条窄边框）当作标题栏：
-            // 交给系统的 HTCAPTION 拖动，比手写 SetCapture + WM_MOUSEMOVE
-            // 稳（多显示器、DPI 边界、Aero Snap 都由系统处理）。
-            //
-            // 搜索框与钉子先各自命中 —— 它们的矩形与这块区域重叠时，
-            // 用户点的是控件，不是标题栏。
+            // 交给系统 HTCAPTION 拖动：多显示器、DPI 边界、Aero Snap 都由
+            // 系统处理，比手写 SetCapture + WM_MOUSEMOVE 稳。
+            // 搜索框/钉子先各自命中：点在控件上不是标题栏。
             if (yDip < metrics_.outerPadding + metrics_.headerHeight &&
                 !hitTestPin(xDip, yDip) &&
                 !hitTestLock(xDip, yDip) &&
@@ -725,9 +658,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                 return 0;
             }
 
-            // ---- 标签条最优先：切页/新建/滚动都不该触发磁贴流程 ----
-            // 放在钉子与搜索框之前虽然顺序上无所谓（三者矩形不重叠），
-            // 但放前面更符合「越靠近内容的东西越先生效」的直觉。
+            // ---- 标签条最优先：切页/新建/滚动不该触发磁贴流程 ----
             if (handleTabBarClick(xDip, yDip)) {
                 return 0;
             }
@@ -767,8 +698,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                 return 0;
             }
 
-            // 点空白处则退出搜索模式（但不清空已有查询），
-            // 让用户能「点别处 → 继续用鼠标操作」而不被搜索框黏住。
+            // 点空白处退出搜索模式但不清空查询，用户能继续用鼠标操作。
             deactivateSearch();
 
             pressedItem_ = hitTestItem(xDip, yDip);
@@ -823,11 +753,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
 
             if (dragActive_) {
                 // ---- 先取落点、清状态，再提交，最后释放捕获 ----
-                //
-                // 顺序很重要：ReleaseCapture() 会同步派发 WM_CAPTURECHANGED。
-                // 先清掉 dragActive_，那里的兜底分支就不会重复提交；
-                // 反之若先 ReleaseCapture，提交会被兜底分支抢先执行，
-                // 且随后因状态已清而走不到这里。
+                // ReleaseCapture() 会同步派发 WM_CAPTURECHANGED，先清掉
+                // dragActive_ 才不会触发那里的兜底重复提交。
                 const auto source = dragSource_;
                 const auto spot = dropspotPreview_;
 
@@ -868,8 +795,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             const float scale = dpiScale();
 
             // ---- 标签条右键：页面管理菜单（新建/重命名/删除/调顺序）----
-            // 必须在磁贴命中之前判断：标签条不是磁贴区，
-            // 落到下面「空白区菜单」里会让用户找不到改名的入口。
+            // 必须在磁贴命中之前判断，否则改名入口落进空白区菜单找不到。
             {
                 const int tabIndex = hitTestTab(x / scale, y / scale);
                 if (tabIndex >= 0) {
@@ -898,18 +824,14 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             } else if (settingsHandler_ || addItemHandler_ ||
                        aboutHandler_ || pluginCatalogProvider_) {
                 // ---- 空白区右键：面板级操作 ----
-                //
-                // 托盘图标经常被 Windows 收进溢出区，用户想找设置时
-                // 不一定摸得到托盘。主窗口的空白处给一个直接的入口。
-                // 「添加新项目」同理放在这里：它是面板级的动作，
-                // 不应该要求用户先在某个磁贴上右键再找「新建」。
+                // 托盘图标常被 Windows 收进溢出区，设置与添加项目在空白处
+                // 给直接入口。
                 POINT screenPoint{};
                 screenPoint.x = static_cast<LONG>(x);
                 screenPoint.y = static_cast<LONG>(y);
                 ClientToScreen(hwnd_, &screenPoint);
 
-                // 插件入口做成子菜单：插件数量会随用户安装增长，
-                // 平铺到一级菜单会把「设置」挤到很下面。
+                // 插件入口做子菜单：数量随安装增长，平铺会挤占一级菜单。
                 std::vector<platform::win32::PopupMenuEntry> pluginEntries;
                 std::vector<core::PluginCatalogEntry> catalog;
                 if (pluginCatalogProvider_ && addPluginHandler_) {
@@ -966,11 +888,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
         }
 
         // ---- 键盘输入 ----
-        //
-        // 文字输入的主力是子 Edit 控件（searchEdit_，show() 时焦点在那里）。
-        // 焦点偶尔停在面板本体（点过磁贴之后）时，这里的兜底把输入
-        // 转交给搜索框 —— 打字是搜索意图，顺便把焦点也带过去，
-        // IME 中文从下一个字起也走正路。
+        // 焦点偶尔停在面板本体（点过磁贴）时，把输入转交给搜索框：
+        // 打字即搜索意图，顺带移焦点，IME 中文从下一个字起走正路。
         case WM_KEYDOWN:
             return handleKeyDown(static_cast<UINT>(wParam));
 
@@ -1007,8 +926,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
 
         case WM_CTLCOLOREDIT: {
             // Edit 的底色/文字色在这里给。背景必须不透明（透明底会在
-            // 文字增删时糊字），颜色取主题背景按比例混入文字色的合成
-            // 结果 —— 与 D2D 侧搜索框底衬（10%/20% text）视觉一致。
+            // 文字增删时糊字），颜色为主题背景混入文字色的合成结果，
+            // 与 D2D 侧底衬（10%/20% text）视觉一致。
             if (reinterpret_cast<HWND>(lParam) == searchEdit_ &&
                 wParam != 0) {
                 HDC hdc = reinterpret_cast<HDC>(wParam);
@@ -1032,14 +951,9 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                 return 0;
             }
             if (wParam == kOutsideProbeTimerId) {
-                // 「窗口外按下的这一次到底是点击还是拖动」的探测。
-                //
-                //   - 按钮已松开           → 普通点击，收起窗口（与旧行为一致，
-                //                            只多了最多一次探测间隔的延迟）
-                //   - 还按着且光标已移动    → 判定为在拖东西（很可能是从
-                //                            资源管理器拖文件过来），保持可见，
-                //                            让 OLE 拖放有机会落在窗口上
-                //   - 还按着但没动、超次数  → 长按，按普通点击处理，收起
+                // 探测「窗口外按下是点击还是拖动」：按钮已松开 → 普通点击
+                // 收起；仍按着且光标移动 → 拖动（如从资源管理器拖文件），
+                // 保持可见让 OLE 拖放落进窗口；仍按着没动且超次数 → 长按收起。
                 KillTimer(hwnd_, kOutsideProbeTimerId);
                 if (!outsideProbeActive_) {
                     return 0;
@@ -1059,7 +973,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
                     (std::abs(now.x - outsideProbeDownPoint_.x) +
                      std::abs(now.y - outsideProbeDownPoint_.y));
                 if (moved >= kOutsideProbeDragThresholdPx) {
-                    // 拖东西呢 —— 不收起，也不继续探测
+                    // 拖东西呢：不收起，也不继续探测
                     outsideProbeActive_ = false;
                     return 0;
                 }
@@ -1076,11 +990,8 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             }
 
             if (wParam == kFileDropGuardTimerId) {
-                // 拖入落点框的保险：亮着期间每 250ms 查一次左键状态。
-                // 真实拖拽必然按着左键 —— 只要键已松开（无论 OLE 有没有
-                // 回报 DragLeave/Drop，个别来源结束后会补发一次 DragEnter
-                // 却永远不给 Leave），预览立即撤除。悬停中按键一直按着，
-                // 轮询空转，无副作用。
+                // 拖入落点框的保险：亮着期间每 250ms 查一次左键，键已松开
+                // 就撤预览（个别来源结束拖动后补发 DragEnter 却不给 Leave）。
                 if (!fileDropActive_) {
                     KillTimer(hwnd_, kFileDropGuardTimerId);
                     return 0;
@@ -1094,8 +1005,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
             if (wParam != kAnimationTimerId) {
                 break;
             }
-            // 推进动画。返回 false 表示全部收敛，可以停表 —— 空闲时
-            // 不占定时器、不重绘，对电池友好。
+            // 推进动画，全部收敛则停表：空闲时不占定时器、不重绘。
             const bool stillAnimating = advanceAnimations();
             InvalidateRect(hwnd_, nullptr, FALSE);
             if (!stillAnimating) {
@@ -1106,12 +1016,9 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
         }
 
         case WM_KILLFOCUS: {
-            // 失去焦点。两种收尾，互不干扰：
-            //   1. 拖拽中 → 取消本次拖拽、磁贴回位，以免拖拽卡死。
-            //      捕获丢失的情况另由 WM_CAPTURECHANGED 负责。
-            //   2. 搜索中 → 收掉搜索框的焦点视觉与输入法状态。
-            //      按键由系统停止投递（焦点已走），这里收的是残留视觉。
-            //      不主动隐藏窗口 —— 收起是外部点击监视的职责。
+            // 失去焦点的两种收尾：拖拽中取消拖拽、磁贴回位，以免拖拽卡死
+            //（捕获丢失另由 WM_CAPTURECHANGED 负责）；搜索中收掉焦点视觉
+            // 与 IME 状态。不主动隐藏窗口，收起是外部点击监视的职责。
             if (dragActive_) {
                 dragActive_ = false;
                 dragSource_.reset();
@@ -1138,30 +1045,19 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
         }
 
         case platform::win32::kOutsideClickMessage: {
-            // 检测到点击了窗口外部（由全局鼠标钩子投递）。
-            //
-            // 两个前提条件都要满足才收起：
-            //   1. 没被钉住 —— 钉住是「常驻面板」，外部点击不收起
-            //   2. 不在模态交互中（设置窗口打开）—— 主窗口要保持可见，
-            //      皮肤切换才能实时看到效果
-            //   3. 不在拖拽中 —— 拖拽时用户可能把光标甩到窗口外一点点，
-            //      此时收起会让操作突然中断
+            // 点击了窗口外部（全局鼠标钩子投递）。拖拽中/按在钉子上/
+            // 模态交互中不收起（主窗口保持可见，皮肤切换才能实时预览）；
+            // 钉住与否由 hideIfUnpinned 判断。
             if (dragActive_ || pinPressed_ || modalGuard_) {
                 return 0;
             }
 
-            // 钉住时窗口不收起：用户去了别处，焦点随点击自然移走，
-            // 输入不会再进搜索框（普通窗口的天然行为），无需记录任何状态。
+            // 钉住时不收起：焦点随点击自然移走，输入随之停止，无需额外状态。
 
-            // ---- 延迟判定：这一次「按在窗口外」到底是点击还是拖动？----
-            //
-            // 关键场景：从资源管理器拖文件丢进面板。这次拖动是在
-            // **窗口外按下鼠标**开始的 —— 若立刻收起，拖动还没到窗口
-            // 上方窗口就没了，拖放功能等于不存在。
-            //
-            // 区别在于「按下之后还继续动」还是「马上松手」：
-            // 所以这里不立即下结论，先记下按下点并启动探测定时器
-            // （见 WM_TIMER 里的 kOutsideProbeTimerId 分支）。
+            // ---- 延迟判定：按在窗口外是点击还是拖动 ----
+            // 从资源管理器拖文件进来时，按下鼠标发生在窗口外，立即收起
+            // 会让拖放没机会落到窗口。先记下按下点，交给探测定时器区分
+            //（见 WM_TIMER 的 kOutsideProbeTimerId 分支）。
             if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) {
                 GetCursorPos(&outsideProbeDownPoint_);
                 outsideProbeActive_ = true;
@@ -1203,7 +1099,7 @@ LRESULT LauncherWindow::windowProc(const UINT message, const WPARAM wParam,
     return DefWindowProcW(hwnd_, message, wParam, lParam);
 }
 
-// ================================================================ D2D 资源
+// --- D2D 资源
 
 bool LauncherWindow::createDeviceIndependentResources() {
     // D2D 工厂
@@ -1275,12 +1171,9 @@ bool LauncherWindow::createDeviceIndependentResources() {
     fallbackFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     fallbackFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 
-    // 文本格式（搜索框）
-    //
-    // 必须单独建一个，不能复用 labelFormatSmall_：
-    // 磁贴标签需要**居中**，而搜索框必须**左对齐**（问题2的「内容居中」）。
-    // 同时设置 ParagraphAlignment = CENTER 让文字在框内垂直居中 ——
-    // 只设 TextAlignment 的话，文字会贴着框顶，看起来偏上。
+    // 文本格式（搜索框）：必须单独建，磁贴标签是居中对齐而搜索框要左对齐；
+    // ParagraphAlignment = CENTER 让文字在框内垂直居中，只设 TextAlignment
+    // 会贴着框顶。
     hr = dwriteFactory_->CreateTextFormat(
         L"Microsoft YaHei UI",
         nullptr,
@@ -1297,10 +1190,7 @@ bool LauncherWindow::createDeviceIndependentResources() {
     searchFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     searchFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 
-    // 文本格式（标签条页名）
-    //
-    // 单独建一个的理由与搜索框相同：磁贴标签格式是居中对齐的，
-    // 标签条必须左对齐（文字相对自己的点击块定位，不随宽度变化跳动）。
+    // 文本格式（标签条页名）：左对齐，理由同搜索框（磁贴标签格式是居中的）。
     hr = dwriteFactory_->CreateTextFormat(
         L"Microsoft YaHei UI",
         nullptr,
@@ -1323,8 +1213,8 @@ bool LauncherWindow::createDeviceIndependentResources() {
 void LauncherWindow::discardDeviceResources() {
     // 位图依附于渲染目标，必须先清缓存再释放目标
     clearIconCache();
-    // 插件图标几何是 D2D 工厂建的，本身不依附渲染目标；但设备丢失时
-    // 一并清掉最省心 —— 下次首绘重建，代价只有几十个线段。
+    // 插件图标几何建在 D2D 工厂上，不依附渲染目标；设备丢失时一并清掉，
+    // 下次首绘重建只花几十个线段。
     clearPluginGeometryCache();
     appIconBitmap_.reset();
     backgroundBitmap_.reset();
@@ -1338,20 +1228,15 @@ void LauncherWindow::clearIconCache() {
     iconCache_.clear();
 }
 
-// 把 HICON 转成 D2D 位图。
-//
-// 走 WIC 的 IWICImagingFactory::CreateBitmapFromHICON（Win7 可用）。
+// 把 HICON 转成 D2D 位图（WIC CreateBitmapFromHICON，Win7 可用）。
 // 失败返回空指针，调用方降级为占位方块。
 ID2D1Bitmap* LauncherWindow::acquireItemIcon(const core::LaunchItem& item) {
     if (!renderTarget_) {
         return nullptr;
     }
 
-    // 缓存键 = id + 目标 + 自定义图标。
-    //
-    // 只用 id 不行：「修改项目」改的正是目标与图标，而 id 不变。
-    // 把两者拼进键里之后，改完立刻就是新图标，不必依赖调用方记得作废缓存
-    // （invalidateIconCache 仍然保留，用于及时释放旧位图）。
+    // 缓存键 = id + 目标 + 自定义图标：只用 id 不行，「修改项目」改的正是
+    // 目标与图标而 id 不变。invalidateIconCache 保留用于及时释放旧位图。
     std::string cacheKey = item.id;
     cacheKey += '\x1F';
     cacheKey += item.target;
@@ -1364,22 +1249,16 @@ ID2D1Bitmap* LauncherWindow::acquireItemIcon(const core::LaunchItem& item) {
         return cached->second.get();
     }
 
-    // 源图档位一律取 256px jumbo。
-    //
-    // 原因：系统 ImageList 的实际档位是 32/48/256，并不随我们请求的
-    // 64px 返回 64px（实测 hint=Medium 仍返回 48x48）。磁贴内部尺寸
-    // 是 62~132px，用 32/48 源图放大必然模糊。统一取 256 后无论磁贴
-    // 多大都是「缩小」，由 D2D 做高质量重采样。
-    // （自定义图标是 128x128 PNG，这时 hint 只是给 shell 提取用的参考值。）
+    // 源图档位一律取 256px：系统 ImageList 实际档位是 32/48/256，请求
+    // 64px 也只返回 48x48，小图放大必糊；统一取 256 后磁贴任意尺寸都是
+    // 缩小绘制，由 D2D 高质量重采样。
     const auto hint = platform::win32::IconSizeHint::Large;
 
     const std::string iconPath = item.icon.has_value() ? *item.icon : std::string();
 
     // ---- 用户导入的自定义图片：直接喂像素给 D2D，不走 HICON ----
-    //
-    // 自定义图片是按原图比例存的（可能是 64x128 这种竖图），而 HICON 的
-    // DIB 往返对非正方形图标没有尺寸保证。这里「拿到什么像素就画什么像素」，
-    // 顺带省掉一次 HICON 度量与图标解码。
+    // 图片按原图比例存（可能是竖图），HICON 的 DIB 往返对非正方形图标
+    // 没有尺寸保证。
     if (!iconPath.empty() &&
         platform::win32::isManagedIconPath(base::utf8ToWide(iconPath))) {
         platform::win32::ImagePixels pixels;
@@ -1413,7 +1292,7 @@ ID2D1Bitmap* LauncherWindow::acquireItemIcon(const core::LaunchItem& item) {
             }
         }
         // 解码失败（文件被删/被占用）时继续往下走：loadItemIcon 会用同一个
-        // 路径再试一次，失败则回落到目标自身的图标 —— 磁贴不会变空白。
+        // 路径再试一次，失败则回落到目标自身的图标，磁贴不会变空白。
     }
     platform::win32::UniqueHIcon icon = platform::win32::loadItemIcon(
         item.target, iconPath,
@@ -1467,9 +1346,8 @@ ID2D1Bitmap* LauncherWindow::acquireItemIcon(const core::LaunchItem& item) {
     }
 
     platform::win32::ComPtr<ID2D1Bitmap> bitmap;
-    // 位图必须由窗口渲染目标创建：设备无关的 WIC 位图在 HwndRenderTarget 上
-    // 创建后可以在其上绘制。若用离屏目标创建，切回窗口目标会因「位图与渲染
-    // 目标不同源」而绘制失败。
+    // 位图必须由窗口渲染目标创建：用离屏目标创建的话，切回窗口目标会因
+    // 「位图与渲染目标不同源」绘制失败。
     ID2D1RenderTarget* bitmapHost =
         (hwndTarget_.get() != nullptr) ? hwndTarget_.get() : renderTarget_;
     if (bitmapHost == nullptr) {
@@ -1536,12 +1414,12 @@ bool LauncherWindow::createDeviceResources() {
     return true;
 }
 
-// ================================================================ 皮肤与背景图
+// --- 皮肤与背景图
 
 void LauncherWindow::setTheme(const ThemeColors& theme) {
     theme_ = theme;
-    // 搜索框 Edit 的 GDI 背景画刷按主题着色、懒创建 ——
-    // 删掉旧的，下次 WM_CTLCOLOREDIT 前会按新主题重建
+    // GDI 背景画刷按主题着色、懒创建：删掉旧的，下次 WM_CTLCOLOREDIT
+    // 前按新主题重建。
     if (searchEditBkBrush_ != nullptr) {
         DeleteObject(searchEditBkBrush_);
         searchEditBkBrush_ = nullptr;
@@ -1561,13 +1439,9 @@ void LauncherWindow::setBackgroundImage(const std::wstring& absolutePath) {
 }
 
 // ---- 主窗口整体不透明度 ----
-//
-// 用分层窗口（WS_EX_LAYERED + LWA_ALPHA）而不是给每个填充改 alpha：
-//   · 需求是「整个窗口」一起变透明，包括搜索框、标签条、边框这些
-//     GDI/D2D 混排的部位 —— 只有系统级合成能做到「一视同仁」；
-//   · 内容仍然按不透明绘制，每帧 Clear 到不透明底的铁律不变，
-//     alpha 只在窗口与桌面合成时统一相乘，帧间残影问题不受影响。
-// 100% 时撤掉 WS_EX_LAYERED：不透明窗口不需要额外合成开销。
+// 用分层窗口而非逐个填充改 alpha：GDI/D2D 混排的部位只有系统级合成能
+// 统一处理。内容仍按不透明绘制，每帧 Clear 到不透明底，alpha 只在合成
+// 时相乘，帧间残影不受影响。100% 时撤掉 WS_EX_LAYERED。
 void LauncherWindow::setWindowOpacityPercent(const int percent) {
     int clamped = percent;
     if (clamped < 50) {
@@ -1639,9 +1513,8 @@ std::uint32_t LauncherWindow::applyTileOpacityPercent(
     const std::uint32_t targetAlpha =
         static_cast<std::uint32_t>(tileOpacityPercent_) * 255U / 100U;
 
-    // 保留主题里三档底色之间的浓淡差（悬停比常态亮、按下更亮）。
-    // 直接统一成同一个 alpha 会把状态反馈抹平 —— 拉到 0% 时连「鼠标
-    // 在这块上」都看不出来了。差值以 tileFill 为基准算，换皮肤仍成立。
+    // 保留三档底色间的浓淡差（悬停亮于常态、按下更亮）：统一 alpha 会把
+    // 状态反馈抹平。差值以 tileFill 为基准算，换皮肤仍成立。
     const std::int32_t fillAlpha = static_cast<std::int32_t>(
         (theme_.tileFill >> 24) & 0xFFU);
     const std::int32_t ownAlpha =
@@ -1657,7 +1530,7 @@ std::uint32_t LauncherWindow::applyTileOpacityPercent(
     return (static_cast<std::uint32_t>(next) << 24) | (color & 0x00FFFFFFU);
 }
 
-// 把背景图解码成 D2D 位图。渲染目标尚未就绪时直接返回 ——
+// 把背景图解码成 D2D 位图。渲染目标尚未就绪时直接返回，
 // createDeviceResources 会在设备资源建好后再次调用。
 // 解码失败（文件被删/损坏）时不报错：路径保留，下次设备重建时
 // 再试一次；期间窗口用纯色背景，磁贴不受影响。
@@ -1673,7 +1546,7 @@ void LauncherWindow::ensureBackgroundBitmap() {
     }
 
     // 目标尺寸 = 窗口客户区物理像素。cover 绘制只需要位图「盖住」窗口，
-    // 按 1:1 需求解码即可 —— 源壁纸（动辄 3K×2K，解码 25MB）不缩放
+    // 按 1:1 需求解码即可：源壁纸（动辄 3K×2K，解码 25MB）不缩放
     // 直接建位图的话，内存是窗口需求的几十倍，常驻应用受不了。
     const D2D1_SIZE_F dip = host->GetSize();
     float dpiX = 96.0F;
@@ -1706,7 +1579,7 @@ void LauncherWindow::ensureBackgroundBitmap() {
         backgroundBitmap_.put());
 }
 
-// ================================================================ 渲染
+// --- 渲染
 
 void LauncherWindow::render() {
     if (!createDeviceResources()) {
@@ -1716,22 +1589,15 @@ void LauncherWindow::render() {
     renderTarget_->BeginDraw();
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    // 每帧先清成不透明背景。
-    //
-    // 双保险：即便将来某个填充又用回了半透明色，Clear 也能保证
-    // 上一帧的内容不会透过 alpha 混进来（渲染目标帧间内容不保证
-    // 被重置，见文件顶部「窗口背景色」处的长注释）。
+    // 每帧先清成不透明背景：渲染目标帧间内容不保证被重置，半透明填充
+    // 会把上一帧混进来（见 kWindowBackground 处的说明）。
     renderTarget_->Clear(colorFromArgb(theme_.windowBackground));
 
     const D2D1_SIZE_F size = renderTarget_->GetSize();
 
     // ---- 背景图（设置了才画）----
-    //
-    // cover 等比铺满：缩放取两方向较大者，居中裁掉溢出部分 ——
-    // 不变形，任何长宽比的图都好看。画完叠一层压暗层（主题
-    // backgroundDim），保证半透明白的文字/描边仍然可读。
-    // 残影铁律：即便有背景图，Clear 也不省 —— 位图是完全不透明
-    // 绘制倒是安全，但压暗层若改为半透明叠加，就得靠 Clear 兜底。
+    // cover 等比铺满后叠一层压暗层（backgroundDim），保证浅色文字与描边
+    // 可读。压暗层是半透明叠加，Clear 每帧不能省。
     if (backgroundBitmap_.get() != nullptr) {
         const D2D1_SIZE_F bmp = backgroundBitmap_->GetSize();
         if (bmp.width > 0.5F && bmp.height > 0.5F) {
@@ -1774,9 +1640,8 @@ void LauncherWindow::render() {
         discardDeviceResources();
     }
 
-    // 子 Edit 控件保险：万一 D2D 的呈现没有遵守 WS_CLIPCHILDREN
-    // （个别驱动路径会把整个窗口表面刷一遍），编辑框的文字会被抹掉。
-    // 让它跟着每一帧重绘一次 —— 一个 22px 高的 GDI 编辑框，代价可忽略。
+    // 子 Edit 控件保险：个别驱动路径的 D2D 呈现不遵守 WS_CLIPCHILDREN，
+    // 会抹掉编辑框文字。每帧让它跟着重绘一次，代价可忽略。
     if (searchEdit_ != nullptr && IsWindowVisible(searchEdit_)) {
         InvalidateRect(searchEdit_, nullptr, TRUE);
     }
@@ -1840,13 +1705,8 @@ void LauncherWindow::paintTiles() {
     }
 
     // ---- 落点占位框：松手后磁贴将占据的格子 ----
-    //
-    // 只画虚线框，不移动任何磁贴。理由：
-    //   Win10 拖拽时并不「预览」最终排布，只给一个明确的落点轮廓，
-    //   松手才真正归位。提前把所有受影响磁贴都挪开，用户反而看不清
-    //   「这块会去哪儿」，也容易误判成整个面板在乱动。
-    //
-    // 两种来源用同一套几何：拖动已有磁贴（中性白）与拖入新项目（强调蓝）。
+    // 只画虚线框不移动磁贴：提前挪开受影响磁贴反而看不清这块会去哪儿。
+    // 拖动已有磁贴（中性白）与拖入新项目（强调蓝）用同一套几何。
     if (dragActive_ && dropspotPreview_.has_value() && !items.empty()) {
         paintDropSpotFrame(*dropspotPreview_, /*addingNew=*/false);
     }
@@ -1883,10 +1743,8 @@ void LauncherWindow::paintTiles() {
     paintTabBar();
 }
 
-// 绘制落点占位框（虚线矩形 + 极淡底衬）。
-//
-// 几何与磁贴完全一致，所以「框在哪」就等于「松手后在哪」，
-// 不存在预先挪动其他磁贴带来的歧义。
+// 绘制落点占位框（虚线矩形 + 极淡底衬）。几何与磁贴完全一致，
+// 框在哪就等于松手后在哪。
 void LauncherWindow::paintDropSpotFrame(const core::Dropspot& spot,
                                        const bool addingNew) {
     if (!renderTarget_ || !brush_) {
@@ -1911,10 +1769,8 @@ void LauncherWindow::paintDropSpotFrame(const core::Dropspot& spot,
                                              : theme_.dropTargetFill()));
     renderTarget_->FillRoundedRectangle(rounded, brush_.get());
 
-    // 虚线描边：D2D 1.0 无内建虚线样式，手工按周长铺小段。
-    //
-    // 顺序：上边 → 右边 → 下边 → 左边（顺时针），这样拐角处线段连续，
-    // 不会出现「四个角都是断口」的廉价感。
+    // 虚线描边：D2D 1.0 无内建虚线样式，按周长顺时针手工铺小段，
+    // 拐角处线段连续不断口。
     borderBrush_->SetColor(
         colorFromArgb(addingNew ? theme_.dropNewBorder()
                                 : theme_.dropTargetBorder()));
@@ -1957,17 +1813,11 @@ void LauncherWindow::paintDropSpotFrame(const core::Dropspot& spot,
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
-// ================================================================ 标签条
+// --- 标签条
 
-// 网格内容区的 Y 起点（客户区 DIP）。
-//
-// 全项目只有这一处定义「磁贴从哪开始往下排」—— 绘制、命中测试、
-// 拖拽抓取偏移、落点解析全部引用它。此前这段算式散落在 8 处，
-// 每加一条标题带相关的东西就要全改一遍，漏一处就变成
-// 「看到的位置和点到的地方差一截」。
-//
-// 标签栏在底部时，网格紧贴标题带开始 —— 标签条占的高度原样
-// 挪到窗口下缘，窗口总尺寸不变。
+// 网格内容区的 Y 起点（客户区 DIP），全项目唯一出处：绘制、命中测试、
+// 拖拽抓取偏移、落点解析都引用它，散落多处会出现画与点的错位。
+// 标签栏在底部时网格紧贴标题带开始，标签条高度挪到窗口下缘，总尺寸不变。
 float LauncherWindow::gridOriginY() const {
     if (tabBarAtBottom_) {
         return metrics_.outerPadding + metrics_.headerHeight;
@@ -2012,11 +1862,8 @@ D2D1_RECT_F LauncherWindow::tabBarRect() const {
                        top + kTabBarHeight);
 }
 
-// 右端三个固定按钮的位置。
-//
-// 从右往左排：＋（最右，最常用）→ ▶ → ◀。刻意**始终**为三者留位，
-// 不随「是否溢出」动态显隐 —— 动态显隐会让标签可用宽度来回变，
-// 用户切页时标签左右乱跳。
+// 右端三个固定按钮，从右往左：＋、▶、◀。始终留位、不随溢出动态显隐，
+// 否则标签可用宽度来回变，切页时标签左右跳。
 D2D1_RECT_F LauncherWindow::newTabButtonRect() const {
     const D2D1_RECT_F bar = tabBarRect();
     const float size = kTabBarButtonSize;
@@ -2082,9 +1929,8 @@ std::vector<D2D1_RECT_F> LauncherWindow::tabItemRects() const {
         if (x + width > rightLimit) {
             break;  // 这一页放不下：连同它后面的页一起留到滚动后再显示
         }
-        // 高度都是 kTabBarHeight - 1：给分隔细线让出 1px。
-        // 顶部模式线在标签条底边，标签从上往下铺到线之上；
-        // 底部模式线翻到标签条顶边（贴磁贴区），标签从线下往下铺。
+        // 高度 kTabBarHeight - 1，给分隔细线让出 1px；底部模式 rect.top
+        // 已让开细线，标签铺在线下。
         rects[index] = tabBarAtBottom_
             ? D2D1::RectF(x, bar.top + 1.0F, x + width, bar.bottom)
             : D2D1::RectF(x, bar.top, x + width,
@@ -2133,13 +1979,8 @@ int LauncherWindow::hitTestTabBarButton(const float xDip,
     return 0;
 }
 
-// 标签文字宽度（带缓存）。
-//
-// 用 DWrite 的文本布局量一遍文字宽度 —— 系统没有更轻的办法，
-// 而标签宽度必须跟着名字走（固定宽度要么截断「开发工具」，
-// 要么让「1」占掉半个屏幕）。
-// 之所以缓存：每帧重绘都量一遍 N 个文本布局，页多时是白白的开销；
-// 页名/页数/DPI 不变时结果也不会变。
+// 标签文字宽度（带缓存）。宽度必须跟着页名走，用 DWrite 文本布局实测；
+// 页名/页数/DPI 不变时缓存结果，否则每帧量 N 个文本布局是白白的开销。
 const std::vector<float>& LauncherWindow::tabLabelWidths() const {
     const std::size_t count = document_.tabs.size();
     if (!tabLabelWidthsDirty_ && tabLabelWidths_.size() == count) {
@@ -2175,7 +2016,7 @@ const std::vector<float>& LauncherWindow::tabLabelWidths() const {
 }
 
 // 让活动页处于可见范围。
-// 页多到放不下时，切页（Ctrl+Tab / 菜单）必须把目标页滚进视野 ——
+// 页多到放不下时，切页（Ctrl+Tab / 菜单）必须把目标页滚进视野，
 // 否则「切过去了但看不见」会让人以为没生效。
 void LauncherWindow::ensureActiveTabVisible() {
     const std::size_t count = document_.tabs.size();
@@ -2208,11 +2049,8 @@ void LauncherWindow::ensureActiveTabVisible() {
     }
 }
 
-// 绘制标签条。
-//
-// 视觉语言与面板一致：不画整条的底色（保持面板通透），只有
-// 「活动页 / 悬停页」两块底色 + 一条底部细线。活动页额外压一条
-// 强调色下划线 —— 与钉子、选中框同一支强调色，用户一眼能串起来。
+// 绘制标签条：不画整条底色，只画活动/悬停页底色加一条分隔细线；活动页
+// 压强调色下划线，与钉子、选中框同一支强调色。
 void LauncherWindow::paintTabBar() {
     if (!renderTarget_ || !brush_ || !borderBrush_ || !textBrush_ ||
         tabFormat_.get() == nullptr) {
@@ -2224,9 +2062,8 @@ void LauncherWindow::paintTabBar() {
         return;  // 窗口窄到放不下，宁可不画（负宽度会让 D2D 报错）
     }
 
-    // 刻意不在这里调 ensureActiveTabVisible()：那会让「手动 ◀▶ 翻页」
-    // 立刻被拉回活动页，箭头等于失效。活动页的可见性由状态变化点
-    // （切页/增删页/改名/DPI 变化）负责维护。
+    // 这里不调 ensureActiveTabVisible()：手动 ◀▶ 翻页会被立刻拉回活动页，
+    // 箭头等于失效。活动页可见性由切页/增删页/改名/DPI 变化点维护。
     const std::vector<D2D1_RECT_F> rects = tabItemRects();
     const std::size_t count = document_.tabs.size();
     const bool overflow = tabBarOverflow();
@@ -2234,10 +2071,8 @@ void LauncherWindow::paintTabBar() {
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 
     // ---- 分隔细线 ----
-    //
-    // 顶部模式画在标签条底边（标签「坐」在线上）；
-    // 底部模式翻到标签条顶边（贴着磁贴区，标签「吊」在线下）——
-    // 让分隔线永远出现在「标签与内容区之间」，而不是贴着窗口边框。
+    // 顶部模式画在标签条底边，底部模式翻到顶边：分隔线永远在标签与
+    // 内容区之间，不贴窗口边框。
     brush_->SetColor(colorFromArgb(theme_.tabBarHairline()));
     if (tabBarAtBottom_) {
         renderTarget_->FillRectangle(
@@ -2310,9 +2145,7 @@ void LauncherWindow::paintTabBar() {
     }
 
     // ---- 右端固定按钮：＋ / ◀ / ▶ ----
-    //
-    // 图形全部手绘线条，不用字体字形 —— 与钉子按钮同一考虑：
-    // Win7 的字体对这些符号的支持不稳定，缺字形会画成方框。
+    // 手绘线条不用字体字形：Win7 缺字形会画成方框（与钉子同一考虑）。
     auto drawButtonBackdrop = [&](const D2D1_RECT_F& rect, const bool hovered) {
         if (!hovered) {
             return;
@@ -2371,12 +2204,9 @@ void LauncherWindow::paintTabBar() {
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
-// 标签条上的点击。返回 true 表示这次点击已经被标签条消费掉，
-// 调用方（WMLBUTTONDOWN）必须直接返回，不能继续走磁贴的点击/拖拽流程。
-//
-// 顺序：固定按钮 → 标签 → 条内空白。
-// 条内空白也算消费：标签条整行都不该触发「点空白处淡出搜索」之类的
-// 面板级动作 —— 那会让用户点标签右侧的空隙时莫名其妙退掉搜索态。
+// 标签条上的点击。返回 true 表示已被消费，调用方必须直接返回，不能继续
+// 走磁贴的点击/拖拽流程。顺序：固定按钮 → 标签 → 条内空白；条内空白也
+// 算消费，否则点标签右侧的空隙会误退搜索态。
 bool LauncherWindow::handleTabBarClick(const float xDip, const float yDip) {
     const D2D1_RECT_F bar = tabBarRect();
     if (yDip < bar.top || yDip >= bar.bottom || xDip < bar.left) {
@@ -2389,7 +2219,7 @@ bool LauncherWindow::handleTabBarClick(const float xDip, const float yDip) {
         return true;
     }
     if (button == 2 || button == 3) {
-        // 页没多到放不下时箭头是灰的 —— 按了也不该动，
+        // 页没多到放不下时箭头是灰的：按了也不该动，
         // 只是把这次点击吃掉（免得穿透到下面的磁贴）。
         if (!tabBarOverflow()) {
             return true;
@@ -2411,14 +2241,11 @@ bool LauncherWindow::handleTabBarClick(const float xDip, const float yDip) {
     return true;
 }
 
-// ================================================================ 钉子按钮
+// --- 钉子按钮
 
-// 钉子按钮的矩形（客户区 DIP）。
-//
-// 位置：标题带（headerHeight）内、水平靠右。之所以放在标题带而不是压着
-// 磁贴：磁贴从 outerPadding + headerHeight 开始，标题带是唯一不会被
-// 磁贴或拖拽跟手绘制的区域，钉子放这里永远不会跟内容打架。
-// 绘制与命中测试共用本函数，保证「看到的位置」=「可点的位置」。
+// 钉子按钮的矩形（客户区 DIP）。放在标题带内水平靠右：标题带是唯一
+// 不会被磁贴或跟手绘制占用的区域。绘制与命中测试共用本函数，
+// 看到的位置即可点的位置。
 D2D1_RECT_F LauncherWindow::pinButtonRect() const {
     const float size = kPinButtonSize;
     // 右边缘对齐内容区右边缘（与最后一列磁贴的右边界一致）
@@ -2441,10 +2268,8 @@ bool LauncherWindow::hitTestPin(const float xDip, const float yDip) const {
            yDip >= rect.top - pad && yDip < rect.bottom + pad;
 }
 
-// 建（或复用）钉子图形的几何。
-//
-// 几何以按钮左上角为原点、用 DIP 坐标建一次：D2D 绘制时会按渲染目标的
-// DPI 再做变换，所以几何本身与 DPI 无关，缓存一次就够。
+// 建（或复用）钉子图形的几何。以按钮左上角为原点、DIP 建一次，绘制时
+// 再按渲染目标 DPI 变换，几何本身与 DPI 无关。
 void LauncherWindow::ensurePinGeometry() {
     if (pinGeometry_ || !d2dFactory_.valid()) {
         return;
@@ -2466,12 +2291,8 @@ void LauncherWindow::ensurePinGeometry() {
     pinStrokeStyle_ = platform::win32::createRoundStrokeStyle(d2dFactory_.get());
 }
 
-// 绘制钉子按钮。
-//
-// 视觉：Lucide 的 pin 线框 —— 与「添加系统项目」里那批图标是同一套线条
-// 语言；不用字体里的图钉字符（Win7 的 Segoe UI Symbol 对 U+1F4CC 支持不稳，
-// 会画成方框或空白）。
-// 状态：钉住 = 亮色 + 实心；松开 = 暗色 + 空心；悬停 = 加底衬。
+// 绘制钉子按钮：Lucide pin 线框，不用字体字符（Win7 对 U+1F4CC 支持不稳）。
+// 钉住 = 亮色实心，松开 = 暗色空心，悬停 = 加底衬。
 void LauncherWindow::paintPinButton() {
     if (!renderTarget_ || !brush_ || !borderBrush_) {
         return;
@@ -2534,10 +2355,9 @@ bool LauncherWindow::hitTestLock(const float xDip, const float yDip) const {
            yDip >= rect.top - pad && yDip < rect.bottom + pad;
 }
 
-// 锁定按钮的两枚图标（来源：TurboWarp scratch-gui 的
-// hide-flyout/lock.svg 与 unlock.svg，12x12 viewBox 的实心剪影）。
-// 与 Lucide 线框图标不同，这两枚是「填充图形」，直接 FillGeometry 绘制，
-// 不描边 —— 所以解析时统一走 forceFilled。
+// 锁定按钮的两枚图标（TurboWarp scratch-gui 的 lock.svg / unlock.svg，
+// 12x12 viewBox 实心剪影），直接 FillGeometry 填充不描边，
+// 解析时统一走 forceFilled。
 constexpr const wchar_t* kLockClosedMarkup = LR"SVG(<path d="M3.5 3.5 C3.5 2.119 4.619 1 6 1 C7.381 1 8.5 2.119 8.5 3.5 L8.5 4.5 C9.328 4.5 10 5.172 10 6 L10 9.5 C10 10.328 9.328 11 8.5 11 L3.5 11 C2.672 11 2 10.328 2 9.5 L2 6 C2 5.172 2.672 4.5 3.5 4.5 Z M6 2 C5.172 2 4.5 2.672 4.5 3.5 L4.5 4.5 L7.5 4.5 L7.5 3.5 C7.5 2.672 6.828 2 6 2 Z M6.092 6.5 C5.791 6.5 5.546 6.745 5.546 7.046 L5.546 8.299 C5.546 8.601 5.791 8.845 6.092 8.845 C6.394 8.845 6.639 8.601 6.639 8.299 L6.639 7.046 C6.639 6.745 6.394 6.5 6.092 6.5 Z" />)SVG";
 constexpr const wchar_t* kLockOpenMarkup = LR"SVG(<path d="M6 6.5 C5.688 6.496 5.407 6.687 5.296 6.978 C5.184 7.27 5.266 7.599 5.5 7.805 L5.5 8.5 C5.5 8.776 5.724 9 6 9 C6.276 9 6.5 8.776 6.5 8.5 L6.5 7.805 C6.734 7.599 6.816 7.27 6.704 6.978 C6.593 6.687 6.312 6.496 6 6.5 Z M8.5 4.5 L4.5 4.5 L4.5 3.5 C4.499 2.893 4.863 2.345 5.424 2.111 C5.984 1.878 6.63 2.006 7.06 2.435 C7.248 2.627 7.382 2.865 7.45 3.125 C7.519 3.393 7.792 3.554 8.06 3.485 C8.328 3.416 8.489 3.143 8.42 2.875 C8.306 2.442 8.08 2.047 7.765 1.73 C7.049 1.017 5.975 0.804 5.042 1.191 C4.109 1.579 3.5 2.49 3.5 3.5 L3.5 4.5 C2.672 4.5 2 5.172 2 6 L2 9.5 C2 10.328 2.672 11 3.5 11 L8.5 11 C9.328 11 10 10.328 10 9.5 L10 6 C10 5.172 9.328 4.5 8.5 4.5 Z M9 9.5 C9 9.776 8.776 10 8.5 10 L3.5 10 C3.224 10 3 9.776 3 9.5 L3 6 C3 5.724 3.224 5.5 3.5 5.5 L8.5 5.5 C8.776 5.5 9 5.724 9 6 Z" />)SVG";
 
@@ -2563,11 +2383,8 @@ void LauncherWindow::ensureLockGeometry() {
     lockOpenGeometry_ = open.fillGeometry;
 }
 
-// 绘制锁定按钮。
-//
-// 状态语言与钉子刻意相反方向：钉子「激活=亮」，锁「锁定=亮」。
-// 解锁 = 暗色空心（常态，不抢注意力）；锁定 = 亮色实心 + 底衬常显
-//（锁定是一种「保持中的状态」，必须一直看得见，不能只靠悬停发现）。
+// 绘制锁定按钮：解锁 = 暗色空心（常态不抢注意力），锁定 = 亮色实心加
+// 常显底衬（锁定状态必须一直可见，不能只靠悬停发现）。
 void LauncherWindow::paintLockButton() {
     if (!renderTarget_ || !brush_ || !borderBrush_) {
         return;
@@ -2604,15 +2421,12 @@ void LauncherWindow::paintLockButton() {
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
-// ================================================================ 搜索框
+// --- 搜索框
 
-// 搜索框矩形（客户区 DIP）。
-//
-// 位置：标题带内，锁定按钮左侧，两者之间留 kSearchBoxRightGap 的间距。
-// 左边界与内容区左边缘对齐（= outerPadding），与磁贴同一起始线。
-// 绘制与命中测试共用本函数，保证「看到的位置」=「可点的位置」。
+// 搜索框矩形（客户区 DIP）：标题带内、锁定按钮左侧，左边界与内容区左
+// 边缘对齐。绘制与命中测试共用本函数。
 D2D1_RECT_F LauncherWindow::searchBoxRect() const {
-    // 右边界顶到锁定按钮（不再直接顶到钉子）—— 否则两控件重叠
+    // 右边界顶到锁定按钮（不再直接顶到钉子）：否则两控件重叠
     const D2D1_RECT_F lockRect = lockButtonRect();
     const float right = lockRect.left - kSearchBoxRightGap;
     const float left = metrics_.outerPadding;
@@ -2644,11 +2458,8 @@ bool LauncherWindow::hitTestSearchIcon(const float xDip,
            yDip >= rect.top && yDip < rect.bottom;
 }
 
-// 从 exe 资源取应用图标并转成 D2D 位图。
-//
-// 源尺寸固定取 64px：图标在界面上最多显示到 16 DIP（150% DPI 下 24 物理
-// 像素），64 降采样到 24 比直接取 32 更锐利；再大就浪费显存。
-// 位图依附渲染目标，设备重建时由 discardDeviceResources 置空。
+// 从 exe 资源取应用图标并转成 D2D 位图。源尺寸 64px：界面最多显示
+// 16 DIP，64 降采样比 32 更锐利。位图依附渲染目标，设备重建时置空。
 ID2D1Bitmap* LauncherWindow::acquireAppIconBitmap() {
     if (appIconBitmap_) {
         return appIconBitmap_.get();
@@ -2712,12 +2523,8 @@ void LauncherWindow::paintSearchIcon() {
                               D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
 }
 
-// 绘制搜索框外框与占位提示。
-//
-// 文本、光标、选区、退格、IME 中文输入全部由子 Edit 控件负责
-// （searchEdit_）——这些系统都给现成的，手画方案在中文输入上问题
-// 不断（拼音回显错位、光标不跟随、合成窗口定位），不再重复造轮子。
-// 面板只画：圆角外框 + 底衬 + 占位提示（仅当编辑框隐藏时）。
+// 绘制搜索框外框与占位提示。文本/光标/IME 全部由子 Edit 控件负责
+//（手画方案在中文输入上问题不断，已否决）；占位提示仅在编辑框隐藏时画。
 void LauncherWindow::paintSearchBox() {
     if (!renderTarget_ || !brush_ || !borderBrush_ || !textBrush_ ||
         searchFormat_.get() == nullptr) {
@@ -2771,12 +2578,11 @@ void LauncherWindow::paintSearchBox() {
                                         kSearchBoxStrokeWidth);
 
     // ---- 左端应用图标（点击 = 关于）----
-    // 画在框内而不是框外：搜索框左边缘就是内容区起始线，标题带左侧
-    // 没有多余空间；嵌进框里既不挤占搜索宽度，也形成品牌锚点。
+    // 画在框内：标题带左侧没有多余空间，也形成品牌锚点。
     paintSearchIcon();
 
     // ---- 占位提示：编辑框隐藏（无内容且无焦点）时才画得出来 ----
-    // 查询非空但控件隐藏（如调试预置查询）时不画 —— 那会盖住语义。
+    // 查询非空但控件隐藏（如调试预置查询）时不画：那会盖住语义。
     if ((searchEdit_ == nullptr || !IsWindowVisible(searchEdit_)) &&
         searchQuery_.empty()) {
         const float textLeft = iconRect.right + kSearchIconTextGap;
@@ -2795,12 +2601,12 @@ void LauncherWindow::paintSearchBox() {
     }
 }
 
-// ---- 搜索框 Edit 控件 ------------------------------------------------
+// --- 搜索框 Edit 控件
 
 // 创建子 Edit 控件并挂子类过程。
 //
 // 键盘导航键（Esc/回车/上下/翻页）在子类过程里转给面板的按键逻辑，
-// 其余按键（字符、退格、Home/End 等）留给控件本身 —— 那是编辑框的本职。
+// 其余按键（字符、退格、Home/End 等）留给控件本身，那是编辑框的本职。
 bool LauncherWindow::createSearchEdit(HINSTANCE instance) {
     searchEdit_ = CreateWindowExW(
         0, L"EDIT", nullptr,
@@ -2881,10 +2687,8 @@ LRESULT CALLBACK LauncherWindow::searchEditProc(HWND hwnd, UINT message,
     auto* self = reinterpret_cast<LauncherWindow*>(refData);
     if (message == WM_KEYDOWN) {
         // ---- Ctrl 组合键转给面板 ----
-        //
-        // Ctrl+Tab（切页）是面板语义的快捷键，而 Edit 控件不会处理它 ——
-        // 不转发的话「搜索框有焦点时按 Ctrl+Tab」会变成往文本里插一个
-        // 制表符（或什么都不发生），用户会以为标签快捷键坏了。
+        // Edit 控件不会处理 Ctrl+Tab（切页快捷键），不转发会被当成插
+        // 制表符或无效，用户以为标签快捷键坏了。
         if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 &&
             (wParam == VK_TAB ||
              (wParam >= '1' && wParam <= '9'))) {
@@ -2910,7 +2714,7 @@ LRESULT CALLBACK LauncherWindow::searchEditProc(HWND hwnd, UINT message,
                 break;
         }
     } else if (message == WM_CHAR) {
-        // 回车/Esc 的字符形态 —— 按键通路已处理，不能让它进文本
+        // 回车/Esc 的字符形态：按键通路已处理，不能让它进文本
         if (wParam == 0x0D || wParam == 0x1B) {
             return 0;
         }
@@ -2918,13 +2722,10 @@ LRESULT CALLBACK LauncherWindow::searchEditProc(HWND hwnd, UINT message,
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
-// ================================================================ 选中高亮
+// --- 选中高亮
 
-// 绘制键盘选中的高亮边框。
-//
-// 视觉：强调蓝描边 + 极淡内衬。
-// 之所以用「描边 + 内衬」而不是纯描边：磁贴本身有底色，纯描边在深色
-// 磁贴上不够跳；加一层淡内衬让选中范围形成完整色块，余光也能看见。
+// 绘制键盘选中的高亮边框：强调色描边加极淡内衬。纯描边在深色磁贴上
+// 不够跳，色块余光也能看见。
 void LauncherWindow::paintSelectionFrame(const core::TilePlacement& placement) {
     if (!renderTarget_ || !brush_ || !borderBrush_) {
         return;
@@ -2962,12 +2763,8 @@ void LauncherWindow::paintSelectionFrame(const core::TilePlacement& placement) {
                                         kSelectionFrameWidth);
 }
 
-// 绘制单块磁贴。
-//
-// asLifted = true 表示这是「被手指拿起来」的那块：
-//   - 位置跟手（用拖拽光标 + 抓取偏移，而不是布局坐标）
-//   - 轻微放大 + 投影，制造浮起感
-// 其余磁贴正常按布局坐标 + 动画偏移绘制。
+// 绘制单块磁贴。asLifted = true 表示被拖起的那块：位置跟手（光标加
+// 抓取偏移）、轻微放大加投影；其余按布局坐标加动画偏移绘制。
 void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
                                      const bool asLifted,
                                      const bool dimmed) {
@@ -2977,13 +2774,9 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     const bool isLarge = !isSmall;
 
     // ---- 淡化：不匹配搜索的磁贴 ----
-    //
-    // 用 D2D Layer 统一降透明，而不是逐个颜色改 alpha —— 磁贴内部有
-    // 底色 / 边框 / 强调条 / 图标 / 文字好几层，逐个改容易漏，
-    // 而图层一次生效、代码量最小。
-    //
-    // PushLayer 必须在 SetTransform 之前，且 PopLayer 要在所有绘制之后 ——
-    // 顺序错了会把图层偏移算错或漏 pop（D2D 会累积状态）。
+    // 用 D2D Layer 统一降透明：磁贴内有多层颜色，逐个改 alpha 容易漏。
+    // PushLayer 必须在 SetTransform 之前，PopLayer 在所有绘制之后，
+    // 顺序错了会算错图层偏移或漏 pop。
     bool layerPushed = false;
     if (dimmed && !asLifted) {
         D2D1_LAYER_PARAMETERS layer{};
@@ -3027,10 +2820,9 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         top += offsetY;
     }
 
-    // ---- 浮起投影：先画一层放大的暗色底，形成「影子」----
-    //
-    // D2D 1.0 没有现成的阴影效果（ID2D1Effect 属 D2D 1.1，Win8+），
-    // 这里用「偏移的深色圆角矩形」模拟，成本低且 Win7 可用。
+    // ---- 浮起投影 ----
+    // D2D 1.0 没有阴影效果（ID2D1Effect 是 Win8+），用偏移的深色圆角
+    // 矩形模拟，Win7 可用。
     if (shadowAlpha > 0.0F) {
         const float spread = 3.0F;
         const D2D1_ROUNDED_RECT shadow = D2D1::RoundedRect(
@@ -3091,9 +2883,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
                                         borderWidth);
 
     // ---- 插件磁贴：内容区完全交给插件布局树 ----
-    //
-    // 插件磁贴不画「图标 + 名称标签」那一套：布局树自己会给出图标、
-    // 主/副/页脚文本与进度条，名称只是菜单里的标识，不占磁贴空间。
+    // 不画图标加名称标签那一套：布局树给出图标、文本与进度条，
+    // 名称只是菜单里的标识，不占磁贴空间。
     if (item.type == core::ItemType::Plugin) {
         paintPluginTileContent(item, D2D1::RectF(left, top,
                                                  left + width, top + height));
@@ -3105,16 +2896,9 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     }
 
     // ---- 标签显示策略 ----
-    // 名称一律叠加在图标之上（不挤占图标空间）。
-    //
-    // 两层开关：
-    //   1. 设置里的「显示磁贴文字标签」= 总闸，关掉则一律不画名字
-    //   2. 每块磁贴自己的「标题显示方式」——
-    //        · 跟随全局设置：由设置里的「默认显示标题」决定
-    //        · 始终显示    ：这块磁贴标题常驻
-    //        · 移入时显示  ：只有鼠标移入（或被拿起的那块）才浮出
-    //      之所以下放到每项，是因为大小磁贴的最优解往往不同：
-    //      64x64 上标题会盖住图标，128x128 上留着反而好找。
+    // 名称一律叠加在图标之上。总闸是「显示磁贴文字标签」，其下每块磁贴
+    // 可选始终显示/移入显示/跟随全局：大小磁贴最优解不同，64x64 上标题
+    // 盖图标，128x128 上留着好找。
     const bool isWide = (placement.spanColumns > 1 && placement.spanRows == 1);
     const bool isTall = (placement.spanColumns == 1 && placement.spanRows > 1);
 
@@ -3141,11 +2925,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     }
 
     // ---- 几何统一度量 ----
-    //
-    // 统一规则：标签底衬直接贴住磁贴下边缘（不留缝隙），图标在标签
-    // 上方的剩余区域内上下左右居中。所有尺寸都遵守同一规则，混排时
-    // 标题基线完全一致，也不会因图标缩放（iconScalePercent < 100）
-    // 把标签带离底边。
+    // 统一规则：标签底衬贴住磁贴下边缘，图标在剩余区域内居中。混排时
+    // 标题基线一致，图标缩放不会把标签带离底边。
     constexpr float labelHeight = 18.0F;
     constexpr float iconLabelGap = 3.0F;
     constexpr float iconTopGap = 3.0F;
@@ -3156,18 +2937,10 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     D2D1_RECT_F iconRect = D2D1::RectF(left, top, left, top);
     float labelTop = bottomLabelTop;
 
-    // 用户导入的自定义图片 → 铺满整块磁贴内框。
-    //
-    // 自定义图片在导入时按原图比例存（最长边 128），所以「图的比例 = 磁贴
-    // 比例」时（竖图配 1x2、横图配 2x1、方图配 1x1 / 2x2）整张图完整铺满；
-    // 比例不符时由下面的 cover 取中段填满，不拉伸、不留白。
-    //
-    // 系统提取的图标（exe / 文件夹 / 网址）天生是方图，仍走下方各尺寸的
-    // 方框 —— 否则会被拉成一根竖条，反而认不出。
-    //
-    // 例外：内置项的矢量图标虽然也存成托管路径（res\builtin-*.png），
-    // 但它是程序自绘的方形图 —— 必须跟随图标大小设置缩放（居中），
-    // 否则「图标大小」滑块对这些磁贴不生效。
+    // 用户导入的自定义图片铺满整块磁贴内框：按原图比例存，比例不符时由
+    // cover 取中段填满，不拉伸不留白。系统提取的图标是方图，走下方方框，
+    // 否则会被拉成竖条。内置项图标也存成托管路径但属方图，需跟随图标
+    // 大小设置缩放（builtinIcon 例外），否则「图标大小」滑块不生效。
     const bool builtinIcon =
         item.icon.has_value() &&
         [icon = base::utf8ToWide(*item.icon)] {
@@ -3183,10 +2956,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         !builtinIcon;
 
     // ---- 图标缩放系数 ----
-    //
-    // 每个磁贴可单独覆盖图标相对内框的比例（iconScalePercent，50~100）；
-    // 未覆盖（<=0）时用全局统一值。100% = 现状（内框铺满，两侧共留 4px），
-    // 缩小后仍按可用区居中。用户导入的整图（fillTile）铺满语义不变。
+    // 单项可覆盖（iconScalePercent，50~100），未覆盖时用全局值；
+    // 100% 即内框铺满留 4px，缩小后仍居中。fillTile 铺满语义不变。
     int iconScaleValue = item.iconScalePercent > 0
         ? item.iconScalePercent
         : tileIconScalePercent_;
@@ -3208,7 +2979,7 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
         labelTop = bottomLabelTop;
     } else if (isSmall) {
         // 小磁贴 (1x1)：图标铺满内框，标签悬浮其上（悬停才显示）。
-        // 标签位置与 2x2 对齐 —— 同样贴磁贴底边，而不是更靠上。
+        // 标签位置与 2x2 对齐：同样贴磁贴底边，而不是更靠上。
         const float base = std::min(width, height) - 4.0F;
         const float side = std::max(12.0F, base * iconFactor);
         // 缩小后居中：100% 时 (width-side)/2 == 2，与旧的固定 +2 一致
@@ -3231,7 +3002,7 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
                                iconLeft + side, iconTopPos + side);
         labelTop = bottomLabelTop;
     } else {
-        // Large (2x2)：与其它尺寸同规则 —— 标签贴底，图标在标签
+        // Large (2x2)：与其它尺寸同规则，标签贴底，图标在标签
         // 上方的剩余区域里上下左右居中。图标缩到 50% 时标签仍在
         // 底边不动，只是居中区域里的图标变小。
         const float maxIconHeight =
@@ -3248,10 +3019,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
 
     ID2D1Bitmap* iconBitmap = acquireItemIcon(item);
     if (iconBitmap != nullptr) {
-        // 源矩形按「覆盖 + 居中裁剪」取：图形宽高比与目标框不一致时，
-        // 宁可裁掉两边，也不拉伸变形、更不留白 ——
-        // 例如把一张 128x128 的图放进 68x128 的框，取中间竖条铺满。
-        // 源图与目标框同为正方形时，这段是恒等变换（不产生任何影响）。
+        // 源矩形按覆盖加居中裁剪取：宽高比不符时裁掉两边而非拉伸留白；
+        // 正方形源图配正方形目标框时为恒等变换。
         D2D1_RECT_F sourceRect = D2D1::RectF();
         const D2D1_SIZE_U sourceSize = iconBitmap->GetPixelSize();
         const float destinationWidth = iconRect.right - iconRect.left;
@@ -3272,10 +3041,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
                                      cropTop + cropHeight);
         }
 
-        // 图标整体带一点透明度：导入的 PNG 大多自带不透明白底，全不
-        // 透明时每块磁贴像贴了张白纸，背景图被完全盖住，观感生硬。
-        // 常态降到 80% 让背景隐约透出；悬停 / 按下 / 跟手时恢复全不
-        // 透明 —— 既柔和，又顺带成了「这块磁贴有反应」的状态反馈。
+        // 常态图标降到 70% 透明度：导入的 PNG 多带不透明白底，全不透明
+        // 会盖住背景图；悬停/按下/跟手时恢复全不透明，兼作状态反馈。
         // 磁贴底色（tileFill）本来就是半透明玻璃，这里只管图标位图。
         const float iconOpacity =
             (hovered || pressed || asLifted) ? 1.0F : 0.70F;
@@ -3300,13 +3067,8 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
             palette_.labelText != 0 ? palette_.labelText
                                     : theme_.labelText()));
 
-        // 标签悬浮在图标之上，而图标里可能本身就有亮色像素（Windows
-        // 图标大量使用白色），纯白文字会与之糊在一起。因此这里铺一层
-        // 半透明黑底衬，把文字从图标内容中「拉」出来，保证任何图标
-        // 背景下标题都清晰可读。悬停时底衬加深，形成状态反馈。
-        // 全尺寸统一使用同一字号：之前 1x1/1x2 用小号字体，文字在
-        // 18px 底衬里垂直位置偏高，与 2x2 的标签基线对不齐。
-        // 统一后所有尺寸的标签视觉基线完全一致。
+        // 标签底衬：半透明黑衬底把白字从亮色图标里拉出来，悬停加深作
+        // 状态反馈。全尺寸统一字号：1x1/1x2 用小号曾与 2x2 基线对不齐。
         IDWriteTextFormat* format = labelFormatLarge_.get();
 
         const float scrimBottom =
@@ -3395,15 +3157,10 @@ void LauncherWindow::paintSingleTile(const core::TilePlacement& placement,
     }
 }
 
-// ================================================================ 插件磁贴
-//
-// 干了什么：把 app 层给出的 PluginView（manifest + 数据快照）翻译成
-// core::PluginDrawList，再逐条画出来。
-//
-// 为什么不在 UI 里自己排版：
-//   - 「large 显示 3 天、small 只显示今天」这类差异必须由插件的 manifest
-//     描述，UI 硬编码不了这么多种插件。
-//   - 排版逻辑放 core 才能脱离 D2D 做单测（见 tests/test_plugin_layout.cpp）。
+// --- 插件磁贴
+// 把 app 层的 PluginView 翻译成 core::PluginDrawList 再逐条画出。
+// 排版不放 UI：各插件的差异必须由 manifest 描述，且 core 逻辑可脱离
+// D2D 单测（tests/test_plugin_layout.cpp）。
 void LauncherWindow::paintPluginTileContent(const core::LaunchItem& item,
                                             const D2D1_RECT_F& rect) {
     if (renderTarget_ == nullptr || !brush_.valid() ||
@@ -3417,7 +3174,7 @@ void LauncherWindow::paintPluginTileContent(const core::LaunchItem& item,
     }
 
     // 没有 manifest 或没有可画的数据：统一走占位视图。
-    // 注意这里不能退化成「普通磁贴」画法 —— 插件磁贴没有可执行目标，
+    // 这里不能退化成「普通磁贴」画法：插件磁贴没有可执行目标，
     // 画个空图标加名字会让用户以为点了没反应。
     if (!view.manifest || !view.hasData || !view.snapshot) {
         paintPluginPlaceholder(view, rect);
@@ -3572,12 +3329,8 @@ void LauncherWindow::paintPluginPlaceholder(const core::PluginView& view,
         textBrush_.get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
-// 编辑对话框预览：把插件磁贴画进一个临时绑定的 DC。
-//
-// 走的是与主窗口完全相同的路径（selectPluginLayout → buildPluginDrawList
-// → Text/Icon/Meter 绘制），因此预览里的文字、图标、进度条与磁贴一致，
-// 包括图标文件里的局部彩色。唯一的差别是渲染资源：DCRenderTarget +
-// 自己的笔刷（D2D 1.0 的笔刷不能跨渲染目标使用）。
+// 编辑对话框预览：与主窗口完全相同的绘制路径，预览即真实效果；
+// 差别只在渲染资源：DCRenderTarget 加自己的笔刷（D2D 1.0 笔刷不能跨目标）。
 bool LauncherWindow::renderPluginPreview(HDC dc, const RECT& target,
                                          const core::PluginView& view,
                                          const core::TileSize size) {
@@ -4095,7 +3848,7 @@ void LauncherWindow::stopLabelMarquee() {
 }
 
 // 跑马灯一帧：ping-pong 滚动，端点各停 kMarqueePauseTicks 帧让用户
-// 看清头尾。整窗失效即可 —— 面板小，30fps 全量重绘成本可忽略。
+// 看清头尾。整窗失效即可：面板小，30fps 全量重绘成本可忽略。
 void LauncherWindow::advanceLabelMarquee() {
     if (!marqueeItemIndex_.has_value()) {
         KillTimer(hwnd_, kMarqueeTimerId);
@@ -4138,8 +3891,7 @@ void LauncherWindow::drawFallbackGlyph(const core::LaunchItem& item,
         return;
     }
 
-    // 格式按「基准字号」创建，这里用变换缩放到位 —— 避免每帧重建文本格式。
-    // 基准 24.0F，目标为方块高度的 62%。
+    // 格式按基准字号创建，用变换缩放到位，避免每帧重建文本格式。
     const float scale = (side * 0.62F) / kFallbackBaseFontSize;
     const float cx = (rect.left + rect.right) * 0.5F;
     const float cy = (rect.top + rect.bottom) * 0.5F;
@@ -4163,12 +3915,9 @@ void LauncherWindow::drawFallbackGlyph(const core::LaunchItem& item,
 std::uint32_t LauncherWindow::resolveTileBackground(const core::LaunchItem& item,
                                                     const bool hovered,
                                                     const bool pressed) const {
-    // 优先级：单项色 > 设置里的全局默认色 > 皮肤/调色板。
-    //
-    // 自定义色与皮肤默认色**同样**套用全局「磁贴背景不透明度」：
-    // 调色板选的色都是不透明的，滑块拉到多少 alpha 就该是多少，
-    // 否则用户换了底色却发现透明度旋钮失灵（实测反馈过的 bug）。
-    // 皮肤三档底色之间的浓淡差仍由 applyTileOpacityPercent 保留。
+    // 优先级：单项色 > 全局默认色 > 皮肤/调色板。自定义色同样套用全局
+    // 磁贴背景不透明度，否则换底色后透明度旋钮失灵；皮肤三档底色的
+    // 浓淡差仍由 applyTileOpacityPercent 保留。
     const std::optional<std::uint32_t> customColor =
         item.tileColor.has_value() ? item.tileColor : defaultTileColor_;
     if (customColor.has_value()) {
@@ -4182,9 +3931,8 @@ std::uint32_t LauncherWindow::resolveTileBackground(const core::LaunchItem& item
         if (tileOpacityPercent_ < 0) {
             return lifted;  // 跟随皮肤：自定义色保持不透明原样
         }
-        // 不走 applyTileOpacityPercent：它以皮肤 tileFill 的 alpha 为
-        // 基准保留差值，而自定义色基准是 0xFF，套上去会凭空偏移。
-        // 直接替换 alpha 才符合「滑块即所见」的预期。
+        // 不走 applyTileOpacityPercent：它以皮肤 tileFill 的 alpha 为基准
+        // 保留差值，自定义色基准是 0xFF，套上去会凭空偏移，直接替换 alpha。
         const std::uint32_t targetAlpha =
             static_cast<std::uint32_t>(tileOpacityPercent_) * 255U / 100U;
         return (lifted & 0x00FFFFFFU) | (targetAlpha << 24);

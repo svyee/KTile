@@ -1,15 +1,9 @@
 // KTile - 基础设施层：便携路径解析
 //
-// 绿色软件的核心约束：所有数据跟随 exe 存放，不写注册表、不写 AppData。
-//
-// 目录约定（exe 同级）：
-//   <exe目录>\KTile.exe
-//   <exe目录>\data\items.json      磁贴数据
-//   <exe目录>\data\config.json     应用配置
-//   <exe目录>\data\icons\          自定义图标缓存（后续）
-//
-// 若 exe 目录不可写（例如放在 Program Files 下），自动降级到
-// %LOCALAPPDATA%\KTile\，保证程序仍能运行 —— 但会在日志中标注。
+// 绿色软件核心约束：数据跟随 exe 存放，不写注册表、不写 AppData。
+// 目录约定（exe 同级）：<exe目录>\data\items.json 磁贴数据、
+// \data\config.json 应用配置、\data\icons\ 图标缓存。exe 目录不可写
+// （如 Program Files 下）时自动降级到 %LOCALAPPDATA%\KTile\。
 //
 #pragma once
 

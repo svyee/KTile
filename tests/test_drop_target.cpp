@@ -1,13 +1,8 @@
 // KTile - OLE 拖放数据解析测试
 //
-// 测什么：从 IDataObject 里把「拖过来的东西」抠出来的这套逻辑。
-//
-// 为什么要用伪造的 IDataObject 而不是真的拖一次：
-//   真实的拖放需要用户按住鼠标从资源管理器拖过来 —— 无法在自动化里稳定
-//   复现（也正因如此，DragEnter/Drop 的「管道」由 Windows 负责，我们只
-//   该为自己写的那部分负责：格式识别 + HGLOBAL 解析）。
-//   这里用真的 GlobalAlloc + 真的 DROPFILES 内存布局喂进去，
-//   所以被测的 DragQueryFileW 解析路径与线上运行时完全是同一条。
+// 真实拖放无法自动化，这里用真的 GlobalAlloc + DROPFILES 内存布局伪造
+// IDataObject，被测的 DragQueryFileW 解析路径与线上运行时同一条。
+// 只测格式识别 + HGLOBAL 解析，DragEnter/Drop 管道由 Windows 负责。
 //
 #include "platform/win32/drop_target.h"
 
@@ -32,16 +27,12 @@ static int g_failures = 0;
         }                                                        \
     } while (false)
 
-// ---------------------------------------------------------------- 伪造数据对象
+// --- 伪造数据对象
 
-// 一个只实现「取数据 / 问有没有」两个方法的内存版 IDataObject。
-//
-// 每次 GetData 都现场造一份新的 HGLOBAL 并把所有权交出去 —— 这与真实
-// 实现的契约一致（调用方负责 ReleaseStgMedium），也让同一份测试可以在
-// 「先问有没有，再取数据」的调用序列下工作。
+// 只实现「取数据 / 问有没有」的内存版 IDataObject。每次 GetData 现场
+// 造一份新 HGLOBAL 并交出所有权，与真实契约一致（调用方 ReleaseStgMedium）。
 class FakeDataObject final : public IDataObject {
 public:
-    // 待提供的格式 → 内容
     void setWideText(const CLIPFORMAT format, const std::wstring& text) {
         wideTexts_.push_back(Entry{format, text, {}});
     }
@@ -168,12 +159,9 @@ private:
         std::vector<std::wstring> paths;
     };
 
-    // 按 Win32 的 DROPFILES 布局拼一份内存：结构头 + 双 null 结尾的文件列表。
-    //
-    // 关键点（真实实现踩过坑）：
-    //   pFiles 是「从结构体起始算起」的偏移，不是指针 —— 64 位下写成指针
-    //   会让 DragQueryFileW 读到野内存；
-    //   fWide = TRUE 时文件列表是 UTF-16，且必须以额外的 L'\0' 收尾。
+    // 按 Win32 的 DROPFILES 布局拼内存：结构头 + 双 null 结尾文件列表。
+    // pFiles 是相对结构体起始的偏移而非指针，64 位下写成指针会让
+    // DragQueryFileW 读野内存；fWide = TRUE 时列表必须多补一个 L'\0'。
     static HGLOBAL buildDropFiles(const std::vector<std::wstring>& paths) {
         std::size_t textBytes = 0;
         for (const std::wstring& path : paths) {
@@ -217,7 +205,7 @@ private:
     std::vector<Entry> paths_;
 };
 
-// ---------------------------------------------------------------- 用例
+// --- 用例
 
 static void testDroppedPaths() {
     FakeDataObject data;
@@ -286,8 +274,8 @@ static void testPathsWinOverText() {
     data.setWideText(CF_UNICODETEXT, L"https://should-be-ignored.example");
     data.setPaths(CF_HDROP, {L"C:\\a.exe"});
 
-    // 同时有两类格式时，文件优先 —— 拖文件时资源管理器也会捎带文本，
-    // 若让文本胜出就会把一次「拖 3 个文件」变成一个 URL 项目
+    // 文件优先：拖文件时资源管理器也捎带文本，文本胜出会把
+    // 「拖 3 个文件」变成一个 URL 项目
     const std::vector<DroppedSource> sources = extractDroppedSources(&data);
     CHECK(sources.size() == 1);
     if (sources.size() == 1) {
@@ -316,7 +304,7 @@ static void testEmptyDropList() {
     FakeDataObject data;
     data.setPaths(CF_HDROP, {});
 
-    // 有 CF_HDROP 格式 → 认（可以接受），但抠出来的条目是 0 个
+    // 有 CF_HDROP 格式即可接受，但条目为 0
     CHECK(canAcceptDrop(&data));
     CHECK(countDroppedSources(&data) == 0);
     CHECK(extractDroppedSources(&data).empty());

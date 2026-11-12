@@ -52,10 +52,9 @@ std::string wideToUtf8(const std::wstring& wide) {
     return utf8;
 }
 
-// ---------------------------------------------------------------- 宽松版本
-// 不校验非法字节：Windows 会用 U+FFFD 之类替换，保证总有输出。
-// 注意 MB_ERR_INVALID_CHARS 在 UTF-8 场景下 Win7 也支持，
-// 但宽松版本刻意不带该标志，以容忍脏数据。
+// --- 宽松版本
+// 不带 MB_ERR_INVALID_CHARS：不校验非法字节，非法序列由系统替换（如
+// U+FFFD），保证总有输出。
 
 std::wstring utf8ToWideLossy(const std::string& utf8) {
     if (utf8.empty()) {

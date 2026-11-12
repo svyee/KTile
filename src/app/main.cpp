@@ -1,18 +1,8 @@
 ﻿// KTile - 应用入口
 //
-// 里程碑状态：
-//   M1 单实例 + 托盘 + 全局热键 + 窗口壳          [完成]
-//   M2 磁贴跨度布局 + 四种尺寸 + 真实图标          [完成]
-//   M3 JSON 持久化（items.json / config.json）    [完成]
-//   M4 拖拽换位 + 右键菜单 + 设置界面              [进行中]
-//
-// 架构分层：
-//     base/           C++17 兼容层（expected / span / algo / 编码转换）
-//     core/           领域模型与算法（无平台依赖，可单测）
-//     infrastructure/ 持久化（便携路径 / JSON 读写）
-//     platform/win32/ Win32 API 封装（RAII + 错误转换）
-//     ui/             窗口与 Direct2D 渲染
-//     app/            组装与生命周期
+// 只做三件事：声明 DPI 感知、初始化 COM/OLE、解析 --debug-* 开关，再交给
+// Application::run。分层为 base / core / infrastructure / platform/win32 /
+// ui / app。
 //
 #include "app/application.h"
 #include "base/text_convert.h"
@@ -29,55 +19,35 @@ int WINAPI wWinMain(HINSTANCE instance,
                     int /*showCommand*/) {
     // ---- 声明 DPI 感知（必须在创建任何窗口之前）----
     //
-    // 不声明的话，系统把本程序当 DPI 不感知的老程序：
-    //   1. 渲染被 DWM 位图拉伸，150% 缩放下整体模糊
-    //   2. 窗口坐标被虚拟化（物理坐标 × 1/scale），而 WH_MOUSE_LL 钩子的
-    //      MSLLHOOKSTRUCT.pt 永远是物理坐标 —— 两套坐标系混用，
-    //      「点击窗口外部自动隐藏」的窗口归属判定会整体错位
-    //
-    // 用 SetProcessDPIAware（Vista+，Win7 可用）而非 Per-Monitor 系列：
-    // 系统级感知已满足需求 —— 启动器窗口按主显示器 DPI 缩放一次即可，
-    // 跨显示器拖动时 WM_DPICHANGED 会触发 updateDpi 重新布局。
-    // 渲染侧本就按 dpiScale()（LOGPIXELSX/96）缩放，声明后自动变清晰。
+    // 不声明则渲染被 DWM 位图拉伸，150% 下整体发虚；窗口坐标也会被虚拟化，
+    // 而 WH_MOUSE_LL 钩子的 MSLLHOOKSTRUCT.pt 永远是物理坐标，两套坐标系
+    // 混用会让「点击窗口外部自动隐藏」的归属判定整体错位。
+    // 用 SetProcessDPIAware（Vista+，Win7 可用）而非 Per-Monitor：启动器按
+    // 主显示器 DPI 缩放一次即可，跨屏拖动由 WM_DPICHANGED 触发重新布局。
     SetProcessDPIAware();
 
-    // COM / OLE 初始化。
-    //
-    // 两处依赖：
-    //   1. 图标提取走 WIC（COM 组件）
-    //   2. 把文件拖进面板要 RegisterDragDrop + IDropTarget（OLE 拖放）
-    //
-    // 用 OleInitialize 而不是 CoInitializeEx：前者等价于
-    // 「CoInitializeEx(APARTMENTTHREADED) + 把 OLE 子系统装上」，
-    // 而拖放正需要那部分。它必须在**本线程其他 COM 初始化之前**调用 ——
-    // 所以这里的 CoInitializeEx 换成了它。
-    // 用 STA 而非 MTA：托盘/Shell/拖放相关 API 都偏好单线程单元。
+    // COM / OLE 初始化。两处依赖：图标提取走 WIC，拖放要 IDropTarget。
+    // 用 OleInitialize 而不是 CoInitializeEx，前者额外装上 OLE 子系统，
+    // 且必须在本线程其他 COM 初始化之前调用。托盘/Shell/拖放都偏好 STA。
     const HRESULT comResult = OleInitialize(nullptr);
 
     ktile::app::Application application;
 
     // ---- 调试开关：--debug-shot ----
     //
-    // 用途：自动化视觉验证。启动后自动显示窗口，把窗口内容渲染到
-    // 一张 WIC 位图并写出 PNG，然后立刻退出。
-    //
-    // 为什么需要它：本机的自动化抓屏链路（PrintWindow / BitBlt 屏幕 DC）
-    // 对 WS_EX_NOACTIVATE 的 D2D 窗口不可靠 —— 前者依赖窗口实现 WM_PRINT
-    // （D2D 的 HwndRenderTarget 不实现），后者要求窗口真的显示在物理屏幕上
-    // 且未被遮挡，在无交互会话里拿不到内容。
-    //
-    // 由程序自己渲染出图则完全绕开这些限制：拿到的就是 D2D 真实输出。
+    // 启动后自动显示窗口，把内容渲染成 WIC 位图写出 PNG 再退出，用于自动化
+    // 视觉验证。外部抓屏对 WS_EX_NOACTIVATE 的 D2D 窗口不可靠：PrintWindow
+    // 依赖 WM_PRINT（HwndRenderTarget 不实现），BitBlt 要求窗口真的可见且
+    // 未被遮挡。自己渲染绕开这些限制，拿到的就是 D2D 真实输出。
     const std::wstring command = (commandLine != nullptr) ? commandLine : L"";
 
-    // 开关是否存在（--debug-shoto 这类前缀关系在现有开关里是刻意保留的：
-    // --debug-settings-keepalive 必须同时点亮 --debug-settings）
+    // 开关是否存在。hasFlag 是子串匹配：--debug-settings-keepalive 会同时
+    // 点亮 --debug-settings，新开关取名时不能让旧开关名成为它的前缀。
     const auto hasFlag = [&command](const wchar_t* flag) {
         return command.find(std::wstring(flag)) != std::wstring::npos;
     };
-    // 取 "--flag=值" 里的值。
-    //
-    // 与下面 --debug-keys 的「以空格为界」不同：路径里会带空格，
-    // 因此这里的边界是「下一个 -- 开关」，命令行末尾的换行也要裁掉。
+    // 取 "--flag=值" 里的值。边界是下一个 " --" 而不是空格：路径里会带空格，
+    // 末尾的空白也要裁掉。
     const auto flagValue = [&command](const wchar_t* flag) -> std::wstring {
         const std::wstring prefix(flag);
         const std::size_t found = command.find(prefix);
@@ -99,29 +69,24 @@ int WINAPI wWinMain(HINSTANCE instance,
 
     ktile::app::DebugOptions debugOptions;
     debugOptions.shot = hasFlag(L"--debug-shot");
-    // --debug-settings：启动后直接打开设置窗口（供自动化检查控件）
+    // 启动后直接打开设置窗口（供自动化检查控件）
     debugOptions.settings = hasFlag(L"--debug-settings");
-    // --debug-settings-keepalive：打开设置后不退出，继续跑主循环
+    // 打开设置后不退出，继续跑主循环
     debugOptions.settingsKeepAlive = hasFlag(L"--debug-settings-keepalive");
     // --debug-wheel-editor：直接打开「轮盘菜单设置」对话框。
-    //
-    // 不能叫 --debug-radial-editor：下面的 hasFlag 是按「子串是否存在」判的
-    // （--debug-settings-keepalive 依赖这个行为），--debug-radial 会命中
-    // 它，于是先跑一遍轮盘位图导出再退出，对话框根本来不及出现。
+    // 不能叫 --debug-radial-editor：hasFlag 是子串匹配，--debug-radial 会命中，
+    // 先跑一遍轮盘位图导出就退出了，对话框来不及出现。
     debugOptions.radialEditor = hasFlag(L"--debug-wheel-editor");
-    // --debug-about：启动后打开「关于」对话框（供自动化检查文案）
+    // 启动后打开「关于」对话框（供自动化检查文案）
     debugOptions.about = hasFlag(L"--debug-about");
-    // --debug-editor：启动后打开第一个磁贴的「修改项目」对话框
+    // 启动后打开第一个磁贴的「修改项目」对话框
     debugOptions.editor = hasFlag(L"--debug-editor");
-    // --debug-new-item：启动后打开「添加项目」对话框（新建模式）
+    // 启动后打开「添加项目」对话框（新建模式）
     debugOptions.newItem = hasFlag(L"--debug-new-item");
 
-    // --debug-add=<路径1;路径2;...>：启动后走一次「拖入添加」
-    //
-    // 真实的拖放要在交互会话里按住鼠标从资源管理器拖过来，自动化无法复现；
-    // 这条开关走的是**与拖放完全相同的下游代码**（addDroppedSources），
-    // 因此验证的是「拿到路径之后怎么加」，OLE 那条管道由单测
-    // （test_drop_target）覆盖。
+    // --debug-add=<路径1;路径2;...>：走一次「拖入添加」。
+    // 自动化无法复现真实 OLE 拖放，这里直接调下游的 addDroppedSources，
+    // 验证的是「拿到路径之后怎么加」，OLE 管道由 test_drop_target 覆盖。
     {
         const std::wstring paths = flagValue(L"--debug-add=");
         std::size_t start = 0;
@@ -141,7 +106,7 @@ int WINAPI wWinMain(HINSTANCE instance,
         }
     }
 
-    // --debug-search=<文本>：启动时预置搜索查询，用于导出「过滤生效」的截图
+    // --debug-search=<文本>：预置搜索查询，用于导出「过滤生效」的截图
     debugOptions.search =
         ktile::base::wideToUtf8Lossy(flagValue(L"--debug-search="));
 
@@ -163,7 +128,7 @@ int WINAPI wWinMain(HINSTANCE instance,
         }
     }
 
-    // --debug-radial[=x,y]：渲染轮盘菜单到 radial-shot.png
+    // --debug-radial[=x,y]：把轮盘菜单渲染到 radial-shot.png
     debugOptions.radial = hasFlag(L"--debug-radial");
     {
         const std::wstring args = flagValue(L"--debug-radial=");
@@ -191,16 +156,12 @@ int WINAPI wWinMain(HINSTANCE instance,
     }
 
     if (debugOptions.shot) {
-        // 可选参数（都在 = 之后给出）：
-        //   --debug-shot=x,y                 模拟悬停到 (x,y)
-        //   --debug-shot=x,y@sx,sy@dx,dy     模拟悬停 + 拖拽
-        //                                     sx,sy=来源磁贴，dx,dy=落点
-        //
-        // 注意取值时定位到 "--debug-shot=" 本身：命令行里可能还有别的
-        // 带 = 的开关（如 --debug-add=...），不能拿全局第一个 '=' 来切。
+        // 可选参数都在 = 之后：--debug-shot=x,y 模拟悬停，
+        // --debug-shot=x,y@sx,sy@dx,dy 再加拖拽（sx,sy 来源磁贴，dx,dy 落点）。
+        // 取值定位到 "--debug-shot=" 本身，命令行里别的开关也带 =。
         const std::wstring args = flagValue(L"--debug-shot=");
         if (!args.empty()) {
-            // 按 '@' 拆分为若干坐标段
+            // 按 '@' 拆成若干坐标段
             std::vector<std::wstring> segments;
             std::size_t start = 0;
             while (start <= args.size()) {

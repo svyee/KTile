@@ -13,10 +13,8 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// 取词（宽字符拷贝）。
-//
-// 语言表里的值存在字典里，指针在下次切换语言前一直有效；但这边的
-// 结果会被 return 出去，所以立刻拷成 std::wstring，不留指针。
+// 取词（宽字符拷贝）。语言表里的值是指针，切换语言前有效；结果会被
+// return 出去，所以立刻拷成 std::wstring，不留指针。
 std::wstring W(const char* key) {
     return std::wstring(infrastructure::i18n::trw(key));
 }
@@ -59,7 +57,7 @@ std::wstring buildParameterString(const core::LaunchItem& item) {
     return parameters;
 }
 
-// 工作目录在 launchItem 里转成局部 std::wstring 后取 c_str() 传参 ——
+// 工作目录在 launchItem 里转成局部 std::wstring 后取 c_str() 传参，
 // ShellExecuteW 同步返回（它只负责拉起进程），调用期间字符串有效。
 
 std::wstring lastErrorMessage(const HRESULT hr) {
@@ -96,9 +94,9 @@ LaunchResult launchItem(const core::LaunchItem& item,
         return {false, W("error.launchEmptyTarget")};
     }
 
-    // 内置命令（"ktile:<id>"）没有文件或协议可执行，在 ShellExecute
-    // 之前分派到系统命令执行端。提权参数对内置命令无意义 —— 命令自己
-    // 知道要不要特权（如关机需要 SE_SHUTDOWN_NAME，内部已处理）。
+    // 内置命令（"ktile:<id>"）没有文件或协议可执行，在 ShellExecute 之前
+    // 分派到系统命令执行端。提权参数对内置命令无意义：命令自己知道要不要
+    // 特权（如关机需要 SE_SHUTDOWN_NAME，内部已处理）。
     const std::wstring builtinId = core::builtinIdFromTarget(rawTarget);
     if (!builtinId.empty()) {
         return runBuiltinAction(builtinId);
@@ -116,7 +114,7 @@ LaunchResult launchItem(const core::LaunchItem& item,
             : std::wstring();
 
     // 动词：提权用 runas（触发 UAC）；否则 open 交给系统按类型分流。
-    // runAsAdministrator 与 forceAdministrator 任一为真都提权 ——
+    // runAsAdministrator 与 forceAdministrator 任一为真都提权：
     // 右键菜单的「以管理员身份运行」应无视项目自身设置。
     const bool elevate =
         forceAdministrator || item.runAsAdministrator;
@@ -160,7 +158,7 @@ LaunchResult revealItemInExplorer(const core::LaunchItem& item) {
         return {false, W("error.launchEmptyTarget")};
     }
 
-    // explorer /select,"路径" —— 打开所在文件夹并高亮该项；
+    // explorer /select,"路径"：打开所在文件夹并高亮该项；
     // 目标本身是文件夹时同样适用（高亮该文件夹本身）。
     std::wstring arguments = L"/select,\"";
     arguments += target;
@@ -190,10 +188,8 @@ LaunchResult openPathWithDefaultProgram(const std::wstring& path) {
         return {true, std::wstring()};
     }
 
-    // 没有文件关联：记事本兜底。
-    //
-    // 只在「没有关联」这类错误上兜底，其它失败（文件被删、权限不足）记事本
-    // 同样打不开，硬试一次只会把原始错误码盖成一个更含糊的报错。
+    // 没有文件关联时才用记事本兜底：其它失败（文件被删、权限不足）记事本
+    // 同样打不开，硬试一次只会把原始错误码盖成更含糊的报错。
     if (code == SE_ERR_NOASSOC || code == SE_ERR_ASSOCINCOMPLETE ||
         code == SE_ERR_DDEFAIL) {
         const std::wstring quoted = L"\"" + path + L"\"";

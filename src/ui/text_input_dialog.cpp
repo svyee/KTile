@@ -35,7 +35,7 @@ constexpr const wchar_t* kDialogClass = L"KTile.TextInputDialog";
 
 // 对话框关闭通知（结束本地模态循环，不影响主消息循环）。
 // 绝不能用 PostQuitMessage：它投递的是线程级粘性 WM_QUIT，
-// 会连带杀掉主窗口的消息循环 —— 这是本项目踩过的坑。
+// 会连带杀掉主窗口的消息循环（本项目踩过的坑）。
 constexpr UINT kDialogCloseMessage = WM_APP + 0x93U;
 
 struct DialogState {
@@ -46,7 +46,6 @@ struct DialogState {
 };
 
 // 把 owner 的 DPI 换算成缩放系数（96 DPI = 1.0）。
-//
 // 不用 GetDpiForWindow：那是 Win10 1607+ 的 API，本项目要保持
 // Win7 SP1 可运行。GetDeviceCaps 全平台可用，精度对本对话框足够。
 double scaleFor(const HWND owner) {
@@ -97,9 +96,9 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
     switch (message) {
         case WM_NCCREATE: {
             auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
-            // 注意这里是 break 而不是 return TRUE：标题栏文字由
-            // DefWindowProcW 从 CREATESTRUCT 里存进去，提前 return 会让
-            // 标题一直空着（本项目在项目编辑对话框上踩过这个坑）。
+            // 这里 break 而不是 return TRUE：标题栏文字由 DefWindowProcW
+            // 从 CREATESTRUCT 里存进去，提前 return 会让标题一直空着
+            // （项目编辑对话框踩过这个坑）。
             SetWindowLongPtrW(dialog, GWLP_USERDATA,
                               reinterpret_cast<LONG_PTR>(create->lpCreateParams));
             break;
@@ -216,7 +215,7 @@ LRESULT CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam,
 
         case WM_DESTROY: {
             // 唤醒模态循环去检查 IsWindow：只要窗口没了循环就退出。
-            // 自己的消息窗口收不到时也没有关系 —— 循环里 GetMessage
+            // 自己的消息窗口收不到也没有关系，循环里 GetMessage
             // 还会被主窗口的其它消息唤醒。
             HWND owner = GetWindow(dialog, GW_OWNER);
             if (owner != nullptr) {
@@ -300,7 +299,7 @@ bool showTextInputDialog(const HWND owner, const std::wstring& title,
 
     // 本地模态循环：退出条件是 IsWindow(dialog)，不依赖 WM_QUIT。
     // 属于对话框的消息走 IsDialogMessageW（Tab 切换 / 回车 = 确定 /
-    // Esc = 取消），其余消息照常派发 —— 托盘与热键在对话框打开期间仍然可用。
+    // Esc = 取消），其余消息照常派发，托盘与热键在对话框打开期间仍可用。
     MSG message{};
     while (IsWindow(dialog) && GetMessageW(&message, nullptr, 0, 0) > 0) {
         if (message.message == kDialogCloseMessage) {

@@ -1,13 +1,8 @@
 // KTile - 多语言（i18n）测试
 //
-// 覆盖：
-//   1. 语言文件 key 集合一致 —— 两份文件不能一边多一边少，
-//      否则某个语言下会出现 key 字样（或者有一边永远用不到的死词）
-//   2. 加载与切语言：initialize / setLanguage / languageCode
-//   3. 回退链：当前语言 → 英语 → key 本身
-//   4. 占位符替换（{0} 出现在不同位置时也正确）
-//   5. 系统语言映射：简体中文 → zh-Hans，其余 → en；未知配置值 → en
-//   6. 语言目录里有什么就能认出什么（扫描 *.json，代码即文件名）
+// 覆盖 key 集合一致性、加载与切语言、回退链（当前语言 → 英语 → key 本身）、
+// 占位符替换、系统语言映射（简体中文 → zh-Hans，其余 → en，未知配置 → en）、
+// 语言目录扫描（代码即文件名）。
 //
 #include "infrastructure/i18n.h"
 
@@ -83,15 +78,14 @@ std::set<std::string> stringKeys(const std::filesystem::path& path) {
     return keys;
 }
 
-// ---------------------------------------------------------------- 1. key 一致性
+// --- key 一致性
 
 void testLanguageFilesShareSameKeys() {
     const std::filesystem::path dir = langDirectory();
     const std::set<std::string> english = stringKeys(dir / L"en.json");
     CHECK(!english.empty());
 
-    // 目录里每份语言都必须和英语有同一套 key：加词时漏翻一边，
-    // 那一语言下就会出现 "settings.title" 这样的字样。
+    // 每份语言必须与英语同一套 key，漏翻一边界面就会出现 key 字样
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         if (entry.path().extension() != L".json") {
             continue;
@@ -125,7 +119,7 @@ void testLanguageFilesShareSameKeys() {
     }
 }
 
-// ---------------------------------------------------------------- 2. 加载 / 切换
+// --- 加载 / 切换
 
 void testLoadAndSwitch() {
     const std::string loaded = i18n::initialize(langDirectory().wstring(), "zh-Hans");
@@ -174,7 +168,7 @@ void testLanguagesScanned() {
     CHECK(sorted);  // 按 code 排序，下拉顺序与文件系统顺序无关
 }
 
-// ---------------------------------------------------------------- 3. 回退链
+// --- 回退链
 
 void testFallbackChain() {
     const std::filesystem::path dir = freshDir(L"ktile_i18n_fallback");
@@ -205,7 +199,7 @@ void testFallbackChain() {
     CHECK(i18n::tr("a.both") == "english both");
 }
 
-// ---------------------------------------------------------------- 4. 占位符
+// --- 占位符
 
 void testPlaceholders() {
     i18n::initialize(langDirectory().wstring(), "en");
@@ -222,7 +216,7 @@ void testPlaceholders() {
     CHECK(chinese.find(L"{0}") == std::wstring::npos);
 }
 
-// ---------------------------------------------------------------- 5. 系统语言映射
+// --- 系统语言映射
 
 void testSystemLanguageMapping() {
     const std::string system = i18n::systemLanguageCode();
@@ -232,8 +226,8 @@ void testSystemLanguageMapping() {
     CHECK(i18n::resolveLanguage("") == system);  // 旧配置没有这个字段
     CHECK(i18n::resolveLanguage("zh-Hans") == "zh-Hans");
     CHECK(i18n::resolveLanguage("en") == "en");
-    // 不认识的代码原样返回：配置值不动，回退发生在加载期 ——
-    // 语言文件被误删后再放回来，用户不必重设一遍。
+    // 不认识的代码原样返回：回退发生在加载期，语言文件放回来后
+    // 用户不必重设
     CHECK(i18n::resolveLanguage("ja") == "ja");
 }
 

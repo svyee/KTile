@@ -138,7 +138,7 @@ bool queryBattery(double* percent, bool* charging, bool* present) {
 std::string buildSystemJson() {
     SYSTEMTIME now{};
     GetLocalTime(&now);
-    // 星期名来自语言文件（provider.system.weekday.N）—— 不硬编中文。
+    // 星期名来自语言文件（provider.system.weekday.N），不硬编中文。
     char weekdayKey[40];
     std::snprintf(weekdayKey, sizeof(weekdayKey), "provider.system.weekday.%u",
                   static_cast<unsigned>(now.wDayOfWeek));

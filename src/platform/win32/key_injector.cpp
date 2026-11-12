@@ -40,12 +40,10 @@ void injectShortcut(const std::vector<core::HotkeyModifier>& modifiers,
     const WORD mainVk = keyNameToVirtualKey(key);
     if (mainVk == 0) return;  // 无法识别的主键
 
-    // 只注入「当前没有被物理按下」的修饰键。
-    //
-    // 为什么：轮盘的触发方式默认是 Ctrl+右键，用户松手触发动作时 Ctrl 往往
-    // 还按着。如果这时注入 Ctrl 的按下+抬起，系统会认为 Ctrl 已被放开，
-    // 而物理上用户还按着 —— 之后用户按 Ctrl+C 会失效，必须先松开再按一次。
-    // 跳过已按住的修饰键，就不会破坏用户的物理按键状态。
+    // 只注入当前未被物理按下的修饰键。轮盘默认 Ctrl+右键触发，用户松手
+    // 时 Ctrl 往往还按着；若再注入 Ctrl 按下+抬起，系统认为 Ctrl 已放开
+    // 而物理上还按着，之后的 Ctrl+C 会失效。跳过已按住的修饰键就不会
+    // 破坏用户的物理按键状态。
     std::vector<WORD> pressedByUs;
     pressedByUs.reserve(modifiers.size());
     for (const auto& mod : modifiers) {
@@ -60,7 +58,7 @@ void injectShortcut(const std::vector<core::HotkeyModifier>& modifiers,
     keyEvent(mainVk, true);
     keyEvent(mainVk, false);
 
-    // 逆序释放我们注入过的修饰键
+    // 逆序释放注入过的修饰键
     for (auto it = pressedByUs.rbegin(); it != pressedByUs.rend(); ++it) {
         keyEvent(*it, false);
     }

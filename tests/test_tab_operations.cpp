@@ -1,10 +1,7 @@
 // KTile - 标签页操作测试（新建/改名/删除/调序/跨页搬移）
 //
-// 这些是「多标签页」能力的核心不变量：
-//   - 页 id 全文档唯一（否则「记住上次在哪一页」会指错页）
-//   - 至少留一页（否则面板没有任何内容可显示）
-//   - 页名规范化后不能为空（否则标签条上是一片点不中的空白）
-//   - 同一份 items.json 里允许两页放同一个程序（分标的本质）
+// 多标签页的核心不变量：页 id 全文档唯一（否则「记住上次在哪页」指错）、
+// 至少留一页、页名规范化后非空、同一份 items.json 允许两页放同一程序。
 #include "core/tab_operations.h"
 
 #include <cstdio>
@@ -22,7 +19,7 @@ static int g_failures = 0;
         }                                                        \
     } while (false)
 
-// ---------------------------------------------------------------- 辅助
+// --- 辅助
 
 static LaunchItem makeItem(const char* id, const char* name,
                            const char* target) {
@@ -44,7 +41,7 @@ static ItemsDocument makeDocument() {
     return document;
 }
 
-// ---------------------------------------------------------------- 新建
+// --- 新建
 
 static void testAddTabAppendsAndNames() {
     ItemsDocument document = makeDocument();
@@ -96,7 +93,7 @@ static void testAddTabIntoEmptyDocument() {
     CHECK(document.tabs.size() == 1);
 }
 
-// ---------------------------------------------------------------- 改名
+// --- 改名
 
 static void testRenameBasic() {
     ItemsDocument document = makeDocument();
@@ -127,7 +124,7 @@ static void testRenameInvalidIndex() {
     CHECK(!renameTab(document, 9, "越界"));
 }
 
-// ---------------------------------------------------------------- 删除
+// --- 删除
 
 static void testRemoveTab() {
     ItemsDocument document = makeDocument();
@@ -150,7 +147,7 @@ static void testRemoveInvalidIndex() {
     CHECK(!removeTab(document, 5));
 }
 
-// ---------------------------------------------------------------- 调序
+// --- 调序
 
 static void testMoveTab() {
     ItemsDocument document = makeDocument();
@@ -173,7 +170,7 @@ static void testMoveTabNoOpAndInvalid() {
     CHECK(!moveTab(document, 7, 0));   // 越界
 }
 
-// ---------------------------------------------------------------- 跨页搬移
+// --- 跨页搬移
 
 static void testMoveItemToTab() {
     ItemsDocument document = makeDocument();
@@ -208,11 +205,11 @@ static void testMoveItemToTabInvalidIndices() {
     CHECK(!moveItemToTab(document, 9, 0, 0));  // 源页越界
 }
 
-// ---------------------------------------------------------------- 分标（核心诉求）
+// --- 分标（核心诉求）
 
 static void testSameTargetAllowedInTwoTabs() {
     ItemsDocument document = makeDocument();
-    // 两页都放着记事本 —— 这正是多标签页存在的意义
+    // 两页都放着记事本：多标签页存在的意义
     const std::string firstTarget = document.tabs[0].items[0].target;
     const std::string secondTarget = document.tabs[1].items[0].target;
     CHECK(firstTarget == secondTarget);
@@ -220,7 +217,7 @@ static void testSameTargetAllowedInTwoTabs() {
     CHECK(document.tabs[0].items[0].id != document.tabs[1].items[0].id);
 }
 
-// ---------------------------------------------------------------- 名字工具
+// --- 名字工具
 
 static void testNormalizeTabName() {
     CHECK(normalizeTabName("  x  ") == "x");

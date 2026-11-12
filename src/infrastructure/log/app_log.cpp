@@ -15,8 +15,8 @@ namespace {
 // 日志文件保留天数。超过的 ktile-*.log 在启动 / 跨天时删除。
 constexpr int kRetentionDays = 7;
 
-// 单文件体积上限。写满后当天停写（留一行标注），磁盘占用因此有
-// 确定上界：kRetentionDays × kMaxDailyBytes。
+// 单文件体积上限。写满后当天停写（留一行标注），磁盘占用上界为
+// kRetentionDays × kMaxDailyBytes。
 constexpr std::uintmax_t kMaxDailyBytes = 1024 * 1024;  // 1 MB
 
 // 内存缓冲的丢弃上限：长时间没人 flush（异常路径）时也不能无限涨。
@@ -172,7 +172,7 @@ void writeLocked(const Level level, const std::string& message) {
     }
     g_state.buffer += formatLine(level, message);
     // 只有 error 在调用点落盘（调用方保证不在钩子上下文用 error），
-    // info / warn 一律等定时 flush —— 见头文件「钩子安全」说明。
+    // info / warn 一律等定时 flush，见头文件「钩子安全」说明。
     if (level == Level::Error) {
         flushLocked();
     }

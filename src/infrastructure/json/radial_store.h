@@ -1,12 +1,8 @@
 // KTile - 基础设施层：轮盘菜单配置持久化
 //
-// 职责：在 core::RadialConfig 与 JSON 文本之间做双向映射，并负责文件读写。
-//
-// 文件：data/radial.json
-//
-// 容错策略与 config_store 一致：
-//   - 文件不存在：返回默认值 + ok=true（首次运行）
-//   - 文件损坏：返回默认值 + ok=false，备份为 *.corrupt
+// core::RadialConfig 与 data/radial.json 的双向映射，含文件读写。
+// 容错与 config_store 一致：文件不存在返回默认值且 ok=true（首次运行）；
+// 文件损坏返回默认值且 ok=false，原文件备份为 *.corrupt。
 //
 #pragma once
 
@@ -19,12 +15,10 @@
 namespace ktile {
 namespace infrastructure {
 
-// 解析一个 menu 对象（`{ "name":…, "sectorCount":…, "actions":[…] }`）。
-//
-// 提成自由函数是因为轮盘插件（slugin/<id>/radial.json）用的是**同一套**
-// 扇区/动作格式：用户配置和插件只有外层容器不同，里面的东西一模一样。
-// 写两份解析的话，加一个动作字段就得记住改两处 —— 迟早漏一处。
-// 解析完保证 actions.size() == sectorCount（不足补空槽位）。
+// 解析一个 menu 对象（{ "name":…, "sectorCount":…, "actions":[…] }）。
+// 提成自由函数：轮盘插件（slugin/<id>/radial.json）用同一套扇区/动作格式，
+// 用户配置和插件共用一份解析。返回时保证 actions.size() == sectorCount
+// （不足补空槽位）。
 void parseRadialMenuJson(const json::JsonValue& value, core::RadialMenu* out);
 
 class RadialStore {

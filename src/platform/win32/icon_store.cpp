@@ -26,7 +26,7 @@ constexpr int kStoredIconMaxSize = 128;
 constexpr const wchar_t* kStoreSubdirectory = L"res";
 
 // 仓库根目录。<exe>\data 或降级后的 %LOCALAPPDATA%\KTile\data。
-// 进程内一次性设置，之后只读 —— 不需要加锁。
+// 进程内一次性设置，之后只读，不需要加锁。
 std::wstring g_iconStoreRoot;
 
 // 去掉结尾的分隔符，避免拼出 "data\\\res"
@@ -110,7 +110,7 @@ bool createDirectoryIfMissing(const std::wstring& directory) {
     return GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-// ---------------------------------------------------------------- WIC 助手
+// --- WIC 助手
 
 bool createWicFactory(ComPtr<IWICImagingFactory>* factory) {
     return SUCCEEDED(CoCreateInstance(
@@ -118,7 +118,7 @@ bool createWicFactory(ComPtr<IWICImagingFactory>* factory) {
         IID_PPV_ARGS(factory->put())));
 }
 
-// 多帧文件（多尺寸 .ico）取面积最大的一帧 —— 源图越大，缩放后越清晰
+// 多帧文件（多尺寸 .ico）取面积最大的一帧，源图越大，缩放后越清晰
 bool selectLargestFrame(IWICBitmapDecoder* decoder,
                         IWICBitmapFrameDecode** outFrame) {
     UINT frameCount = 0;
@@ -160,7 +160,7 @@ bool copyAsBgra(IWICImagingFactory* factory, IWICBitmapSource* source,
     if (FAILED(factory->CreateFormatConverter(converter.put()))) {
         return false;
     }
-    // 32bppBGRA（非预乘）—— 与 HICON 的 alpha 语义一致
+    // 32bppBGRA（非预乘），与 HICON 的 alpha 语义一致
     if (FAILED(converter->Initialize(source, GUID_WICPixelFormat32bppBGRA,
                                      WICBitmapDitherTypeNone, nullptr, 0.0,
                                      WICBitmapPaletteTypeCustom))) {
@@ -192,7 +192,7 @@ bool copyAsBgra(IWICImagingFactory* factory, IWICBitmapSource* source,
 
 }  // namespace
 
-// ---------------------------------------------------------------- 仓库路径
+// --- 仓库路径
 
 void setIconStoreRoot(std::wstring dataDirectory) {
     g_iconStoreRoot = withoutTrailingSeparator(std::move(dataDirectory));
@@ -237,7 +237,7 @@ bool isDecodableImageFile(const std::wstring& path) {
            extension == L".tif" || extension == L".tiff";
 }
 
-// ---------------------------------------------------------------- 解码
+// --- 解码
 
 bool decodeImageFile(const std::wstring& path, ImagePixels* out) {
     if (out == nullptr || path.empty()) {
@@ -310,9 +310,8 @@ bool decodeImageFileCover(const std::wstring& path, const std::uint32_t targetW,
         return false;
     }
 
-    // cover：需要的缩放比 = 两方向较大者。
-    //   < 1 → 源图比目标大，缩到「刚好盖住」（省内存的整个意义所在）
-    //   ≥ 1 → 源图本来就不够大，保持原尺寸（不放大，交给绘制端拉齐）
+    // cover：缩放比取两方向较大者。小于 1 时缩到刚好盖住（省内存的意义
+    // 所在）；不小于 1 时保持原尺寸不放大，交给绘制端拉齐。
     const double scaleX = static_cast<double>(targetW) / sourceWidth;
     const double scaleY = static_cast<double>(targetH) / sourceHeight;
     const double coverScale = (std::max)(scaleX, scaleY);
@@ -388,7 +387,7 @@ std::vector<std::uint32_t> premultiplyBgra(const ImagePixels& pixels) {
     return out;
 }
 
-// ---------------------------------------------------------------- 导入
+// --- 导入
 
 std::wstring importCustomIcon(const std::wstring& sourcePath,
                               std::wstring* error) {
@@ -432,8 +431,8 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
         return fail("error.imageNoFrame");
     }
 
-    // ① 统一转成 32bppPBGRA：Fant 插值只支持 32bpp 输入，
-    //    而且这一步同时把调色板/灰度等格式拉平，后续裁剪缩放都不必再判断。
+    // 统一转成 32bppPBGRA：Fant 插值只支持 32bpp 输入，同时把调色板/灰度
+    // 等格式拉平，后续缩放不必再判断。
     ComPtr<IWICFormatConverter> toBgra;
     if (FAILED(factory->CreateFormatConverter(toBgra.put())) ||
         FAILED(toBgra->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA,
@@ -449,11 +448,8 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
         return fail("error.imageSizeUnreadable");
     }
 
-    // ② 按原图比例缩放到「长边 = 128」——**不裁剪**。
-    //
-    // 横图存成 128xN、竖图存成 Nx128，原始构图完整保留。渲染时把这张图
-    // 铺满磁贴内框，比例对得上（竖图配 1x2 磁贴）就是「整张图填满磁贴」。
-    // 若在这里裁成正方形，用户选的构图就永久丢了 —— 预览里也换不回来。
+    // 按原图比例缩放到长边 128，不裁剪：横图存 128xN、竖图存 Nx128，
+    // 构图完整保留，渲染铺满磁贴内框即整图可见。裁成正方形会永久丢构图。
     UINT targetWidth = 0;
     UINT targetHeight = 0;
     if (sourceWidth >= sourceHeight) {
@@ -469,11 +465,11 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
              sourceHeight / 2U) /
             sourceHeight);
     }
-    // 极端长宽比（例如 1000x3）四舍五入后可能落到 0 —— 至少留 1 像素
+    // 极端长宽比（例如 1000x3）四舍五入后可能落到 0，至少留 1 像素
     targetWidth = (std::max)(1U, targetWidth);
     targetHeight = (std::max)(1U, targetHeight);
 
-    // ③ Fant 高质量缩放（避免锯齿）
+    // Fant 高质量缩放，避免锯齿
     ComPtr<IWICBitmapScaler> scaler;
     if (FAILED(factory->CreateBitmapScaler(scaler.put())) ||
         FAILED(scaler->Initialize(toBgra.get(), targetWidth, targetHeight,
@@ -481,8 +477,8 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
         return fail("error.imageScaleFailed");
     }
 
-    // ④ PNG 编码器按 BGRA 写入：PBGRA → BGRA 再交回去，
-    //    避免依赖编码器内部的隐式预乘/反预乘行为
+    // PNG 编码器按 BGRA 写入：PBGRA → BGRA 再交回去，避免依赖编码器内部
+    // 的隐式预乘/反预乘行为
     ComPtr<IWICFormatConverter> toStraight;
     if (FAILED(factory->CreateFormatConverter(toStraight.put())) ||
         FAILED(toStraight->Initialize(scaler.get(), GUID_WICPixelFormat32bppBGRA,
@@ -491,7 +487,7 @@ std::wstring importCustomIcon(const std::wstring& sourcePath,
         return fail("error.iconEncodePrepare");
     }
 
-    // ⑤ 落到 data\res\<hash>.png
+    // 落到 data\res\<hash>.png
     WIN32_FILE_ATTRIBUTE_DATA attributes{};
     std::uint64_t fileSize = 0;
     std::uint64_t lastWrite = 0;

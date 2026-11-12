@@ -1,16 +1,13 @@
 // KTile - 对话框通用视觉样式
 //
-// 设置窗口与磁贴编辑窗口原来是标准的 Win32 系统灰对话框：COLOR_BTNFACE
-// 底、3D 凹陷分隔线、系统按钮。放在深色启动器旁边显得很「旧」。
-//
-// 这里只做「低成本现代化」：统一的浅色中性底 + 白色圆角卡片 + 细边框 +
-// 一枚强调色主按钮。控件本身仍用原生 Win32（组合框 / 单选框 / 编辑框），
-// 因为把它们全部自绘需要重做焦点链、键盘操作与 IME，收益不抵风险。
+// 只做「低成本现代化」：统一的浅色中性底 + 白色圆角卡片 + 细边框 +
+// 一枚强调色主按钮。控件仍用原生 Win32：全部自绘需重做焦点链、键盘
+// 操作与 IME，收益不抵风险。
 //
 // 取舍：
-// - 颜色写死而不是取 COLOR_BTNFACE：系统灰偏冷且对比度低，卡片层次做不出来；
-//   但文字仍取 COLOR_WINDOWTEXT / 按钮强调色取 COLOR_HIGHLIGHT，
-//   高对比度主题下文字与主按钮依然可读。
+// - 颜色写死而不是取 COLOR_BTNFACE：系统灰对比度低，卡片层次做不出来；
+//   但文字仍取 COLOR_WINDOWTEXT、强调色取 COLOR_HIGHLIGHT，高对比度
+//   主题下文字与主按钮依然可读。
 // - 画刷缓存在静态对象里：WM_CTLCOLOR* 返回的画刷由窗口系统复用，
 //   不能每次 CreateSolidBrush（会泄漏），也不该由调用方 DeleteObject。
 #pragma once
@@ -21,7 +18,7 @@ namespace ktile {
 namespace ui {
 namespace dialog_style {
 
-// ---- 配色 ----
+// --- 配色 ---
 COLORREF background();     // 对话框底色（浅灰）
 COLORREF card();           // 卡片底色（白）
 COLORREF border();         // 卡片 / 次级按钮描边

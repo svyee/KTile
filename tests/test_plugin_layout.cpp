@@ -285,8 +285,8 @@ static void testContentStaysInsideShortTile() {
     const PluginDrawList list = buildPluginDrawList(
         manifest, root, layout, 0, 0, tileWidth, tileHeight, fakeMeasure);
 
-    // 这个用例必须带图标：没有图标时只有三行文字，怎么排都放得下，
-    // 测不出「四行内容把页脚顶出磁贴」的真实场景。
+    // 必须带图标：无图标时只有三行文字，怎么排都放得下，
+    // 测不出页脚被顶出磁贴的真实场景
     bool sawIcon = false;
     bool sawFooter = false;
     for (const PluginDrawCommand& command : list.commands) {

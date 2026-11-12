@@ -145,17 +145,10 @@ bool isProgramRunning(const std::wstring& targetPath) {
                     running = true;
                 } else if (_wcsicmp(fileNameOf(image).c_str(),
                                     wantedName.c_str()) == 0) {
-                    // 同名兜底：完整路径对不上时按文件名再判一次。
-                    //
-                    // 为什么需要：商店应用（以及 System32 下那些「应用执行
-                    // 别名」）启动后，真实进程的映像路径在 WindowsApps 里 ——
-                    // 拿 C:\Windows\System32\notepad.exe 去比永远比不中，于是
-                    // 每次启动都多开一个记事本。
-                    //
-                    // 代价是「同名不同路径」会被判成已运行（便携版同名程序）。
-                    // 取舍很清楚：漏启动一次，用户点一下磁贴就补回来了；
-                    // 而多开一路实例会留下实实在在的重复窗口，还可能有
-                    // 两份托盘图标抢同一个配置。
+                    // 同名兜底：完整路径对不上时按文件名再判一次。商店应用
+                    // 和应用执行别名（System32 下的 notepad.exe 等）启动后
+                    // 映像路径在 WindowsApps 里，按完整路径永远比不中，会
+                    // 每次启动多开一个。代价是同名不同路径判成已运行。
                     running = true;
                 }
             }

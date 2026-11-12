@@ -39,7 +39,7 @@ static LaunchItem makeItem(const char* id, TileSize size) {
     return item;
 }
 
-// ---------------------------------------------------------------- 跨度定义
+// --- 跨度定义
 
 static void testTileSpans() {
     // Small = 1x1
@@ -56,7 +56,7 @@ static void testTileSpans() {
     CHECK_EQ(tileSpanRows(TileSize::Tall), 2);
 }
 
-// ---------------------------------------------------------------- 占用表
+// --- 占用表
 
 static void testOccupancyGrid() {
     OccupancyGrid grid(4, 4);
@@ -77,7 +77,7 @@ static void testOccupancyGrid() {
     CHECK(grid.isRegionFree(0, 0, 4, 4));
 }
 
-// ---------------------------------------------------------------- 首个空位查找
+// --- 首个空位查找
 
 static void testFindFirstFreeRegion() {
     OccupancyGrid grid(6, 6);
@@ -95,7 +95,7 @@ static void testFindFirstFreeRegion() {
     CHECK_EQ(p->first, 1);
     CHECK_EQ(p->second, 0);
 
-    // 2x2 在只剩 (1,0) 被占的情况下，第一个可放位置是 (2,0)
+    // 2x2 在 (0,0) 被占时仍可放 (1,0)：与已占格不重叠
     grid.clear();
     grid.markRegion(0, 0, 1, 1);
     p = findFirstFreeRegion(grid, 2, 2);
@@ -108,7 +108,7 @@ static void testFindFirstFreeRegion() {
     CHECK(!p.has_value());
 }
 
-// ---------------------------------------------------------------- 基本布局
+// --- 基本布局
 
 static void testLayoutEmpty() {
     std::vector<LaunchItem> items;
@@ -153,10 +153,10 @@ static void testLayoutAllSmall() {
     CHECK_EQ(result.usedRows, 2);
 }
 
-// ---------------------------------------------------------------- 磁贴混排（核心场景）
+// --- 磁贴混排（核心场景）
 
 static void testLayoutMixedTiles() {
-    // 一个 Medium(2x2) + 若干 Small
+    // 一个 Large(2x2) + 若干 Small
     std::vector<LaunchItem> items;
     items.push_back(makeItem("medium", TileSize::Large));
     items.push_back(makeItem("s1", TileSize::Small));
@@ -172,7 +172,7 @@ static void testLayoutMixedTiles() {
     auto result = calculateTileLayout(request);
     CHECK(result.complete());
 
-    // Medium 应放在 (0,0) 占据 2x2
+    // Large 应放在 (0,0) 占 2x2
     CHECK_EQ(result.placements[0].column, 0);
     CHECK_EQ(result.placements[0].row, 0);
     CHECK_EQ(result.placements[0].spanColumns, 2);
@@ -199,7 +199,6 @@ static void testLayoutMixedTiles() {
 }
 
 static void testLayoutWideTile() {
-    // Wide = 2x1（横向 2 格）
     std::vector<LaunchItem> items;
     items.push_back(makeItem("wide", TileSize::Wide));
     items.push_back(makeItem("s1", TileSize::Small));
@@ -224,7 +223,6 @@ static void testLayoutWideTile() {
 }
 
 static void testLayoutTallTile() {
-    // Tall = 1x2（纵向 2 格）
     std::vector<LaunchItem> items;
     items.push_back(makeItem("tall", TileSize::Tall));
     items.push_back(makeItem("s1", TileSize::Small));
@@ -249,7 +247,7 @@ static void testLayoutTallTile() {
 }
 
 static void testNarrowGridAutoWidens() {
-    // 请求 1 列但含 Wide(2x1) —— 应自动扩展到至少 2 列
+    // 请求 1 列但含 Wide(2x1)：应自动扩展到至少 2 列
     std::vector<LaunchItem> items;
     items.push_back(makeItem("wide", TileSize::Wide));
 
@@ -266,7 +264,7 @@ static void testNarrowGridAutoWidens() {
     CHECK_EQ(result.placements[0].row, 0);
 }
 
-// ---------------------------------------------------------------- 显式位置保留
+// --- 显式位置保留
 
 static void testExplicitPositionPreserved() {
     std::vector<LaunchItem> items;
@@ -304,12 +302,9 @@ static void testExplicitPositionPreserved() {
 }
 
 static void testExplicitPositionConflictIgnored() {
-    // 场景：a(Medium, 2x2) 无显式坐标，b(Small) 显式声明占用 (0,0)。
-    //
-    // 由于 b 的 (0,0) 是合法且不冲突的（此时网格为空），b 应当被保留在 (0,0)；
-    // a 自动放置到其他位置。两者都不重叠，且都成功放置。
-    //
-    // 这验证了「显式坐标优先于自动放置」的语义。
+    // a(Large, 2x2) 无显式坐标，b(Small) 显式声明 (0,0)。网格为空时
+    // b 的声明合法，保留在 (0,0)，a 自动放置到别处。
+    // 验证「显式坐标优先于自动放置」。
     std::vector<LaunchItem> items;
     items.push_back(makeItem("a", TileSize::Large));
     items.push_back(makeItem("b", TileSize::Small));
@@ -324,12 +319,10 @@ static void testExplicitPositionConflictIgnored() {
     auto result = calculateTileLayout(request);
     CHECK(result.complete());
 
-    // b 的显式坐标被保留
     CHECK_EQ(result.placements[1].column, 0);
     CHECK_EQ(result.placements[1].row, 0);
     CHECK(!result.placements[1].autoPlaced);
 
-    // a 被自动放置到别处（不与 b 重叠）
     CHECK(result.placements[0].autoPlaced);
 
     // 验证无重叠
@@ -341,10 +334,8 @@ static void testExplicitPositionConflictIgnored() {
 }
 
 static void testLargerTileWinsOverlappingExplicitClaim() {
-    // 场景：两个项声明了互相重叠的显式位置。
-    //   a(Medium, 2x2) 声明 (0,0)；b(Medium, 2x2) 也声明 (0,0)。
-    // 规则：面积大者优先，同面积则索引靠前者优先 —— a 胜出并保留 (0,0)，
-    //       b 退回自动放置（落到 (2,0)）。
+    // 两项都声明 (0,0) 且都是 Large：面积大者优先，同面积索引靠前
+    // 者优先，a 保留 (0,0)，b 退回自动放置
     std::vector<LaunchItem> items;
     items.push_back(makeItem("a", TileSize::Large));
     items.push_back(makeItem("b", TileSize::Large));
@@ -360,15 +351,12 @@ static void testLargerTileWinsOverlappingExplicitClaim() {
     auto result = calculateTileLayout(request);
     CHECK(result.complete());
 
-    // a 赢得冲突位置
     CHECK_EQ(result.placements[0].column, 0);
     CHECK_EQ(result.placements[0].row, 0);
     CHECK(!result.placements[0].autoPlaced);
 
-    // b 被重排到别处
     CHECK(result.placements[1].autoPlaced);
 
-    // 无重叠验证
     OccupancyGrid verify(4, 4);
     for (const auto& p : result.placements) {
         CHECK(verify.isRegionFree(p.column, p.row, p.spanColumns, p.spanRows));
@@ -394,7 +382,7 @@ static void testIgnoreExplicitPositions() {
     CHECK_EQ(result.placements[0].row, 0);
 }
 
-// ---------------------------------------------------------------- 同尺寸稳定性
+// --- 同尺寸稳定性
 
 static void testStableLayoutForSameInput() {
     std::vector<LaunchItem> items;
@@ -418,12 +406,11 @@ static void testStableLayoutForSameInput() {
     }
 }
 
-// ---------------------------------------------------------------- 溢出
+// --- 溢出
 
 static void testOverflowDetection() {
-    // 3 列网格塞 10 个 Medium(2x2)。
-    // 3 列下每行只能放 1 个 2x2（剩 1 列放不下第二个），
-    // 10 个需要 20 行，超过 kMaximumGridRows(16) —— 必然溢出。
+    // 3 列塞 10 个 Large(2x2)：每行只能放 1 个，10 个需 20 行，
+    // 超过 kMaximumGridRows(16)，必然溢出。
     std::vector<LaunchItem> items;
     for (int i = 0; i < 10; ++i) {
         items.push_back(makeItem(("m" + std::to_string(i)).c_str(), TileSize::Large));
@@ -436,17 +423,14 @@ static void testOverflowDetection() {
 
     auto result = calculateTileLayout(request);
 
-    // 应检测到溢出，且未放置项已记入 overflowed
     CHECK(!result.complete());
     CHECK(!result.overflowed.empty());
 
-    // 已放置数量 = 总数 - 溢出数量
     CHECK_EQ(result.placements.size(), static_cast<std::size_t>(10));
 
     // 行数不应超过上限
     CHECK(result.usedRows <= kMaximumGridRows);
 
-    // 溢出项必须都有对应记录
     std::size_t placedCount = 0;
     for (const auto& p : result.placements) {
         (void)p;
@@ -455,7 +439,7 @@ static void testOverflowDetection() {
     CHECK_EQ(placedCount, static_cast<std::size_t>(10));
 }
 
-// ---------------------------------------------------------------- 所需行列估算
+// --- 所需行列估算
 
 static void testRequiredDimensions() {
     std::vector<LaunchItem> items;
@@ -491,7 +475,7 @@ static void testRequiredDimensions() {
     }
     CHECK_EQ(calculateRequiredRows(twelve, 6), 2);
 
-    // 4 个 Medium(2x2) 共 16 格，4 列下需要 4 行
+    // 4 个 Large(2x2) 共 16 格，4 列下需要 4 行
     std::vector<LaunchItem> fourMedium;
     for (int i = 0; i < 4; ++i) {
         fourMedium.push_back(makeItem(("m" + std::to_string(i)).c_str(), TileSize::Large));
@@ -499,7 +483,7 @@ static void testRequiredDimensions() {
     CHECK_EQ(calculateRequiredRows(fourMedium, 4), 4);
 }
 
-// ---------------------------------------------------------------- 尺寸变更重排
+// --- 尺寸变更重排
 
 static void testTileSizeChangeReflow() {
     std::vector<LaunchItem> items;
@@ -517,7 +501,7 @@ static void testTileSizeChangeReflow() {
     auto before = calculateTileLayout(request);
     CHECK_EQ(before.usedRows, 1);  // 4 个 1x1 挤在 1 行
 
-    // 把第一个改成 Medium(2x2)
+    // 把第一个改成 Large(2x2)
     items[0].tileSize = TileSize::Large;
     auto after = calculateTileLayout(request);
 
@@ -535,7 +519,7 @@ static void testTileSizeChangeReflow() {
     }
 }
 
-// ---------------------------------------------------------------- 工具函数
+// --- 工具函数
 
 static void testTileSizeHelpers() {
     CHECK(tileSizeFromInt(0) == TileSize::Small);
@@ -550,7 +534,7 @@ static void testTileSizeHelpers() {
     CHECK_EQ(tileSizeToInt(TileSize::Large), 3);
 }
 
-// ---------------------------------------------------------------- 拖拽重排
+// --- 拖拽重排
 
 static std::vector<LaunchItem> makeSequence(const char* ids) {
     std::vector<LaunchItem> items;
@@ -661,7 +645,7 @@ static void testIsMeaningfulMove() {
     CHECK(!isMeaningfulMove(0, 0, 0));   // 空集合
 }
 
-// ---------------------------------------------------------------- 避让式布局
+// --- 避让式布局
 
 // 构造一个带显式坐标的磁贴
 static LaunchItem makePlacedItem(const char* id, TileSize size,
@@ -901,9 +885,8 @@ static void testAvoidanceDisplacedTileSlidesInReadingOrder() {
     CHECK(t2.column == 0 && t2.row == 1);
 }
 
-// 复刻实测场景：0 列下方全满，右侧 (1,0) 空着。
-// 把控制面板拖到 (0,0) 时，原 (0,0) 的命令提示符应让到右侧空位 (1,0)，
-// 而不是被甩到左列最下面（旧实现的缺陷）。
+// 复刻实测场景：0 列下方全满，右侧 (1,0) 空着。拖到 (0,0) 时被压的
+// 命令提示符应让到右侧空位 (1,0)，不能甩到左列最下面。
 static void testAvoidanceDisplacedGoesRightWhenColumnBlocked() {
     std::vector<LaunchItem> items;
     items.push_back(makePlacedItem("cmd", TileSize::Small, 0, 0));
@@ -936,11 +919,8 @@ static void testAvoidanceDisplacedGoesRightWhenColumnBlocked() {
     CHECK(docs.column == 0 && docs.row == 3);
 }
 
-// 复刻用户实测场景：磁贴贴着右边缘被挤，左侧紧挨着就是空位。
-//
-// 旧行为（纯阅读顺序）：右边缘磁贴被挤 → 甩到「下一行最左边」，横向跨越整行，
-// 视觉上非常突兀。
-// 新行为：先在同一行向右找 → 没位置就同一行向左找 → 命中紧邻左侧的空位。
+// 右边缘磁贴被挤时，先同一行向右找、再向左找，命中紧邻空位；
+// 不能甩到下一行最左边，横向跨越整行太突兀。
 static void testAvoidanceDisplacedPrefersLeftOverNextRow() {
     std::vector<LaunchItem> items;
     // 一行 6 列，只在 (0,0) 有 cmd 占位。
@@ -971,11 +951,8 @@ static void testAvoidanceDisplacedPrefersLeftOverNextRow() {
 // 而不是跳到下一行最左边。
 static void testAvoidanceDisplacedGoesLeftAtRightEdge() {
     std::vector<LaunchItem> items;
-    // 网格 6 列 6 行。t 在 (4,0)，它的右侧 (5,0) 与下方 (4,1) 都放好占位物。
-    // 拖到 (4,0) 挤开 t：
-    //   步长 1 向右：(5,0) 被 right 占 → 失败
-    //   步长 1 向左：(3,0) 空着 → 命中
-    // 旧行为会把它甩到下一行最左 (0,1)。
+    // 网格 6 列 6 行。t 在 (4,0)，右侧 (5,0) 与下方 (4,1) 都被占。
+    // 拖到 (4,0) 挤开 t：向右 (5,0) 被占失败，向左 (3,0) 空着命中。
     items.push_back(makePlacedItem("drag", TileSize::Small, 0, 5));
     items.push_back(makePlacedItem("right", TileSize::Small, 5, 0));  // 堵住向右
     items.push_back(makePlacedItem("below", TileSize::Small, 4, 1));  // 堵住向下
@@ -1024,11 +1001,8 @@ static void testAvoidanceDisplacedGoesUpWhenRowFull() {
 
     const TileLayoutResult result = calculateAvoidanceLayout(request);
     CHECK(result.complete());
-    // 被挤开的那块：列 3 的行 1 已满（左右都被同行占），
-    // 同一列向上 (3,0) 被 top 占着 → 继续向上无路；
-    // 但注意 (2,0)/(4,0) 是空的，仍是同一行吗？不是 —— 被挤项在第 1 行，不是第 0 行。
-    // 它的同一行（第 1 行）左右都满 → 梯队 3 看同一列 (3,0)：被 top 占 → 失败；
-    // 梯队 4 看同一列向下 (3,2)：空着 → 命中。
+    // 被挤项在第 1 行，同一行左右都满；梯队 3 看同一列向上 (3,0)
+    // 被 top 占，梯队 4 看同一列向下 (3,2) 空着，命中。
     const TilePlacement moved = placementOf(result, 3);
     CHECK(moved.column == 3 && moved.row == 2);
 }
@@ -1037,12 +1011,7 @@ static void testAvoidanceDisplacedGoesUpWhenRowFull() {
 // 而不是回卷到下一行最左。
 static void testAvoidanceDisplacedPrefersUpOverWrap() {
     std::vector<LaunchItem> items;
-    // 网格 6 列、6 行。t 在 (5,1)（最右列）。
-    // 拖到 (5,1) 挤开 t：
-    //   步长 1 向右：(6,1) 越界 → 失败
-    //   步长 1 向左：(4,1) 被 left 占 → 失败
-    //   步长 1 向上：(5,0) 空着 → 命中
-    // 旧行为会把它甩到下一行最左 (0,2)。
+    // t 在最右列 (5,1)，右侧越界、左侧被 left 占；向上 (5,0) 空，命中。
     items.push_back(makePlacedItem("left", TileSize::Small, 4, 1));
     items.push_back(makePlacedItem("t", TileSize::Small, 5, 1));
     items.push_back(makePlacedItem("drag", TileSize::Small, 0, 5));
@@ -1068,11 +1037,8 @@ static void testAvoidanceDisplacedPrefersUpOverWrap() {
 // 挤开位移必须限定在「同一行/同一列」，不应出现「旁边有位置却横跨整行」。
 static void testAvoidanceDisplacedNeverJumpsAcrossRowWhenAdjacentFree() {
     std::vector<LaunchItem> items;
-    // 8 列网格，第 0 行只有 (7,0) 有 t；其余全空。
-    // 拖到 (7,0) 挤开 t：
-    //   梯队 1（向右）越界失败
-    //   梯队 2（向左）：(6,0) 空 → 命中
-    // 旧行为会甩到 (0,1)。
+    // 8 列网格，第 0 行只有 (7,0) 有 t。挤开 t：向右越界失败，
+    // 向左 (6,0) 空，命中。
     items.push_back(makePlacedItem("t", TileSize::Small, 7, 0));
     items.push_back(makePlacedItem("drag", TileSize::Small, 0, 5));
 

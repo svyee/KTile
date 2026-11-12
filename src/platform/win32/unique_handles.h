@@ -14,7 +14,7 @@ namespace ktile {
 namespace platform {
 namespace win32 {
 
-// ---------------------------------------------------------------- 通用句柄
+// --- 通用句柄
 // 适用于 CloseHandle 类句柄（文件、事件、互斥体等）
 class UniqueHandle {
 public:
@@ -67,7 +67,7 @@ private:
     HANDLE handle_;
 };
 
-// ---------------------------------------------------------------- 互斥体
+// --- 互斥体
 // 用于单实例检测
 class UniqueMutex {
 public:
@@ -110,10 +110,10 @@ private:
     HANDLE handle_;
 };
 
-// ---------------------------------------------------------------- GDI 对象
+// --- GDI 对象
 //
-// Deleter 必须返回 void —— 而 Win32 的 DestroyIcon / DeleteObject / DestroyMenu
-// 都返回 BOOL。因此统一包一层 void 返回的适配器，绕开函数指针类型不匹配。
+// Deleter 必须返回 void，而 Win32 的 DestroyIcon / DeleteObject / DestroyMenu
+// 都返回 BOOL，因此统一包一层 void 返回的适配器，绕开函数指针类型不匹配。
 namespace detail {
 
 inline void destroyIconAdapter(HICON value) noexcept {
@@ -212,11 +212,10 @@ using UniqueHBRUSH = UniqueGdiObject<HBRUSH, &detail::deleteBrushAdapter>;
 using UniqueHFONT = UniqueGdiObject<HFONT, &detail::deleteFontAdapter>;
 using UniqueHMenu = UniqueGdiObject<HMENU, &detail::destroyMenuAdapter>;
 
-// ---------------------------------------------------------------- COM 指针
+// --- COM 指针
 //
-// 手写 COM 智能指针。不用 winrt::com_ptr（虽然它可用），
-// 原因：keep 代码自洽、零额外依赖、更容易控制 Win7 行为。
-//
+// 手写 COM 智能指针。不用 winrt::com_ptr（虽然它可用）：保持代码自洽、
+// 零额外依赖、便于控制 Win7 行为。
 template <typename T>
 class ComPtr {
 public:
@@ -297,22 +296,16 @@ private:
     T* ptr_;
 };
 
-// ---------------------------------------------------------------- 手写 COM 实现基类
+// --- 手写 COM 实现基类
 //
-// 替代 winrt::implements（后者在 VS2017 + 新 SDK 下无法编译）。
-//
-// 用法：
+// 替代 winrt::implements（后者在 VS2017 + 新 SDK 下无法编译）。用法：
 //   class MyDropTarget : public ComObjectBase<MyDropTarget, IDropTarget> {
-//   public:
-//       // 实现 IDropTarget 的四个方法（不要加 override，见下）
 //       HRESULT __stdcall DragEnter(IDataObject*, DWORD, POINTL, DWORD*) noexcept
 //       { return S_OK; }
 //       ...
 //   };
-//
-// 注意：派生类方法不要加 override 关键字 —— IDropTarget 是纯虚接口，
-// 但 MSVC 19.16 对多重继承下的 override 检查较严格，省略更省事。
-//
+// 派生类方法不要加 override：MSVC 19.16 对多重继承下的 override 检查
+// 较严格，省略更省事。
 template <typename Derived>
 class RefCounted {
 public:

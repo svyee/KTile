@@ -1,9 +1,8 @@
 ﻿// KTile - 核心数据模型
 //
-// 设计原则：
-//  1. 磁贴尺寸是一等公民，从第一天就进入数据模型，避免后期迁移
-//  2. 结构体一律提供构造函数（VS2017 不支持 C++20 指定初始化器）
-//  3. 仅依赖标准库，不引入任何平台/JSON 细节（保持领域层纯净）
+// 仅依赖标准库，不引入平台/JSON 细节（保持领域层纯净）。
+// 磁贴尺寸是一等公民；结构体一律提供构造函数（VS2017 不支持
+// C++20 指定初始化器）。
 //
 #pragma once
 
@@ -15,25 +14,18 @@
 namespace ktile {
 namespace core {
 
-// ================================================================ 常量
+// --- 常量
 
-// 数据结构版本。变更数据结构时递增，并配套迁移逻辑。
-//
-// v1 → v2：新增插件磁贴（ItemType::Plugin + pluginId + pluginParams）。
-// 旧文件没有这些字段，反序列化时保持默认值即可，不需要改写原文件。
-// v2 → v3：配置新增 activation.followLaunch（跟随启动清单）。同样是
-// 「缺字段走默认值（空表）」，读得进、不需要改写原文件。
-// v3 → v4：followLaunch 的条目可带 itemId（来源磁贴）与参数 / 工作目录 /
-// 管理员快照。老条目没有这些键，读出来就是「手动添加」的老语义，
-// 行为与 v3 完全一致，同样不需要迁移函数。
+// 数据结构版本，变更时递增并配套迁移。历次演进：
+// v2 加插件磁贴（Plugin + pluginId + pluginParams）；v3 加
+// activation.followLaunch；v4 让 followLaunch 条目带 itemId 与
+// 参数/工作目录/管理员快照。都只增字段，旧文件缺失字段走默认值
+// （followLaunch 为空表、老条目读成「手动添加」语义），不需要迁移
+// 函数，也不改写原文件。
 inline constexpr std::uint32_t kCurrentSchemaVersion = 4;
 
-// 网格容量约束（单位：格）
-//
-// 默认 8x6：这是启动器的初始窗口尺寸，能放下 8 列 6 行小格。
-// 窗口尺寸只由这里的配置决定，**不随拖拽变化** —— 拖到边缘不会撑大
-// 窗口，超出网格范围的落点会被夹回边界内。
-// 用户只能在设置界面里改这两项。
+// 网格容量约束（单位：格）。默认 8x6 即启动器初始窗口尺寸；窗口尺寸
+// 只由这里的配置决定，不随拖拽变化，越界落点被夹回边界内。
 inline constexpr std::uint16_t kDefaultGridColumns = 8;
 inline constexpr std::uint16_t kDefaultGridRows = 6;
 inline constexpr std::uint16_t kMinimumGridColumns = 3;
@@ -41,15 +33,7 @@ inline constexpr std::uint16_t kMinimumGridRows = 3;
 inline constexpr std::uint16_t kMaximumGridColumns = 16;
 inline constexpr std::uint16_t kMaximumGridRows = 16;
 
-// ================================================================ 磁贴尺寸
-//
-// 这是 KTile 相对 HLaunch 的核心差异点。
-// 小格基准 64x64 px，跨度以「小格」为单位：
-//   Small = 1x1 (64x64)   Small 内不显示名称，悬停时显示
-//   Wide  = 2x1 (128x64)  横向 2 格
-//   Tall  = 1x2 (64x128)  纵向 2 格
-//   Large = 2x2 (128x128) 占 4 格
-//
+// --- 磁贴尺寸（与 HLaunch 等分网格的核心差异点）
 enum class TileSize : std::uint8_t {
     Small = 0,   // 1 x 1 格，64 x 64 px
     Wide = 1,    // 2 x 1 格，128 x 64 px
@@ -78,11 +62,9 @@ inline std::uint16_t tileSpanRows(TileSize size) noexcept {
     return 1;
 }
 
-// 显示名的 key（菜单/下拉框用）。
-//
-// 为什么不直接返回文案：core 只到 base，不允许依赖 infrastructure，
-// 显示名统一由 UI 层查语言文件。尺寸标注（64x64 这类）也写进语言
-// 文件，换语言时连单位排版都能跟着变。
+// 显示名的 key（菜单/下拉框用）。core 不允许依赖 infrastructure，
+// 显示名由 UI 层查语言文件；尺寸标注也写进语言文件，换语言时
+// 连单位排版都能跟着变。
 inline const char* tileSizeLabelKey(TileSize size) noexcept {
     switch (size) {
         case TileSize::Small:  return "size.small";
@@ -107,14 +89,10 @@ inline int tileSizeToInt(TileSize size) noexcept {
     return static_cast<int>(size);
 }
 
-// ================================================================ 标题显示方式
+// --- 标题显示方式
 //
-// 每块磁贴可以单独决定「名字要不要一直显示」。
-//
-// 为什么不是全局一个开关就够：
-//   64x64 的小磁贴标题会盖住图标，很多用户希望它平时干净、移到上面才看名字；
-//   但同一个人摆在旁边的 128x128 大磁贴留白多，标题常驻反而更好用。
-//   全局开关只能二选一，于是做成「全局定基调 + 每项可覆盖」。
+// 全局定基调 + 每项可覆盖：64x64 小磁贴的标题会盖图标，悬停显示更
+// 干净；128x128 大磁贴留白多，常驻标题更实用。
 enum class TileLabelMode : std::uint8_t {
     FollowGlobal = 0,   // 跟随设置里的「默认显示标题」（新项目的默认）
     Always = 1,         // 始终显示
@@ -168,7 +146,7 @@ inline int tileLabelModeToIndex(TileLabelMode mode) noexcept {
     return static_cast<int>(mode);
 }
 
-// ================================================================ 项目类型
+// --- 项目类型
 
 enum class ItemType : std::uint8_t {
     Application = 0,
@@ -206,7 +184,7 @@ inline ItemType itemTypeFromKey(const std::string& key, bool* recognized = nullp
     return ItemType::Application;
 }
 
-// ================================================================ 启动项目
+// --- 启动项目
 
 struct LaunchItem {
     // 稳定唯一标识（UUID 字符串）。跨会话保持不变。
@@ -231,10 +209,9 @@ struct LaunchItem {
 
     // ---- 插件磁贴（type == Plugin 时有效）----
     //
-    // 只存插件 id 与少量参数，不存 manifest 内容：插件升级/改版后
-    // 磁贴跟着新 manifest 走，不需要迁移 items.json。
-    // 参数是扁平的字符串键值对（如 "city": "Beijing"），足够覆盖
-    // 天气城市、命令行开关等 v1 场景。
+    // 只存插件 id 与少量参数，不存 manifest 内容：插件升级后磁贴
+    // 跟着新 manifest 走，不需要迁移 items.json。参数是扁平字符串
+    // 键值对，覆盖天气城市、命令行开关等场景。
     std::optional<std::string> pluginId;
     std::vector<std::pair<std::string, std::string>> pluginParams;
 
@@ -258,12 +235,10 @@ struct LaunchItem {
         pluginParams.emplace_back(key, value);
     }
 
-    // 是否以管理员身份运行
     bool runAsAdministrator = false;
 
     // ---- 磁贴相关 ----
 
-    // 磁贴尺寸（大中小混排的核心字段）
     TileSize tileSize = TileSize::Small;
 
     // 磁贴自定义背景色（ARGB，可空表示使用主题色）
@@ -272,15 +247,12 @@ struct LaunchItem {
     // 标题显示方式（每项覆盖全局设置，见 TileLabelMode）
     TileLabelMode labelMode = TileLabelMode::FollowGlobal;
 
-    // 图标相对磁贴内框的缩放百分比（50~100）。
-    // 0 = 跟随全局统一设置（appearance.iconScalePercent，新项目默认）。
-    // 100% = 内框铺满（两侧共留 4px），越小图标越内敛。
-    // 注意：只影响「系统提取的方框图标」；用户导入的整图（铺满磁贴）
-    // 不受它约束 —— 那类图的价值就在于铺满。
+    // 图标相对磁贴内框的缩放百分比（50~100）。0 = 跟随全局
+    // appearance.iconScalePercent（新项目默认），100% = 内框铺满。
+    // 只影响系统提取的方框图标；用户导入的铺满整图不受约束。
     int iconScalePercent = 0;
 
-    // 网格坐标。使用行/列定位，比线性 slot 更适合二维跨度布局。
-    // 为空表示尚未分配位置，由布局引擎自动安置。
+    // 网格坐标（行/列），空 = 尚未分配，由布局引擎自动安置。
     std::optional<std::uint16_t> gridColumn;
     std::optional<std::uint16_t> gridRow;
 
@@ -289,7 +261,7 @@ struct LaunchItem {
     std::uint64_t launchCount = 0;
     std::optional<std::string> lastLaunchedAt;
 
-    // ---- 构造函数（替代 C++20 指定初始化器）----
+    // ---- 构造函数（VS2017 不支持 C++20 指定初始化器）----
     LaunchItem() = default;
 
     LaunchItem(std::string id_,
@@ -317,9 +289,7 @@ struct LaunchItem {
     }
 };
 
-// ================================================================ 分类页
-//
-// 对应 HLaunch 的 Tab。KTile 保留此概念以便分组管理。
+// --- 分类页（对应 HLaunch 的 Tab，保留用于分组管理）
 
 struct Tab {
     std::string id;
@@ -331,7 +301,7 @@ struct Tab {
     Tab(std::string id_, std::string name_) : id(std::move(id_)), name(std::move(name_)) {}
 };
 
-// ================================================================ 项目文档（items.json）
+// --- 项目文档（items.json）
 
 struct ItemsDocument {
     std::uint32_t schemaVersion = kCurrentSchemaVersion;
@@ -365,12 +335,10 @@ struct ItemsDocument {
     }
 };
 
-// ================================================================ 外观配置
+// --- 外观配置
 
-// 主窗口每次唤出时出现在哪里。
-//
-// 默认「跟随鼠标」：启动器的核心用法是「热键唤出 → 立刻点/打字」，
-// 窗口出现在手边比固定在屏幕中央少一次鼠标长距离移动。
+// 主窗口每次唤出时出现的位置。默认「跟随鼠标」：核心用法是热键唤出后
+// 立刻点/打字，窗口出现在手边比固定屏幕中央少一次鼠标移动。
 enum class WindowPlacement : std::uint8_t {
     Mouse = 0,        // 鼠标所在位置（默认）
     LeftBottom = 1,   // 工作区左下角
@@ -422,9 +390,8 @@ struct AppearanceConfig {
     std::int32_t lastWindowY = 0;
     bool lastWindowPositionValid = false;
 
-    // 当前皮肤（<data>\themes\<名称>.json 的显示名）。
-    // 空 = 用内置默认配色；文件被删时运行时回落默认值，不改写此名
-    //（用户恢复文件后选择仍然有效）。
+    // 当前皮肤（<data>\themes\<名称>.json 的显示名）。空 = 内置默认配色；
+    // 文件被删时运行时回落默认值但不回写此名，用户恢复文件后选择仍有效。
     std::string themeName;
 
     // 背景图（相对 data 目录的存储值，如 "themes\backgrounds\xx.jpg"；
@@ -434,77 +401,52 @@ struct AppearanceConfig {
     // 是否显示磁贴文字标签
     bool showTileLabels = true;
 
-    // 标题是否「默认显示」。
-    //
-    // 语义（与 showTileLabels 是两层开关）：
-    //   showTileLabels = false          → 一律不显示标题（总闸）
-    //   true  + alwaysShowTileLabels    → 所有尺寸的标题常驻显示
-    //   true  + !alwaysShowTileLabels   → 只有鼠标移入的磁贴才浮出标题
-    //
-    // 之所以与总闸分开：一个磁贴只有 64x64 时标题会盖住图标，
-    // 「平时干净、悬停才看名字」是很常见的偏好；但大磁贴留白多，
-    // 标题常驻更实用。给用户一个开关，而不是替他决定。
+    // 标题是否「默认显示」，与 showTileLabels 是两层开关：
+    // showTileLabels=false 一律不显示；true+本项 所有尺寸标题常驻；
+    // true+关 仅鼠标移入的磁贴浮出标题。小磁贴常驻盖图标、大磁贴
+    // 常驻更实用，交给用户选。
     bool alwaysShowTileLabels = true;
 
-    // 标签栏位置：false = 顶部（标题带下方，默认）；true = 底部（窗口下缘）。
-    //
-    // 窗口总高度公式不随此开关变化 —— 底部模式下标签条占据的高度
-    // 从网格上方平移到网格下方，磁贴可视行数不变，切换位置不会
-    // 引起窗口尺寸跳动。
+    // 标签栏位置：false = 顶部（默认），true = 底部（窗口下缘）。
+    // 窗口总高度公式不随此开关变化，磁贴可视行数不变，切换不引起
+    // 窗口尺寸跳动。
     bool tabBarAtBottom = false;
 
-    // 钉子（锁定窗口）。
-    //
-    // 语义：钉住时「点击窗口外部不隐藏」，方便把启动器当常驻面板用；
-    // 松开时恢复「点击外部即隐藏」的轻量弹出行为。
-    // 之所以放进 appearance 而不是 activation：它是窗口的显示行为，
-    // 跟着用户对窗口外观的偏好走，且需要跨会话记住。
+    // 钉住时点击窗口外部不隐藏（当常驻面板用），松开恢复点外即隐藏。
+    // 放进 appearance 而非 activation：它是窗口显示行为且需跨会话记住。
     bool pinned = false;
 
     // 主题强调色（ARGB）。空表示跟随系统。
     std::optional<std::uint32_t> accentColor;
 
-    // ---- 不透明度 ----
-    //
-    // windowOpacityPercent：主窗口整体不透明度，50~100，100 = 完全不透明。
-    //   走分层窗口（WS_EX_LAYERED）由系统统一合成 —— 窗口内容本身仍按
-    //   不透明绘制，因此与「每帧 Clear 到不透明底」的防残影铁律不冲突。
-    //   50 是下限：再低文字就没法读了，用户真的想要「几乎全透」应当去
-    //   用别的工具，而不是让启动器变成一块看不见的玻璃。
-    //
-    // tileOpacityPercent：磁贴背景不透明度，0~100。
-    //   -1 = 跟随皮肤（用皮肤 tileFill 自带的 alpha），这是默认值。
-    //   为什么默认跟随而不是固定一个数字：不同皮肤对磁贴底的浓淡有自己
-    //   的设计（「晨光」是 24% 白，深空是 24% 黑），固定值会让换皮肤后的
-    //   观感走形。用户一旦拖动过滑块，就按他的值来，不再跟皮肤。
+    // 不透明度。
+    // windowOpacityPercent：主窗口整体不透明度，50~100，走分层窗口
+    //   （WS_EX_LAYERED）系统合成，与每帧 Clear 到不透明底的防残影
+    //   规则不冲突；50 是文字可读性下限。
+    // tileOpacityPercent：磁贴背景不透明度，0~100；-1 = 跟随皮肤
+    //   tileFill 自带的 alpha（默认）。不同皮肤浓淡设计不同，固定值
+    //   会让换肤观感走形；用户拖过滑块后按用户的值，不再跟皮肤。
     std::int32_t windowOpacityPercent = 100;
     std::int32_t tileOpacityPercent = -1;
 
     // 所有磁贴的默认背景色（ARGB）。空 = 跟随皮肤 tileFill。
-    //
-    // 与单项 LaunchItem.tileColor 的关系：
-    //   单项显式色 > 这里的全局默认色 > 皮肤 tileFill。
-    // 之所以单独做一个全局字段：用户常常想一次性换掉所有格子的底色
-    //（例如整套改成深蓝），而不是逐块右键改 30 次。
-    // 选了颜色后不再套用 tileOpacityPercent —— 那个旋钮是给皮肤玻璃底
-    // 调的，套到用户亲手挑的实色上会让颜色变脏（与单项色的规则一致）。
+    // 优先级：单项 LaunchItem.tileColor > 这里的全局默认色 > 皮肤。
+    // 单独做全局字段是因为常需要一次性换掉所有格子底色。设置全局色后
+    // 不再套用 tileOpacityPercent，套到用户挑的实色上会让颜色变脏
+    // （与单项色规则一致）。
     std::optional<std::uint32_t> defaultTileColor;
 
-    // 图标相对磁贴内框的统一缩放百分比，50~100（默认 90）。
-    // 100% = 图标铺满内框（与未引入该设置前一致）；单项可在
-    // 编辑对话框里覆盖（LaunchItem.iconScalePercent，0=跟随这里）。
-    // 格子尺寸不变，只改格子里的图标 —— 磁贴布局完全不受影响。
+    // 图标统一缩放百分比，50~100（默认 90），100% = 图标铺满内框。
+    // 单项可在编辑对话框覆盖（LaunchItem.iconScalePercent，0 = 跟随这里）。
+    // 只改格子里的图标，磁贴布局与窗口尺寸不受影响。
     std::int32_t iconScalePercent = 90;
 
-    // 上次显示的是哪一个标签页（存 Tab 的 id，不是下标）。
-    //
-    // 为什么存 id 不存下标：页可以被删除、左右移动，下标一变动
-    // 「上次在第 3 页」就会指向另一页；id 是稳定的，找不到就退回第一页。
-    // 空串 = 还没记录过（首次运行）。
+    // 上次显示的标签页，存 Tab 的 id 而非下标：页可删可移，下标会指向
+    // 别的页，id 稳定。找不到退回第一页；空串 = 首次运行尚未记录。
     std::string activeTabId;
 };
 
-// ================================================================ 激活配置
+// --- 激活配置
 
 enum class HotkeyModifier : std::uint8_t {
     Alt = 0,
@@ -513,10 +455,8 @@ enum class HotkeyModifier : std::uint8_t {
     Win = 3,
 };
 
-// 唤醒方式：除了传统「修饰键 + 主键」，还支持两种手势。
-//
-// 手势需要低级键盘钩子（RegisterHotKey 无法表达），因此只在选中时
-// 才安装钩子 —— 默认的 Alt+Space/Ctrl+Space 仍是零开销的注册热键。
+// 唤醒方式。手势需要低级键盘钩子（RegisterHotKey 表达不了），只在
+// 选中时安装；默认的修饰键+主键仍是零开销注册热键。
 enum class HotkeyGesture : std::uint8_t {
     None = 0,        // 用 modifiers + key（RegisterHotKey）
     DoubleCtrl = 1,  // 双击 Ctrl
@@ -547,11 +487,8 @@ struct HotkeyConfig {
     HotkeyGesture gesture = HotkeyGesture::None;
 };
 
-// 设置界面提供的四种预设。
-//
-// 之所以用「预设」而不是让用户自由录制组合键：录制要处理修饰键、
-// 给用户反馈、冲突检测，收益却很低 —— 这四个覆盖了绝大多数诉求，
-// 也正好把两种手势和两种注册热键放在同一排选项里。
+// 设置界面提供的四种预设。用预设而非自由录制：录制要处理修饰键、
+// 反馈与冲突检测，收益低，这四个已覆盖绝大多数诉求。
 enum class HotkeyPreset : std::uint8_t {
     AltSpace = 0,
     CtrlSpace = 1,
@@ -598,23 +535,15 @@ inline HotkeyPreset hotkeyPresetOf(const HotkeyConfig& config) noexcept {
     return HotkeyPreset::AltSpace;
 }
 
-// 「跟随启动」的一条：KTile 启动时顺带拉起的程序。
-//
-// 为什么不直接存一份 LaunchItem：那条结构带着磁贴尺寸、颜色、标签归属
-// 等一整套磁贴字段，而这里只关心「怎么启动它」。分开还有个好处 ——
-// 清空磁贴、调整网格都不会波及这份清单。
-//
-// 两种来源共用一条结构，靠 itemId 是否为空区分：
-//
-//   手动添加（itemId 为空）—— 设置窗口里「添加…」进来的，界面只让填
-//     一个路径，下面是启动方式：默认按路径原样启动。
-//   从磁贴添加（itemId 非空）—— 启动前按 id 去磁贴里取当前值，
-//     **参数、工作目录、管理员设置全部跟着磁贴走**。下面的快照字段是
-//     「磁贴被删之后」的兜底：删磁贴表达的是「不想在面板上看到它」，
-//     不等于「不要开机启动」，所以条目留着，用快照继续能启动。
-//
-// 启动方式这几个字段两种来源都读，写的时候也只在有内容时写 ——
-// 手改配置给手动条目补一组参数同样生效，不需要另一套结构表达它。
+// 「跟随启动」的一条：KTile 启动时顺带拉起的程序。不直接存 LaunchItem：
+// 那条结构带磁贴尺寸、颜色、标签归属等一整套字段，这里只关心怎么启动；
+// 分开存也让清空磁贴、调整网格不波及此清单。
+// 两种来源靠 itemId 是否为空区分：手动添加（空）来自设置窗口「添加…」，
+// 只填一个路径，按 target 原样启动；从磁贴添加（非空）启动前按 id 取
+// 磁贴当前值，参数、工作目录、管理员设置全部跟着磁贴走。下面的快照
+// 字段是磁贴被删之后的兜底：删磁贴表达「不想在面板上看到它」，不等于
+// 「不要开机启动」，条目保留、靠快照继续能启动。快照字段两种来源都读，
+// 只在有内容时写入，手改配置给手动条目补参数同样生效。
 struct FollowLaunchEntry {
     // 显示名（空时界面按 target 推测）
     std::string name;
@@ -629,7 +558,6 @@ struct FollowLaunchEntry {
     std::string itemId;
 
     // ---- 添加时的快照（仅磁贴来源使用，磁贴消失后靠它启动）----
-
     std::vector<std::string> arguments;
     std::optional<std::string> workingDirectory;
     bool runAsAdministrator = false;
@@ -637,41 +565,36 @@ struct FollowLaunchEntry {
     bool fromTile() const noexcept { return !itemId.empty(); }
 };
 
-// 跟随启动列表的上限。定这个数不是为了省内存，而是防止配置被写坏
-// （或用户误粘一长串路径）之后每次启动都去拉起几百个进程。
+// 跟随启动列表的上限：不是省内存，是防配置写坏后每次启动拉起几百个进程。
 inline constexpr std::size_t kMaximumFollowLaunchItems = 32;
 
 struct ActivationConfig {
     HotkeyConfig hotkey;
 
-    // 是否开机自启
     bool startWithWindows = false;
 
-    // 跟随启动：KTile 启动时一并启动的外部程序，已经在运行的不重复启动。
+    // 跟随启动：KTile 启动时一并启动的外部程序，已在运行的不重复启动。
     std::vector<FollowLaunchEntry> followLaunch;
 
     // 是否启用屏幕边缘唤起（v2 功能，先留字段）
     bool screenEdgeEnabled = false;
 };
 
-// ================================================================ 应用总配置（config.json）
+// --- 应用总配置（config.json）
 
 struct ApplicationConfig {
     std::uint32_t schemaVersion = kCurrentSchemaVersion;
     AppearanceConfig appearance;
     ActivationConfig activation;
 
-    // 界面语言代码（"zh-Hans" / "en" / 后续新增的），空串或 "auto" = 跟随系统。
-    //
-    // 默认 auto 而不是直接写死语言：首次运行时按系统语言自动选，
-    // 之后用户在设置里显式选过就记住他的选择。
+    // 界面语言代码（"zh-Hans" / "en" / 后续新增），空串或 "auto" = 跟随系统。
+    // 默认 auto：首次运行按系统语言选，用户显式选过后记住其选择。
     std::string language = "auto";
 
-    // 是否启用诊断日志
     bool loggingEnabled = true;
 };
 
-// ================================================================ 校验常量
+// --- 校验常量
 
 // 名称/ID 长度上限
 inline constexpr std::size_t kMaximumNameLength = 256;

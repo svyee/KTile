@@ -1,39 +1,10 @@
-// KTile - UI 层：拖拽动画与落点解析
+// KTile - UI 层：拖拽动画与落点解析（LauncherWindow 实现之一）
 //
-// 本文件与 launcher_window.cpp / launcher_window_behavior.cpp 共同构成
-// LauncherWindow 实现。拆分目的：拖拽相关的状态机独立成文件，便于维护。
-//
-// ================================================================
-// 设计要点一：为什么用「偏移量插值」而不是「重算布局」
-// ================================================================
-//
-// 部分场景（回位、后续扩展的落位动画）需要磁贴平滑移动，直觉做法是
-// 每次变化就重排数组再整体重绘。但那样有两个问题：
-//   1. 磁贴位置是瞬变的，没有过渡，看起来是「跳」而不是「挪」
-//   2. 每帧重跑二维装箱算法，开销与磁贴数相关，且浮点结果可能微抖
-//
-// 这里改为：布局结果 layout_ 保持稳定（只在真正提交重排时才变），
-// 每块磁贴额外维护一个「视觉偏移」= 渲染位置 − 布局位置。
-//   - 位移动画 = 把偏移从当前值动到目标像素差
-//   - 「回位」动画 = 把偏移从当前值动回 0
-//   - 动画结束偏移归零，绘制结果与静态完全一致
-//
-// ================================================================
-// 设计要点二：为什么拖拽期间「不动任何磁贴」（对齐 Win10 行为）
-// ================================================================
-//
-// 早先的实现是：光标落到哪块磁贴，就把那块磁贴以及所有受牵连的磁贴
-// 预先「挤开」到最终位置。实际体验很糟 —— 用户只拖了一块 1x1，
-// 整个面板都在动，而且挪走的磁贴又看不出会停在哪，像是界面失控。
-//
-// 对照 Win10 开始菜单的实际行为，它的规则简单得多：
-//   - 拖拽中：被拖的磁贴跟着光标走，其余磁贴**原地不动**
-//   - 同时用一个虚线轮廓/色块标出「松手后会放在这里」
-//   - 松手：一次性重排，被压住的磁贴顺次腾挪让位
-//   - Esc 或拖回原位：取消，什么都不变
-//
-// 因此现在拖拽期间只做一件事：算落点、画虚线框。
-// 真正的排布变化全部推迟到 WM_LBUTTONUP 提交时发生。
+// 动画用「偏移量插值」：layout_ 只在真正提交重排时才变，每块磁贴维护
+// 视觉偏移 = 渲染位置 − 布局位置，动画只动偏移、结束归零，避免每帧
+// 重跑装箱算法（开销随磁贴数增长，且重排会让位置瞬变没有过渡）。
+// 拖拽期间其余磁贴原地不动、只画落点虚线框，对齐 Win10 行为；
+// 真正的排布推迟到松手提交。预先挤开整个面板的旧做法观感失控，已否决。
 //
 #include "ui/launcher_window.h"
 
@@ -46,20 +17,18 @@ namespace ktile {
 namespace ui {
 namespace {
 
-// 挤开动画时长（毫秒）。
-// Win10 磁贴约 200~250ms；取 200ms 在手感与响应速度间平衡。
+// 挤开动画时长：Win10 磁贴约 200~250ms，取 200ms 平衡手感与响应。
 constexpr std::uint32_t kReflowDurationMs = 200;
 
 // 回位动画时长（毫秒）。
 constexpr std::uint32_t kReturnDurationMs = 220;
 
-// 动画帧间隔（毫秒）。约 60fps。
-// 注意 Win7 的 SetTimer 精度约 15.6ms，实际帧率略低于 60，视觉上足够。
+// 动画帧间隔约 60fps。Win7 的 SetTimer 精度约 15.6ms，实际帧率略低，视觉足够。
 constexpr UINT kAnimationFrameMs = 16;
 
 }  // namespace
 
-// ================================================================ 偏移量读写
+// --- 偏移量读写
 
 void LauncherWindow::currentOffset(const std::size_t itemIndex,
                                    float& offsetX,
@@ -74,7 +43,7 @@ void LauncherWindow::currentOffset(const std::size_t itemIndex,
     offsetY = found->second.offsetY;
 }
 
-// ================================================================ 动画推进
+// --- 动画推进
 
 bool LauncherWindow::advanceAnimations() {
     if (animations_.empty()) {
@@ -121,13 +90,13 @@ void LauncherWindow::settleAnimations() {
     }
 }
 
-// ================================================================ 定时器
+// --- 定时器
 
 void LauncherWindow::ensureAnimationTimer() {
     if (hwnd_ == nullptr) {
         return;
     }
-    // 已经开着就不要再 SetTimer —— 重复设置会重置计时，导致掉帧
+    // 已经开着就不要再 SetTimer：重复设置会重置计时，导致掉帧
     if (animationTimerActive_) {
         return;
     }
@@ -143,7 +112,7 @@ void LauncherWindow::stopAnimationTimer() {
     animationTimerActive_ = false;
 }
 
-// ================================================================ 启动动画
+// --- 启动动画
 
 void LauncherWindow::startOffsetAnimation(const std::size_t itemIndex,
                                           const float toOffsetX,
@@ -151,8 +120,8 @@ void LauncherWindow::startOffsetAnimation(const std::size_t itemIndex,
                                           const std::uint32_t durationMs) {
     auto& animation = animations_[itemIndex];
 
-    // 起点取「当前偏移」，这样动画可以中途被打断并平滑改向 ——
-    // 用户快速划过多个落点时不会出现跳变。
+    // 起点取当前偏移，动画可中途打断并平滑改向：
+    // 用户快速划过多个落点时不会跳变。
     animation.fromX = animation.offsetX;
     animation.fromY = animation.offsetY;
     animation.toX = toOffsetX;
@@ -168,7 +137,7 @@ void LauncherWindow::startOffsetAnimation(const std::size_t itemIndex,
     ensureAnimationTimer();
 }
 
-// ================================================================ 落点解析
+// --- 落点解析
 
 core::Dropspot LauncherWindow::resolveDropspot(const std::size_t dragIndex,
                                                const int clientX,
@@ -186,7 +155,7 @@ core::Dropspot LauncherWindow::resolveDropspot(const std::size_t dragIndex,
     const float scale = dpiScale();
     const float xDip = static_cast<float>(clientX) / scale;
     const float yDip = static_cast<float>(clientY) / scale;
-    // 被拖项的跨度：落点区域按**被拖项**尺寸算（最终是它占在那里）
+    // 被拖项的跨度：落点区域按被拖项尺寸算（最终是它占在那里）
     std::uint16_t spanColumns = tileSpanColumns(items[dragIndex].tileSize);
     std::uint16_t spanRows = tileSpanRows(items[dragIndex].tileSize);
     std::uint16_t originColumn = 0;
@@ -209,12 +178,10 @@ core::Dropspot LauncherWindow::resolveDropspot(const std::size_t dragIndex,
     const float gridLeft = metrics_.outerPadding;
     const float gridTop = gridOriginY();
 
-    // ---- 步骤 1：命中了哪块磁贴 ----
-    //
-    // 注意：命中**被拖磁贴自己**时不能直接吸附回原点 ——
-    // 大磁贴（2x2 等）拖动小距离时，光标仍落在自身覆盖的另一格上，
-    // 若吸附到自身左上角，落点永远等于原点，表现为「拖不动」。
-    // 此时按用户意图应走步骤 2 的「磁贴左上角吸附」。
+    // ---- 命中了哪块磁贴 ----
+    // 命中被拖磁贴自己时不吸附回原点：大磁贴小幅拖动时光标仍落在自身
+    // 覆盖的另一格上，吸附到自身左上角则落点恒等于原点，表现为拖不动，
+    // 应走下面的左上角吸附。
     int column = 0;
     int row = 0;
     bool overTile = false;
@@ -232,14 +199,10 @@ core::Dropspot LauncherWindow::resolveDropspot(const std::size_t dragIndex,
     }
 
     if (!overTile) {
-        // ---- 步骤 2：没命中磁贴 —— 按「磁贴左上角」吸附到最近的格 ----
-        //
-        // 关键：用「光标 − 抓取偏移」（即磁贴当前视觉位置的左上角），
-        // 而不是光标本身。抓着磁贴中心拖时，光标在磁贴中央，
-        // 若按光标吸附，落点会比磁贴视觉位置偏右下约半格 ——
-        // 这正是「虚线框总是跑到右下角」的根源。
-        //
-        // 用 round（四舍五入）：磁贴扫过两格之间时贴合到更近的一侧。
+        // ---- 未命中磁贴：按「磁贴左上角」吸附到最近的格 ----
+        // 用「光标 − 抓取偏移」而不是光标本身：抓着磁贴中心拖时按光标
+        // 吸附，落点会比视觉位置偏右下约半格。round 让磁贴扫过两格
+        // 之间时贴合更近的一侧。
         const float tileLeft = xDip - dragGrabOffsetX_;
         const float tileTop = yDip - dragGrabOffsetY_;
         const float rawColumn = (tileLeft - gridLeft) / step;
@@ -254,10 +217,9 @@ core::Dropspot LauncherWindow::resolveDropspot(const std::size_t dragIndex,
         }
     }
 
-    // ---- 步骤 3：按被拖项跨度夹进网格范围 ----
-    //
-    // 允许落点落在网格「最后一个可见格」之外的空白带上 ——
-    // 夹取后会贴到最右下能放下的位置，这正是用户拖到右边空白时的期望。
+    // ---- 按被拖项跨度夹进网格 ----
+    // 允许落在最后一个可见格之外的空白带：夹取后贴到最右下能放下的
+    // 位置，正是用户拖到右边空白时的期望。
     const int maxColumn = static_cast<int>(gridColumns_) - static_cast<int>(spanColumns);
     const int maxRow = static_cast<int>(gridRows_) - static_cast<int>(spanRows);
     if (maxColumn >= 0 && column > maxColumn) {
@@ -299,14 +261,11 @@ core::Dropspot LauncherWindow::resolveDropspot(const std::size_t dragIndex,
     return spot;
 }
 
-// ---------------------------------------------------------------- 新项目的落点
+// --- 新项目的落点
 //
-// 「拖文件进来」和「拖磁贴」是两种手势，落点算法也不同：
-//   - 拖磁贴：抓着它的某一处，所以落点要减去「抓取偏移」，还要做四舍五入
-//     吸附（详见 resolveDropspot）
-//   - 拖文件：没有抓取偏移，用户心里的映射就是「光标在哪个格子，
-//     新图标就长在哪个格子」—— 因此直接取光标所在的格（向下取整），
-//     不四舍五入、不偏移。预览框与最终落点共用这一个函数，保证所见即所得。
+// 新项目的落点：拖文件没有抓取偏移，用户心里的映射是「光标在哪个格子，
+// 新图标就长在哪个格子」，直接取光标所在格（向下取整），不四舍五入。
+// 预览框与最终落点共用本函数，保证所见即所得。
 core::Dropspot LauncherWindow::resolveNewItemDropspot(
     const core::TileSize newItemSize, const int clientX,
     const int clientY) const {
@@ -325,8 +284,8 @@ core::Dropspot LauncherWindow::resolveNewItemDropspot(
     int column = static_cast<int>(std::floor((xDip - gridLeft) / step));
     int row = static_cast<int>(std::floor((yDip - gridTop) / step));
 
-    // 夹进网格：往右/下边缘外拖时贴到最右下放得下的位置
-    //（标题带那一行、最右侧的空白带都算合法落点，不必像素级瞄准）
+    // 夹进网格：拖到边缘外时贴到最右下放得下的位置
+    //（标题带那行、最右侧空白带都是合法落点，不必像素级瞄准）
     const int maxColumn =
         static_cast<int>(gridColumns_) - static_cast<int>(spot.spanColumns);
     const int maxRow =
@@ -347,7 +306,7 @@ core::Dropspot LauncherWindow::resolveNewItemDropspot(
     spot.column = static_cast<std::uint16_t>(column);
     spot.row = static_cast<std::uint16_t>(row);
 
-    // 落点是否压住了已有磁贴（决定要不要播让位预演）
+    // 落点是否压住已有磁贴（决定要不要播让位预演）
     for (const auto& placement : layout_.placements) {
         const bool overlap =
             spot.column < placement.column + placement.spanColumns &&
@@ -368,8 +327,8 @@ void LauncherWindow::previewDropForNewItem(const core::TileSize newItemSize,
         return;
     }
 
-    // 用一份临时副本算避让：里面有补上一个「还不存在的项」，
-    // 于是可以直接复用拖动磁贴那一套规则 —— 挤开的算法只有一份。
+    // 用一份临时副本加一个「还不存在的项」，直接复用拖磁贴的避让算法，
+    // 挤开的算法只有一份。
     std::vector<core::LaunchItem> probe = activeItems();
     materializeGridPositions(probe);
 
@@ -417,9 +376,8 @@ void LauncherWindow::updateDropspotPreview() {
     dropspotPreview_ = spot;
 
     if (changed) {
-        // 落点压到已有磁贴 → 给受影响磁贴播「挤开」动画；
-        // 落点是空白 → 所有磁贴回到原位（保持安静）。
-        // 这与 Win10 一致：悬停在已有图标上会挤开，悬停在空白上不动。
+        // 落点压到已有磁贴播挤开动画，落点是空白则全部回位保持安静，
+        // 与 Win10 行为一致。
         previewDisplacement(*dragSource_, spot);
         if (hwnd_ != nullptr) {
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -427,7 +385,7 @@ void LauncherWindow::updateDropspotPreview() {
     }
 }
 
-// ================================================================ 挤开预演
+// --- 挤开预演
 
 void LauncherWindow::applyDisplacementPreview(
     const std::map<std::size_t, std::pair<std::uint16_t, std::uint16_t>>&
@@ -478,12 +436,10 @@ void LauncherWindow::previewDisplacement(const std::size_t dragIndex,
         return;
     }
 
-    // 落点压到磁贴 → 计算避让布局，把「谁该让到哪」翻译成偏移动画。
-    // 只动画，不改 layout_；真正的提交仍在松手时做。
-    //
-    // 与提交路径（moveItemToSpot）一样，先把「屏幕上就是这么摆的」固化
-    // 成显式坐标再算避让 —— 否则没有坐标的磁贴会被当成新来的，
-    // 一股脑儿挤到落点附近，预演看起来就像整个面板都在动。
+    // 落点压到磁贴：算避让布局并把「谁该让到哪」翻译成偏移动画，
+    // 只动画不改 layout_，真正提交在松手时。与提交路径一样先固化
+    // 显式坐标，否则没坐标的磁贴会被当成新来的挤到落点附近，
+    // 预演看起来像整个面板都在动。
     std::vector<core::LaunchItem> probe = items;
     materializeGridPositions(probe);
 
@@ -513,7 +469,7 @@ void LauncherWindow::previewDisplacement(const std::size_t dragIndex,
     applyDisplacementPreview(targets, dragIndex);
 }
 
-// ================================================================ 回位
+// --- 回位
 
 void LauncherWindow::animateBackToLayout() {
     // 回位 = 所有在动或已偏移的磁贴偏移归零

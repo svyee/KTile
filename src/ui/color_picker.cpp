@@ -14,9 +14,9 @@ constexpr int kColumns = 8;
 constexpr int kRows = 6;
 constexpr int kColorCount = kColumns * kRows;
 
-// 8×6 基础色表，取值自 Windows「颜色」对话框（用户提供的截图）：
-// 按色谱列排布 —— 暖色 → 红粉紫 → 蓝 → 青绿 → 灰绿 → 灰/橄榄。
-// 换成内置弹板后保持同样的取色顺序，用户不必重新适应。
+// 8×6 基础色表，取值自 Windows「颜色」对话框：按色谱列排布
+// （暖色 → 红粉紫 → 蓝 → 青绿 → 灰绿 → 灰/橄榄），与系统弹板同序，
+// 用户不必重新适应。
 const std::uint32_t kPaletteColors[kColorCount] = {
     0xFFFFB900U, 0xFFFF8C00U, 0xFFF7630CU, 0xFFCA5010U,
     0xFFDA3B01U, 0xFFEF6950U, 0xFFD13438U, 0xFFFF4343U,
@@ -255,7 +255,7 @@ LRESULT CALLBACK paletteProc(const HWND hwnd, const UINT message,
                     (*ctx->onPick)(color);
                 }
             } else {
-                // 捕获期间点在弹板外（坐标可能为负）→ 关闭；
+                // 捕获期间点在弹板外（坐标可能为负）就关闭；
                 // 点在格间空隙不关，避免手抖。
                 RECT client{};
                 GetClientRect(hwnd, &client);
@@ -277,7 +277,7 @@ LRESULT CALLBACK paletteProc(const HWND hwnd, const UINT message,
         case WM_KILLFOCUS:
         case WM_ACTIVATE:
             // 焦点跑到别处（Alt+Tab、点其它程序）就收起，避免留下一个
-            // 悬空的弹板。注意只在真正失活时关，不能把激活消息也当关闭。
+            // 悬空的弹板。只在真正失活时关，激活消息不当关闭处理。
             if (message == WM_KILLFOCUS ||
                 LOWORD(wParam) == WA_INACTIVE) {
                 closePalette(hwnd, ctx);
@@ -406,8 +406,8 @@ void showColorPalette(const HWND owner, const HWND anchor,
     SetFocus(palette);
     SetCapture(palette);
 
-    // 本地模态循环（与设置窗口 / 编辑框同一套思路）：
-    // 只听“弹板是否还活着”，不碰线程级 WM_QUIT。
+    // 本地模态循环（与设置窗口同一思路）：只听弹板是否还活着，
+    // 不碰线程级 WM_QUIT。
     MSG message{};
     while (IsWindow(palette) && GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
@@ -436,7 +436,7 @@ void paintColorSwatch(const HDC dc, const RECT& rect,
     }
 
     if (!argb.has_value()) {
-        // 斜线表示「没有指定颜色」——与「浅灰也是一种颜色」区分开。
+        // 斜线表示「没有指定颜色」，与「浅灰也是一种颜色」区分开。
         HPEN slash = CreatePen(PS_SOLID, 1, RGB(140, 140, 140));
         if (slash != nullptr) {
             HGDIOBJ oldPen = SelectObject(dc, slash);

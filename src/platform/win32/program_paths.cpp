@@ -10,10 +10,8 @@ namespace platform {
 namespace win32 {
 namespace {
 
-// 去掉首尾空白。
-//
-// 用户在「修改项目」的目标框里手写路径时，前后带空格是常事（从别处
-// 复制过来的尤其多）。ShellExecute 不会替你裁，多一个空格就是「找不到」。
+// 去掉首尾空白。用户手写或粘贴的路径常带空格，ShellExecute 不会裁，
+// 多一个空格就是「找不到」。
 std::wstring trimSpaces(const std::wstring& value) {
     const std::size_t begin = value.find_first_not_of(L" \t\r\n");
     if (begin == std::wstring::npos) {
@@ -24,10 +22,7 @@ std::wstring trimSpaces(const std::wstring& value) {
 }
 
 // 展开 %windir% 这类环境变量；没有百分号就原样返回。
-//
-// 与解析 .lnk 时同一套处理（application.cpp 的 resolveShortcut）：系统
-// 快捷方式里常见 %ProgramFiles%\...，不展开 shell 也认，但那会把「路径
-// 到底指向哪儿」藏起来，判断「是否已在运行」时更没法比对。
+// 与 .lnk 解析（application.cpp resolveShortcut）同一套处理，路径才好比对。
 std::wstring expandEnvironment(const std::wstring& value) {
     if (value.find(L'%') == std::wstring::npos) {
         return value;
@@ -79,7 +74,7 @@ bool isProgramRelativePath(const std::wstring& path) {
     if (trimmed.find(L"://") != std::wstring::npos) {
         return false;
     }
-    // C:\... / C:relative —— 带盘符就是绝对（或盘符相对，交给系统）
+    // C:\... / C:relative：带盘符就是绝对（或盘符相对，交给系统）
     if (trimmed.size() >= 2 && trimmed[1] == L':') {
         return false;
     }
@@ -87,9 +82,8 @@ bool isProgramRelativePath(const std::wstring& path) {
     if (trimmed.front() == L'\\' || trimmed.front() == L'/') {
         return false;
     }
-    // 裸名字（notepad.exe / office.farxin.cn）没给「在哪儿」的线索，
-    // 交给 ShellExecute 走 PATH 解析 —— 当成相对路径会让原本能用的
-    // 「notepad.exe」突然变成「<exe目录>\notepad.exe 不存在」。
+    // 裸名字（notepad.exe）没给位置线索，交给 ShellExecute 走 PATH 解析；
+    // 当成相对路径会让原本能用的命令指向 exe 目录下的不存在文件。
     if (trimmed.find_first_of(L"\\/") == std::wstring::npos) {
         return false;
     }

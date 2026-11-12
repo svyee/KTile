@@ -79,7 +79,7 @@ std::string toUtf8(const std::string& raw) {
 
 }  // namespace
 
-// ================================================================ 序列化
+// --- 序列化
 
 std::string ConfigStore::serializeItems(const core::ItemsDocument& document) {
     JsonWriter writer;
@@ -186,8 +186,8 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
                         config.appearance.defaultTileColor);
     writer.member("iconScalePercent", config.appearance.iconScalePercent);
     writeOptionalUint32(writer, "accentColor", config.appearance.accentColor);
-    // 上次所在页（存 id）。空串代表还没有记录 —— 照样写出去，
-    // 保持 config.json 的键集合稳定，便于用户手改对照。
+    // 上次所在页（存 id）。空串代表还没记录，照样写出保持键集合稳定，
+    // 便于手改对照。
     writer.member("activeTabId", config.appearance.activeTabId);
     writer.endObject();
 
@@ -197,20 +197,15 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     writer.member("screenEdgeEnabled", config.activation.screenEdgeEnabled);
 
     // ---- 跟随启动 ----
-    //
-    // 即使为空也写出去：键集合稳定（用户手改时能照着补），也让「清空」
-    // 这件事在文件里看得出来，而不是神秘地消失。
+    // 即使为空也写出：键集合稳定（手改时可照着补），清空在文件里也看得见。
     writer.key("followLaunch").beginArray();
     for (const auto& entry : config.activation.followLaunch) {
         writer.beginObject();
         writer.member("name", entry.name);
         writer.member("target", entry.target);
-        // 来源与启动方式：手动添加的条目这几项都是空的，写出来是四条
-        // 永远为默认值的键 —— 只在有内容时写，「只有 name + target」的
-        // 干净形状才对得上用户的认知。
-        //
-        // 反过来，手改配置给手动条目写了 arguments 也能存住：启动时两条
-        // 来源走同一段读取代码，写的时候不该把它们区别对待。
+        // 来源与启动方式只在有内容时写：手动条目写四条恒为默认值的键并不
+        // 对。反过来，手改给手动条目写了 arguments 也能存住：读取走同一段
+        // 代码，写出时不区别对待。
         if (!entry.itemId.empty()) {
             writer.member("itemId", entry.itemId);
         }
@@ -251,13 +246,13 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     return writer.take();
 }
 
-// ================================================================ 反序列化
+// --- 反序列化
 
 LoadResult<core::ItemsDocument>
 ConfigStore::deserializeItems(const std::string& text) {
     LoadResult<core::ItemsDocument> result;
     result.value = core::ItemsDocument();
-    // 失败路径也保证有默认 Tab —— 调用方可无条件假定 tabs 非空。
+    // 失败路径也保证有默认 Tab，调用方可无条件假定 tabs 非空。
     result.value.ensureDefaultTab();
 
     const auto parsed = parseJson(text);
@@ -276,12 +271,10 @@ ConfigStore::deserializeItems(const std::string& text) {
 
     const JsonValue& root = parsed.root;
 
-    // 读成功就盖成当前版本号（与 radial_store 同一策略）。
-    //
-    // 这里没有迁移函数，也不需要：字段缺失走默认值、认不出的枚举回落、
-    // 越界值夹取，老文件本来就能读。既然如此，让 schemaVersion 停在旧值
-    // 只会让「文件里到底有没有 followLaunch 这种字段」失去判断依据 ——
-    // 尤其是它下次保存时会被原样写回去，版本号永远不动。
+    // 读成功就盖成当前版本号（与 radial_store 同一策略）。没有迁移函数，
+    // 也不需要：字段缺失走默认值、认不出的枚举回落、越界值夹取，老文件
+    // 本来就能读。让版本号停在旧值只会失去「文件按哪版结构解释」的判断
+    // 依据，下次保存又原样写回，版本号永远不动。
     result.value.schemaVersion = core::kCurrentSchemaVersion;
 
     const JsonValue& tabs = root.find("tabs");
@@ -435,10 +428,9 @@ ConfigStore::deserializeConfig(const std::string& text) {
     }
 
     const JsonValue& root = parsed.root;
-    // 读成功就盖成当前版本号：字段缺失走默认值、认不出的枚举回落、越界值
-    // 夹取，老文件本来就能读，不需要迁移函数。反过来，让版本号停在文件里
-    // 的旧值只会让「这份配置到底按哪版结构解释」失去判断依据 —— 下次保存
-    // 又会把旧值原样写回去，那它永远不动。
+    // 读成功就盖成当前版本号：字段缺失走默认值、枚举回落、越界夹取，老
+    // 文件本来就能读，不需要迁移函数。让版本号停在旧值只会失去「按哪版
+    // 结构解释」的判断依据，下次保存又原样写回，那它永远不动。
     result.value.schemaVersion = core::kCurrentSchemaVersion;
     result.value.loggingEnabled = root.find("loggingEnabled").asBool(true);
     result.value.language = root.find("language").asString();
@@ -474,10 +466,10 @@ ConfigStore::deserializeConfig(const std::string& text) {
             appearance.find("backgroundImage").asString();
 
         config.showTileLabels = appearance.find("showTileLabels").asBool(true);
-        // 老配置里没有这一项 —— 默认 true（标题常驻），与产品默认一致
+        // 老配置没有这一项，默认 true（标题常驻），与产品默认一致
         config.alwaysShowTileLabels =
             appearance.find("alwaysShowTileLabels").asBool(true);
-        // 老配置里没有这一项 —— 默认 false（标签栏在顶部），行为不变
+        // 老配置没有这一项，默认 false（标签栏在顶部），行为不变
         config.tabBarAtBottom =
             appearance.find("tabBarAtBottom").asBool(false);
 
@@ -540,7 +532,7 @@ ConfigStore::deserializeConfig(const std::string& text) {
         config.screenEdgeEnabled = activation.find("screenEdgeEnabled").asBool(false);
 
         // 跟随启动：缺键 = 空表（v2 及更老的配置都走这里）。
-        // 只收有 target 的条目，并夹到上限 —— 手改配置写坏了不至于每次
+        // 只收有 target 的条目，并夹到上限；手改配置写坏了不至于每次
         // 启动都去拉几十个进程。
         const JsonValue& follow = activation.find("followLaunch");
         if (follow.isArray()) {
@@ -624,7 +616,7 @@ ConfigStore::deserializeConfig(const std::string& text) {
     return result;
 }
 
-// ================================================================ 文件读写
+// --- 文件读写
 
 bool ConfigStore::readFileText(const std::wstring& path, std::string& out) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,

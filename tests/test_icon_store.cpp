@@ -1,14 +1,8 @@
 // KTile - 自定义图标仓库测试
 //
-// 覆盖「用户从编辑对话框选一张图 → 存成图标文件」这条链路：
-//   1. 解码 → **按原图比例**缩放到最长边 128（不裁剪、不压扁）
-//   2. 编码为 PNG
-//   3. 落盘到 <data>\res，返回值是可移植的相对路径
-//   4. 相对路径能解析回真实文件，且能被重新解码回同样比例
-//
-// 为什么不靠 UI 点一遍来验证：文件选择框是模态的系统对话框，
-// 自动化点不动。把「导入」这件事单独测掉，UI 那边只需验证
-// 「点了预览会调用它」——两者加起来覆盖完整。
+// 覆盖「选图 → 存成图标文件」链路：按原图比例缩放到最长边 128（不裁剪）、
+// PNG 编码、落盘到 <data>\res 并返回可移植相对路径、相对路径可解析回真实
+// 文件并重新解码。文件选择框是模态系统对话框点不动，导入单独测。
 //
 #include "platform/win32/icon_store.h"
 
@@ -38,12 +32,10 @@ void check(bool condition, const char* expression, int line) {
 
 #define CHECK(cond) check((cond), #cond, __LINE__)
 
-// ---------------------------------------------------------------- 测试素材
+// --- 测试素材
 
-// 手写一张 24bpp BMP：三条色带。
-//   horizontal = false → 左红 / 中绿 / 右蓝（竖带）
-//   horizontal = true  → 上红 / 中绿 / 下蓝（横带）
-// 用 BMP 而不是 PNG 是为了不依赖任何编码器 —— 测试要能独立跑。
+// 手写 24bpp BMP 三条色带：horizontal = false 竖带（左红/中绿/右蓝），
+// true 横带（上红/中绿/下蓝）。用 BMP 是为了不依赖任何编码器。
 bool writeBandedBmp(const std::wstring& path, const int width,
                     const int height, const bool horizontal = false) {
     const int rowBytes = width * 3;
@@ -79,8 +71,7 @@ bool writeBandedBmp(const std::wstring& path, const int width,
                 static_cast<std::size_t>(pixelOffset) +
                 static_cast<std::size_t>(y) * (rowBytes + padding) + x * 3;
             const int third = horizontal ? height / 3 : width / 3;
-            // BMP 自下而上存：文件里 y=0 是屏幕上最底下一行，
-            // 所以「横带」要按 height-1-y 判断段位。
+            // BMP 自下而上存，横带要按 height-1-y 判断段位
             const int position = horizontal ? (height - 1 - y) : x;
             const int band = position < third
                                  ? 0
@@ -112,7 +103,6 @@ void ensureDirectoryExists(const std::wstring& path) {
 }
 
 void removeTree(const std::wstring& path) {
-    // 测试用完就清掉，别在 build 目录里留垃圾
     WIN32_FIND_DATAW data{};
     const std::wstring pattern = path + L"\\*";
     HANDLE find = FindFirstFileW(pattern.c_str(), &data);
@@ -142,9 +132,9 @@ std::wstring executableDirectory() {
     return slash == std::wstring::npos ? path : path.substr(0, slash);
 }
 
-// ---------------------------------------------------------------- 用例
+// --- 用例
 
-// 取像素（越界返回 0，便于断言失败时给出可读信息）
+// 越界返回 0，断言失败时信息可读
 std::uint32_t pixelAt(const ImagePixels& pixels, const int x, const int y) {
     if (x < 0 || y < 0 || x >= pixels.width || y >= pixels.height) {
         return 0U;
@@ -157,10 +147,8 @@ std::uint32_t greenOf(const std::uint32_t p) { return (p >> 8) & 0xFFU; }
 std::uint32_t blueOf(const std::uint32_t p) { return p & 0xFFU; }
 std::uint32_t alphaOf(const std::uint32_t p) { return (p >> 24) & 0xFFU; }
 
-// 横图（2:1）→ 存成 128x64：**比例必须保住**，三条竖带一条都不能丢。
-//
-// 这是「让用户选的图铺满磁贴」的前提：只要比例还在，把图铺进同比例的
-// 磁贴内框就能整张图完整可见；一旦在导入时裁成正方形，构图就永久丢了。
+// 横图（2:1）存成 128x64，比例必须保住：只要比例在，铺进同比例磁贴
+// 内框就能完整可见；导入时裁成正方形则构图永久丢失。
 void testImportKeepsWideAspect() {
     const std::wstring root = executableDirectory() + L"\\icon_store_work";
     ensureDirectoryExists(root);
@@ -186,7 +174,7 @@ void testImportKeepsWideAspect() {
     CHECK(absolute.rfind(root, 0) == 0);
     CHECK(GetFileAttributesW(absolute.c_str()) != INVALID_FILE_ATTRIBUTES);
 
-    // 长边缩到 128、短边按比例 → 128x64（旧实现会硬缩成 128x128）
+    // 长边缩到 128、短边按比例 → 128x64
     ImagePixels pixels;
     CHECK(decodeImageFile(absolute, &pixels));
     CHECK(pixels.width == 128);
@@ -196,9 +184,8 @@ void testImportKeepsWideAspect() {
         return;
     }
 
-    // 不裁剪：源图 200x100 的竖带边界在 66 / 133，缩放后落在 42 / 85。
-    // 若实现成「拉伸成正方形」或「居中裁成方形」，这三条不可能同时
-    // 分别是红 / 绿 / 蓝。
+    // 不裁剪：源图 200x100 的竖带边界缩放后落在 42 / 85。若拉伸成
+    // 正方形或居中裁剪，三条带不可能同时是红 / 绿 / 蓝。
     const std::uint32_t left = pixelAt(pixels, 6, 32);
     const std::uint32_t middle = pixelAt(pixels, 64, 32);
     const std::uint32_t right = pixelAt(pixels, 121, 32);
@@ -213,10 +200,8 @@ void testImportKeepsWideAspect() {
     removeTree(root);
 }
 
-// 竖图（1:2）→ 存成 64x128：上 / 中 / 下三条横带全部保留。
-//
-// 这条直接对应「1x2 磁贴上整张图铺满」：源图最上和最下两行都还在，
-// 说明导入没有把图裁掉任何一段。
+// 竖图（1:2）存成 64x128，对应 1x2 磁贴铺满：上下两端像素都还在，
+// 说明导入没裁掉任何一段。
 void testImportKeepsTallAspect() {
     const std::wstring root = executableDirectory() + L"\\icon_store_work";
     ensureDirectoryExists(root);

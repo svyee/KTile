@@ -1,25 +1,10 @@
 ﻿// KTile - 皮肤（配色主题）
 //
-// 设计取舍：
-//
-// 1. JSON 只暴露 9 个语义键（windowBackground / accent / text /
-//    tileFill / tileHover / tilePressed / tileBorder / tileHoverBorder /
-//    backgroundDim），其余约 30 个颜色全部由这几个键**派生**
-//    （如「标签未选中文字 = text 的 62% 透明度」「拖入落点框 = accent
-//    的 20%」）。手改皮肤文件的人面对 9 个键就够了，40 个键反而没人改得动。
-//
-// 2. 派生规则与历史配色逐值对齐：default ThemeColors 的每个派生结果
-//    都等于重构前 launcher_window.cpp 里的编译期常量 —— 「经典深空」
-//    皮肤渲染结果与升级前逐像素一致。
-//
-// 3. 皮肤文件是 UTF-8 JSON，存 <data>\themes\<显示名>.json，
-//    用户可直接手动编辑；config.json 只存皮肤显示名，不内联颜色。
-//
-// 4. 预置皮肤默认按「深底 + 高对比文字」设计 —— 界面上的文字/描边
-//    大量使用 text 的低 alpha 形式，浅色底会糊。另提供一套亮色方案
-//    （晨光）：派生色规则完全一样（低 alpha 的深色 = 淡灰），
-//    只是方向反过来；标题底衬、跟手磁贴、背景压暗层由 lightSurface()
-//    自动切换黑白方向，皮肤 JSON 不需要额外开关。
+// JSON 只暴露 9 个语义键，其余约 30 个颜色全部由它们派生；派生规则与
+// 历史配色逐值对齐，「经典深空」渲染与升级前逐像素一致。皮肤文件为
+// UTF-8 JSON（<data>\themes\<显示名>.json），config.json 只存显示名。
+// 预置皮肤默认深底 + 高对比文字（界面大量使用 text 低 alpha 形式，
+// 浅色底会糊）；亮暗方向由 lightSurface() 自动切换，JSON 无需额外开关。
 #pragma once
 
 #include <cstdint>
@@ -32,7 +17,7 @@ namespace ui {
 // 一套完整的皮肤配色。前 9 个字段是「语义键」（可出现在皮肤 JSON 里），
 // 其余为派生色（只读视图）。
 struct ThemeColors {
-    // ---- JSON 语义键 ----
+    // --- JSON 语义键 ---
     std::uint32_t windowBackground = 0xFF1E1E1E;
     std::uint32_t accent           = 0xFF4FA3FF;  // 强调色（选中/激活/焦点）
     std::uint32_t text             = 0xFFFFFFFF;  // 文字基准色
@@ -47,12 +32,9 @@ struct ThemeColors {
         return (alpha << 24) | (color & 0x00FFFFFFU);
     }
 
-    // 背景是否为浅色（亮色皮肤）。
-    //
-    // 派生色据此决定「往白里混还是往黑里混」：标题底衬、跟手磁贴底色、
-    // 背景图压暗层这三处如果写死黑色，亮色皮肤上会出现黑块/深色文字
-    // 糊在黑底上。用亮度判定而不是给皮肤 JSON 多加一个 isLight 键 ——
-    // 手改皮肤的人只填颜色就已经能表达亮暗，不必再教他一个开关。
+    // 背景是否为浅色（亮色皮肤）。派生色据此决定往白还是往黑混：
+    // 标题底衬、跟手磁贴底色、背景压暗层若写死黑色，亮色皮肤上会糊成
+    // 黑块。用亮度判定而不加 isLight 键：手改皮肤的人填颜色已能表达亮暗。
     bool lightSurface() const noexcept {
         const float r = static_cast<float>((windowBackground >> 16) & 0xFFU);
         const float g = static_cast<float>((windowBackground >> 8) & 0xFFU);
@@ -62,13 +44,12 @@ struct ThemeColors {
         return (0.299F * r + 0.587F * g + 0.114F * b) > 148.0F;
     }
 
-    // ---- 派生色 ----
+    // --- 派生色 ---
     std::uint32_t labelText() const noexcept { return text; }
 
-    // 磁贴标题底衬（scrim）：把标题从图标内容里「拉」出来。
-    // 与磁贴底同色相、alpha 拉高 —— 深色皮肤得到 55%/80% 黑
-    // （与历史常量 0x8C000000 / 0xCC000000 逐值一致），
-    // 亮色皮肤得到 55%/80% 白，深色标题同样读得清。
+    // 磁贴标题底衬（scrim）：把标题从图标内容里「拉」出来。与磁贴底
+    // 同色相、alpha 拉高：深色皮肤得到 55%/80% 黑（与历史常量
+    // 0x8C000000 / 0xCC000000 逐值一致），亮色皮肤得到同值白。
     std::uint32_t labelScrim() const noexcept {
         return withAlphaOf(tileFill, 0x8C);
     }
@@ -114,10 +95,9 @@ struct ThemeColors {
     std::uint32_t dropNewFill() const noexcept { return withAlphaOf(accent, 0x33); }
     std::uint32_t dropNewBorder() const noexcept { return withAlphaOf(accent, 0xCC); }
 
-    // 跟手磁贴 / 键盘选中框
-    // 跟手磁贴底色：与磁贴底同色相。深色皮肤沿用历史的 40% 黑
-    // （0x66000000），亮色皮肤则提到接近不透明 —— 白色卡片半透明
-    // 会像「破了洞」，靠放大与阴影表现脱离网格就够了。
+    // 跟手磁贴 / 键盘选中框。底色与磁贴底同色相：深色皮肤沿用历史的
+    // 40% 黑（0x66000000），亮色皮肤提到接近不透明，半透明白卡片
+    // 在亮底上像「破了洞」。
     std::uint32_t liftedFill() const noexcept {
         return withAlphaOf(tileFill, lightSurface() ? 0xF0 : 0x66);
     }
@@ -148,12 +128,12 @@ inline std::uint32_t withAlpha(std::uint32_t color, std::uint32_t alpha) {
     return ThemeColors::withAlphaOf(color, alpha);
 }
 
-// ---- 颜色文本格式（皮肤 JSON 用）----
+// --- 颜色文本格式（皮肤 JSON 用）---
 // "#RRGGBB" / "#AARRGGBB" / 无 # 前缀均可；parse 失败返回 false
 bool parseHexColor(const std::string& text, std::uint32_t* out);
 std::string formatHexColor(std::uint32_t argb);
 
-// ---- 目录与文件 ----
+// --- 目录与文件 ---
 // 数据根目录注入（与 icon_store::setIconStoreRoot 同一模式）
 void setThemesRoot(const std::wstring& dataDirectory);
 std::wstring themesDirectory();       // <data>\themes
@@ -174,8 +154,8 @@ bool loadThemeFile(const std::wstring& path, ThemeColors* out,
 bool saveThemeFile(const std::wstring& path, const ThemeColors& theme,
                    const std::wstring& displayName);
 
-// 首次启动：把内置预置写进 themes 目录（已存在的文件不覆盖 ——
-// 用户改过预设的话，升级不会冲掉他的修改）
+// 首次启动：把内置预置写进 themes 目录。已存在的文件不覆盖，
+// 用户改过预设的话，升级不会冲掉他的修改。
 void ensurePresetThemesExist();
 
 // 按显示名找皮肤（与 enumerateThemes 的匹配规则一致），找不到返回 false
