@@ -27,7 +27,7 @@ enum class TileMenuCommand : UINT {
     Run = 3005,               // 运行/打开
     RunAsAdministrator = 3006, // 以管理员身份运行
     OpenFileLocation = 3007,   // 打开文件所在位置
-    ToggleFollowStartup = 3008, // 开机时跟随启动（勾选切换）
+    ToggleFollowStartup = 3008, // 跟随启动（勾选切换）
 
     // ---- 磁贴布局 ----
     ResizeSmall = 3001,

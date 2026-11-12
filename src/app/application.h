@@ -49,12 +49,14 @@ const wchar_t* applicationWindowTitle();
 //   1.2.0 = 轮盘菜单（花瓣环形菜单 + 按应用方案 + 设置页与编辑对话框）。
 //   1.3.0 = 多语言（中 / 英）、轮盘插件（按应用换轮盘）、圆盘收敛为一份
 //            通用轮盘 + 进程黑名单、抑制键、扇区自带 SVG 图标。
+//   1.3.1 = 跟随启动（设置里手动添加 + 磁贴右键勾选，按磁贴的参数与权限
+//            启动）、磁贴目标支持相对 exe 目录的路径。
 // 改这里时记得同步 app.rc 里的 VERSIONINFO
 //  （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
-inline constexpr const wchar_t* kApplicationVersion = L"1.3.0";
+inline constexpr const wchar_t* kApplicationVersion = L"1.3.1";
 inline constexpr int kApplicationVersionMajor = 1;
 inline constexpr int kApplicationVersionMinor = 3;
-inline constexpr int kApplicationVersionPatch = 0;
+inline constexpr int kApplicationVersionPatch = 1;
 inline constexpr const wchar_t* kSingleInstanceMutexName =
     L"KTile.SingleInstance.{8F3A1C2D-4B5E-4A6F-9C8D-7E6F5A4B3C2D}";
 inline constexpr const wchar_t* kStartupRegistryValueName = L"KTile";
@@ -212,8 +214,8 @@ private:
 
     // 跟随启动：把 config_.activation.followLaunch 里的程序逐个拉起。
     //
-    // 已经在运行（按完整映像路径判定）的跳过 —— 开机时这些程序往往
-    // 已经被系统或用户自己启动过，再拉一次就是两个实例。
+    // 已经在运行（按完整映像路径判定）的跳过 —— 不管是开机自启还是手动
+    // 拉起 KTile，这些程序往往早就开着，再拉一次就是两个实例。
     // 逐条写日志：这是「为什么我的程序没起来」唯一的线索。
     //
     // 条目分两种来源，靠 FollowLaunchEntry::itemId 区分：手动添加的只认

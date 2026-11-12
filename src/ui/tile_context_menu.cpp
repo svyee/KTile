@@ -36,7 +36,7 @@ constexpr std::size_t kMaxTabMenuEntries = 32;
 //     运行/打开
 //     以管理员身份运行     （仅应用类型可用）
 //     打开文件所在位置     （网址类型不可用）
-//     开机时跟随启动 ✓     （仅应用类型可用；已添加的显示勾，再点即移除）
+//     跟随启动 ✓           （仅应用类型可用；已添加的显示勾，再点即移除）
 //     ─────────────
 //     磁贴大小 >
 //     标题显示 >
@@ -87,12 +87,12 @@ TileMenuCommand showTileContextMenu(HWND owner,
         T("tilemenu.openLocation"),
         item.type != core::ItemType::Url));
 
-    // ---- 开机时跟随启动 ----
+    // ---- 跟随启动 ----
     //
     // 勾选式：已加入清单的打勾，再点一次就是移除 —— 与设置窗口里的
     // 「移除」等效，省得为一个勾去翻两层设置页。
     //
-    // 只对可执行目标开放：网址、文件夹在开机时自动弹出来是骚扰；
+    // 只对可执行目标开放：网址、文件夹在 KTile 启动时自动弹出来是骚扰；
     // 插件磁贴没有可执行文件，也无从「启动」。
     PopupMenuEntry follow = PopupMenuEntry::radio(
         static_cast<UINT>(TileMenuCommand::ToggleFollowStartup),
