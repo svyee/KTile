@@ -27,6 +27,7 @@ enum class TileMenuCommand : UINT {
     Run = 3005,               // 运行/打开
     RunAsAdministrator = 3006, // 以管理员身份运行
     OpenFileLocation = 3007,   // 打开文件所在位置
+    ToggleFollowStartup = 3008, // 开机时跟随启动（勾选切换）
 
     // ---- 磁贴布局 ----
     ResizeSmall = 3001,
@@ -65,14 +66,23 @@ enum class TileMenuCommand : UINT {
 // tabNames / activeTabIndex 用于「移动到其他页面」子菜单：
 // 只有一页时不显示该子菜单（无处可移）。目标页下标由返回值减去
 // MoveToTabBase 得到。
+//
+// followingStartup 表示这块磁贴当前是否在跟随启动清单里：
+// 菜单项据此打勾，再点一次就是取消（与设置窗口里的移除等效）。
 TileMenuCommand showTileContextMenu(HWND owner,
                                     POINT screenPosition,
                                     const core::LaunchItem& item,
                                     const std::vector<std::wstring>& tabNames,
-                                    std::size_t activeTabIndex);
+                                    std::size_t activeTabIndex,
+                                    bool followingStartup);
 
 // 弹出删除确认框。用户点「是」返回 true。
-bool confirmItemRemoval(HWND owner, const std::wstring& itemName);
+//
+// alsoFollowsStartup 为 true 时追加一句说明：删的是磁贴，跟随启动清单里
+// 的条目不受影响。不说明的话，用户删掉磁贴、下次开机它照样起来，只会
+// 觉得程序在乱来。
+bool confirmItemRemoval(HWND owner, const std::wstring& itemName,
+                        bool alsoFollowsStartup);
 
 }  // namespace ui
 }  // namespace ktile

@@ -357,7 +357,15 @@ void testConfigRoundTrip() {
     absoluteEntry.target = "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe";
     core::FollowLaunchEntry relativeEntry;
     relativeEntry.target = "tools\\sync.exe";
-    original.activation.followLaunch = {absoluteEntry, relativeEntry};
+    // 从磁贴添加的条目：itemId + 参数 / 工作目录 / 管理员快照
+    core::FollowLaunchEntry tileEntry;
+    tileEntry.name = "同步工具";
+    tileEntry.target = "C:\\Tools\\sync.exe";
+    tileEntry.itemId = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    tileEntry.arguments = {"--silent", "--profile=work"};
+    tileEntry.workingDirectory = "C:\\Tools";
+    tileEntry.runAsAdministrator = true;
+    original.activation.followLaunch = {absoluteEntry, relativeEntry, tileEntry};
     original.activation.hotkey.enabled = true;
     original.activation.hotkey.modifiers = {core::HotkeyModifier::Control,
                                             core::HotkeyModifier::Shift};
@@ -387,13 +395,34 @@ void testConfigRoundTrip() {
     CHECK_EQ(static_cast<long long>(*config.appearance.accentColor), 0xFF00AAFFLL);
     CHECK(config.activation.startWithWindows);
     CHECK(config.activation.screenEdgeEnabled);
-    CHECK_EQ(static_cast<long long>(config.activation.followLaunch.size()), 2);
-    if (config.activation.followLaunch.size() == 2) {
+    CHECK_EQ(static_cast<long long>(config.activation.followLaunch.size()), 3);
+    if (config.activation.followLaunch.size() == 3) {
         CHECK_STREQ(config.activation.followLaunch[0].name, "微信");
         CHECK_STREQ(config.activation.followLaunch[0].target,
                     "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe");
+        // 手动条目：没有 itemId，行为与 v3 一致（只按路径启动）
+        CHECK(!config.activation.followLaunch[0].fromTile());
+        CHECK(config.activation.followLaunch[0].arguments.empty());
+        CHECK(!config.activation.followLaunch[0].runAsAdministrator);
         CHECK_STREQ(config.activation.followLaunch[1].target,
                     "tools\\sync.exe");
+        CHECK(!config.activation.followLaunch[1].fromTile());
+
+        // 磁贴条目：来源与快照都要原样回来，否则「按磁贴的方式启动」
+        // 会在重启后退化成「只按路径启动」
+        const core::FollowLaunchEntry& tile = config.activation.followLaunch[2];
+        CHECK(tile.fromTile());
+        CHECK_STREQ(tile.itemId, "3f2504e0-4f89-41d3-9a0c-0305e82c3301");
+        CHECK_EQ(static_cast<long long>(tile.arguments.size()), 2);
+        if (tile.arguments.size() == 2) {
+            CHECK_STREQ(tile.arguments[0], "--silent");
+            CHECK_STREQ(tile.arguments[1], "--profile=work");
+        }
+        CHECK(tile.workingDirectory.has_value());
+        if (tile.workingDirectory.has_value()) {
+            CHECK_STREQ(*tile.workingDirectory, "C:\\Tools");
+        }
+        CHECK(tile.runAsAdministrator);
     }
     CHECK(config.activation.hotkey.enabled);
     CHECK_EQ(static_cast<long long>(config.activation.hotkey.modifiers.size()), 2);
@@ -435,6 +464,60 @@ void testMissingFieldsUseDefaults() {
 // 这两条都不是假想：清单是用户手改 config.json 时最容易改坏的一块
 // （粘一长串路径、删掉 target 只留 name），而它的消费方是「启动时拉起
 // 一批进程」—— 不设上限的话，配置写坏一次就是一开机几十个窗口。
+// v3 的老条目（只有 name/target）必须原样读成「手动条目」：
+// 凭空长出一个 itemId 会让升级后的条目被当成磁贴来源去找磁贴，
+// 找不到再退回快照 —— 结果一样，但语义绕了一圈。
+//
+// 顺带钉住另一条：手动条目手写 arguments / workingDirectory /
+// runAsAdministrator 也读得进（启动时两种来源走同一段代码）。
+void testFollowLaunchLegacyAndManualArguments() {
+    const std::string text =
+        "{\"activation\": {\"followLaunch\": ["
+        "{\"name\": \"legacy\", \"target\": \"C:\\\\Old\\\\app.exe\"},"
+        "{\"name\": \"tuned\", \"target\": \"C:\\\\New\\\\app.exe\","
+        "\"arguments\": [\"-x\", \"-y\"],"
+        "\"workingDirectory\": \"C:\\\\New\","
+        "\"runAsAdministrator\": true}"
+        "]}}";
+
+    const auto result = ConfigStore::deserializeConfig(text);
+    CHECK(result.ok);
+    CHECK_EQ(static_cast<long long>(result.value.activation.followLaunch.size()),
+             2);
+    if (result.value.activation.followLaunch.size() != 2) {
+        return;
+    }
+    const core::FollowLaunchEntry& legacy =
+        result.value.activation.followLaunch[0];
+    CHECK(legacy.itemId.empty());
+    CHECK(!legacy.fromTile());
+    CHECK(legacy.arguments.empty());
+    CHECK(!legacy.workingDirectory.has_value());
+    CHECK(!legacy.runAsAdministrator);
+
+    const core::FollowLaunchEntry& tuned =
+        result.value.activation.followLaunch[1];
+    CHECK(!tuned.fromTile());  // 没有 itemId，就还是手动条目
+    CHECK_EQ(static_cast<long long>(tuned.arguments.size()), 2);
+    CHECK(tuned.workingDirectory.has_value());
+    CHECK(tuned.runAsAdministrator);
+
+    // 再存一遍：这些字段要能活下来，不能因为「不是磁贴条目」被丢掉
+    const std::string again = ConfigStore::serializeConfig(result.value);
+    const auto reloaded = ConfigStore::deserializeConfig(again);
+    CHECK(reloaded.ok);
+    CHECK_EQ(static_cast<long long>(
+                 reloaded.value.activation.followLaunch.size()),
+             2);
+    if (reloaded.value.activation.followLaunch.size() == 2) {
+        const core::FollowLaunchEntry& back =
+            reloaded.value.activation.followLaunch[1];
+        CHECK_EQ(static_cast<long long>(back.arguments.size()), 2);
+        CHECK(back.runAsAdministrator);
+        CHECK(back.workingDirectory.has_value());
+    }
+}
+
 void testFollowLaunchSanitized() {
     std::string text = "{\"activation\": {\"followLaunch\": [";
     for (int i = 0; i < 40; ++i) {
@@ -1035,6 +1118,7 @@ int wmain() {
     testCorruptJsonIsRejected();
     testMissingFieldsUseDefaults();
     testFollowLaunchSanitized();
+    testFollowLaunchLegacyAndManualArguments();
     testOutOfRangeValuesClamped();
     testItemsWithGarbageEntriesSkipped();
     testEmptyDocumentGetsDefaultTab();

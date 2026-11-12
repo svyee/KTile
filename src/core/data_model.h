@@ -23,7 +23,10 @@ namespace core {
 // 旧文件没有这些字段，反序列化时保持默认值即可，不需要改写原文件。
 // v2 → v3：配置新增 activation.followLaunch（跟随启动清单）。同样是
 // 「缺字段走默认值（空表）」，读得进、不需要改写原文件。
-inline constexpr std::uint32_t kCurrentSchemaVersion = 3;
+// v3 → v4：followLaunch 的条目可带 itemId（来源磁贴）与参数 / 工作目录 /
+// 管理员快照。老条目没有这些键，读出来就是「手动添加」的老语义，
+// 行为与 v3 完全一致，同样不需要迁移函数。
+inline constexpr std::uint32_t kCurrentSchemaVersion = 4;
 
 // 网格容量约束（单位：格）
 //
@@ -597,9 +600,21 @@ inline HotkeyPreset hotkeyPresetOf(const HotkeyConfig& config) noexcept {
 
 // 「跟随启动」的一条：KTile 启动时顺带拉起的程序。
 //
-// 为什么不复用 LaunchItem：那条结构带着磁贴尺寸、颜色、标签归属等一整套
-// 磁贴字段，而这里只需要「叫什么、指哪儿」。分开还有个好处 —— 清空磁贴、
-// 换标签页都不会波及这份清单。
+// 为什么不直接存一份 LaunchItem：那条结构带着磁贴尺寸、颜色、标签归属
+// 等一整套磁贴字段，而这里只关心「怎么启动它」。分开还有个好处 ——
+// 清空磁贴、调整网格都不会波及这份清单。
+//
+// 两种来源共用一条结构，靠 itemId 是否为空区分：
+//
+//   手动添加（itemId 为空）—— 设置窗口里「添加…」进来的，界面只让填
+//     一个路径，下面是启动方式：默认按路径原样启动。
+//   从磁贴添加（itemId 非空）—— 启动前按 id 去磁贴里取当前值，
+//     **参数、工作目录、管理员设置全部跟着磁贴走**。下面的快照字段是
+//     「磁贴被删之后」的兜底：删磁贴表达的是「不想在面板上看到它」，
+//     不等于「不要开机启动」，所以条目留着，用快照继续能启动。
+//
+// 启动方式这几个字段两种来源都读，写的时候也只在有内容时写 ——
+// 手改配置给手动条目补一组参数同样生效，不需要另一套结构表达它。
 struct FollowLaunchEntry {
     // 显示名（空时界面按 target 推测）
     std::string name;
@@ -607,6 +622,19 @@ struct FollowLaunchEntry {
     // 目标程序路径。允许写相对 exe 目录的相对路径（"tools\app.exe"），
     // 解析在 platform/win32/program_paths 里做。
     std::string target;
+
+    // ---- 来源磁贴（为空 = 用户手动添加）----
+
+    // 磁贴的稳定 id。非空时启动前按它找磁贴，以磁贴为准。
+    std::string itemId;
+
+    // ---- 添加时的快照（仅磁贴来源使用，磁贴消失后靠它启动）----
+
+    std::vector<std::string> arguments;
+    std::optional<std::string> workingDirectory;
+    bool runAsAdministrator = false;
+
+    bool fromTile() const noexcept { return !itemId.empty(); }
 };
 
 // 跟随启动列表的上限。定这个数不是为了省内存，而是防止配置被写坏

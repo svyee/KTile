@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ktile {
@@ -35,6 +36,7 @@ constexpr std::size_t kMaxTabMenuEntries = 32;
 //     运行/打开
 //     以管理员身份运行     （仅应用类型可用）
 //     打开文件所在位置     （网址类型不可用）
+//     开机时跟随启动 ✓     （仅应用类型可用；已添加的显示勾，再点即移除）
 //     ─────────────
 //     磁贴大小 >
 //     标题显示 >
@@ -47,7 +49,8 @@ TileMenuCommand showTileContextMenu(HWND owner,
                                     const POINT screenPosition,
                                     const core::LaunchItem& item,
                                     const std::vector<std::wstring>& tabNames,
-                                    const std::size_t activeTabIndex) {
+                                    const std::size_t activeTabIndex,
+                                    const bool followingStartup) {
     std::vector<PopupMenuEntry> entries;
 
     // 标题项：显示磁贴名字，禁用状态（纯展示）
@@ -83,6 +86,19 @@ TileMenuCommand showTileContextMenu(HWND owner,
         static_cast<UINT>(TileMenuCommand::OpenFileLocation),
         T("tilemenu.openLocation"),
         item.type != core::ItemType::Url));
+
+    // ---- 开机时跟随启动 ----
+    //
+    // 勾选式：已加入清单的打勾，再点一次就是移除 —— 与设置窗口里的
+    // 「移除」等效，省得为一个勾去翻两层设置页。
+    //
+    // 只对可执行目标开放：网址、文件夹在开机时自动弹出来是骚扰；
+    // 插件磁贴没有可执行文件，也无从「启动」。
+    PopupMenuEntry follow = PopupMenuEntry::radio(
+        static_cast<UINT>(TileMenuCommand::ToggleFollowStartup),
+        T("tilemenu.followStartup"), followingStartup);
+    follow.enabled = item.type == core::ItemType::Application;
+    entries.push_back(std::move(follow));
 
     entries.push_back(PopupMenuEntry::separator());
 
@@ -212,6 +228,7 @@ TileMenuCommand showTileContextMenu(HWND owner,
         case TileMenuCommand::Run:
         case TileMenuCommand::RunAsAdministrator:
         case TileMenuCommand::OpenFileLocation:
+        case TileMenuCommand::ToggleFollowStartup:
         case TileMenuCommand::ResizeSmall:
         case TileMenuCommand::ResizeWide:
         case TileMenuCommand::ResizeTall:
@@ -229,10 +246,16 @@ TileMenuCommand showTileContextMenu(HWND owner,
 
 // ---------------------------------------------------------------- 删除确认
 
-bool confirmItemRemoval(HWND owner, const std::wstring& itemName) {
+bool confirmItemRemoval(HWND owner, const std::wstring& itemName,
+                        const bool alsoFollowsStartup) {
     // {0} 是磁贴名，语序交给语言文件决定（英文要把名字放句中）。
+    // 两条文案各写一整句、不拼接：中文的语序关系词没法由一个前后缀
+    // 拼出来，英文更是如此。
+    const char* const key = alsoFollowsStartup
+                                ? "tilemenu.removeConfirmFollow"
+                                : "tilemenu.removeConfirm";
     const std::wstring message =
-        infrastructure::i18n::formatW("tilemenu.removeConfirm", {itemName});
+        infrastructure::i18n::formatW(key, {itemName});
 
     const int result = MessageBoxW(
         owner,

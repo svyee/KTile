@@ -1124,6 +1124,114 @@ void Application::persistConfig() {
     (void)store_.saveConfig(paths_.configFilePath(), config_);
 }
 
+// ---------------------------------------------------------------- 跟随启动
+
+const core::LaunchItem* Application::findItemById(
+    const std::string& itemId) const {
+    if (launcherWindow_ == nullptr || itemId.empty()) {
+        return nullptr;
+    }
+    for (const core::Tab& tab : launcherWindow_->document().tabs) {
+        for (const core::LaunchItem& item : tab.items) {
+            if (item.id == itemId) {
+                return &item;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool Application::isFollowingStartup(const std::string& itemId) const {
+    if (itemId.empty()) {
+        return false;
+    }
+    for (const core::FollowLaunchEntry& entry :
+         config_.activation.followLaunch) {
+        if (entry.itemId == itemId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void Application::toggleFollowStartup(const core::LaunchItem& item) {
+    if (!launcherWindow_ || item.id.empty()) {
+        return;
+    }
+    std::vector<core::FollowLaunchEntry>& entries =
+        config_.activation.followLaunch;
+    const auto existing = std::find_if(
+        entries.begin(), entries.end(),
+        [&item](const core::FollowLaunchEntry& entry) {
+            return entry.itemId == item.id;
+        });
+    const std::string label = item.name.empty() ? item.target : item.name;
+
+    if (existing != entries.end()) {
+        entries.erase(existing);
+        infrastructure::applog::info("跟随启动：从清单移除 " + label);
+        persistConfig();
+        return;
+    }
+
+    if (entries.size() >= core::kMaximumFollowLaunchItems) {
+        const std::wstring message = infrastructure::i18n::formatW(
+            "settings.followLaunch.full",
+            {std::to_wstring(core::kMaximumFollowLaunchItems)});
+        MessageBoxW(launcherWindow_->hwnd(), message.c_str(), kApplicationName,
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // 快照：磁贴被删之后靠它继续能启动。参数、工作目录、管理员权限
+    // 一并带走 —— 「从磁贴加入」在用户看来就是「按这个磁贴的方式启动」，
+    // 少一样都会变成另一种运行结果。
+    core::FollowLaunchEntry entry;
+    entry.itemId = item.id;
+    entry.name = label;
+    entry.target = item.target;
+    entry.arguments = item.arguments;
+    entry.workingDirectory = item.workingDirectory;
+    entry.runAsAdministrator = item.runAsAdministrator;
+    entries.push_back(std::move(entry));
+
+    infrastructure::applog::info("跟随启动：加入 " + label);
+    persistConfig();
+}
+
+bool Application::syncFollowLaunchWithTiles() {
+    if (!launcherWindow_) {
+        return false;
+    }
+    bool changed = false;
+    for (core::FollowLaunchEntry& entry : config_.activation.followLaunch) {
+        if (!entry.fromTile()) {
+            continue;
+        }
+        const core::LaunchItem* tile = findItemById(entry.itemId);
+        if (tile == nullptr) {
+            // 磁贴已被删除：条目保留，快照不动。删磁贴是「不想在面板上
+            // 看到它」，不等于「不要开机启动」，这里静默清掉会让用户
+            // 下次开机少一个程序却找不到原因。
+            continue;
+        }
+        const std::string name = tile->name.empty() ? tile->target : tile->name;
+        if (entry.name == name && entry.target == tile->target &&
+            entry.arguments == tile->arguments &&
+            entry.workingDirectory == tile->workingDirectory &&
+            entry.runAsAdministrator == tile->runAsAdministrator) {
+            continue;
+        }
+        entry.name = name;
+        entry.target = tile->target;
+        entry.arguments = tile->arguments;
+        entry.workingDirectory = tile->workingDirectory;
+        entry.runAsAdministrator = tile->runAsAdministrator;
+        changed = true;
+    }
+    return changed;
+}
+
 void Application::launchFollowStartupItems() {
     const std::vector<core::FollowLaunchEntry>& entries =
         config_.activation.followLaunch;
@@ -1134,14 +1242,43 @@ void Application::launchFollowStartupItems() {
                                  " 项待处理");
 
     for (const core::FollowLaunchEntry& entry : entries) {
+        // 两种来源在这里合流：从磁贴来的先按 id 取磁贴当前值，取不到
+        // （磁贴已删）或本来就不是磁贴条目，就用快照。后面只剩一条路径。
+        core::LaunchItem item;
+        bool fromLiveTile = false;
+        if (entry.fromTile()) {
+            const core::LaunchItem* tile = findItemById(entry.itemId);
+            if (tile != nullptr) {
+                item = *tile;
+                fromLiveTile = true;
+            }
+        }
+        if (!fromLiveTile) {
+            item.type = core::ItemType::Application;
+            item.name = entry.name;
+            item.target = entry.target;
+            item.arguments = entry.arguments;
+            item.workingDirectory = entry.workingDirectory;
+            item.runAsAdministrator = entry.runAsAdministrator;
+        }
+
+        const std::string label = item.name.empty() ? item.target : item.name;
+
+        // 只有可执行目标才谈得上「启动后常驻」。网址、文件夹开机自动
+        // 弹出来是骚扰，插件磁贴没有可执行文件 —— 右键菜单里已经禁用，
+        // 这里再挡一次（用户可能添加之后又改了磁贴类型）。
+        if (item.type != core::ItemType::Application) {
+            infrastructure::applog::warn("跟随启动：跳过 " + label +
+                                         "（不是可执行程序）");
+            continue;
+        }
+
         // 路径解析与磁贴同一条规则：相对路径以 exe 目录为基准。
         const std::wstring target = platform::win32::resolveProgramRelativePath(
-            base::utf8ToWideLossy(entry.target));
+            base::utf8ToWideLossy(item.target));
         if (target.empty()) {
             continue;
         }
-        const std::string label =
-            entry.name.empty() ? entry.target : entry.name;
 
         // 已经在运行就不重复启动。开机那一会儿这些程序常常已经被系统
         // 或用户自己拉起来过，再开一次等于托盘里出现两份。
@@ -1151,10 +1288,11 @@ void Application::launchFollowStartupItems() {
             continue;
         }
 
-        core::LaunchItem item;
-        item.type = core::ItemType::Application;
-        item.name = label;
+        // 交给 launchItem 的 target 换成解析后的绝对路径：相对路径它自己
+        // 也会解析，结果一样，但失败提示里就不会出现一个看不出落在哪儿
+        // 的相对路径。
         item.target = base::wideToUtf8Lossy(target);
+
         const platform::win32::LaunchResult result =
             platform::win32::launchItem(item, false);
         if (result.ok) {
@@ -1641,7 +1779,8 @@ void Application::handleItemContextMenu(const HWND owner,
     const std::size_t activeTab = launcherWindow_->activeTabIndex();
 
     const ui::TileMenuCommand command =
-        ui::showTileContextMenu(owner, cursor, item, tabNames, activeTab);
+        ui::showTileContextMenu(owner, cursor, item, tabNames, activeTab,
+                                isFollowingStartup(item.id));
 
     // ---- 「移动到其他页面 / 复制到其他页面」：命令 ID = 各自基址 + 目标页下标。
     // 两个区间必须显式判断边界 —— 只判 >= moveBase 会把复制段也吞进移动。
@@ -1679,6 +1818,11 @@ void Application::handleItemContextMenu(const HWND owner,
             // 辅助类动作：查看位置后窗口保持打开
             break;
         }
+
+        case ui::TileMenuCommand::ToggleFollowStartup:
+            // 勾选切换：加入或移除。都不启动 —— 语义是「下次 KTile 启动」。
+            toggleFollowStartup(item);
+            break;
 
         case ui::TileMenuCommand::ResizeSmall:
         case ui::TileMenuCommand::ResizeWide:
@@ -2198,7 +2342,10 @@ void Application::applyItemRemoval(const HWND owner,
     const std::wstring displayName =
         base::utf8ToWideLossy(item.name.empty() ? item.target : item.name);
 
-    if (!ui::confirmItemRemoval(owner, displayName)) {
+    // 删磁贴不动跟随清单：删磁贴是「不想在面板上看到它」，不等于
+    // 「不要开机启动」。确认框里把这层说清楚，别让用户下次开机才发现。
+    if (!ui::confirmItemRemoval(owner, displayName,
+                                isFollowingStartup(item.id))) {
         return;
     }
 
@@ -2259,6 +2406,13 @@ void Application::openSettings() {
         launcherWindow_->show();
     }
     launcherWindow_->setModalGuard(true);
+
+    // 跟随清单里来自磁贴的条目先按磁贴当前值刷一次：设置窗口显示的就是
+    // 待会儿真正会启动的东西。改过参数/路径的磁贴在这里对齐，省得用户
+    // 对着一个旧名字猜「到底按哪个启动」。
+    if (syncFollowLaunchWithTiles()) {
+        persistConfig();
+    }
 
     // 实时预览：改了就立刻反映到主窗口，但**不落盘**。
     // 点「确定」才写 config；点「取消」由下面重新套用配置还原。

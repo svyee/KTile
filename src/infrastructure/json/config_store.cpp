@@ -205,6 +205,29 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
         writer.beginObject();
         writer.member("name", entry.name);
         writer.member("target", entry.target);
+        // 来源与启动方式：手动添加的条目这几项都是空的，写出来是四条
+        // 永远为默认值的键 —— 只在有内容时写，「只有 name + target」的
+        // 干净形状才对得上用户的认知。
+        //
+        // 反过来，手改配置给手动条目写了 arguments 也能存住：启动时两条
+        // 来源走同一段读取代码，写的时候不该把它们区别对待。
+        if (!entry.itemId.empty()) {
+            writer.member("itemId", entry.itemId);
+        }
+        if (!entry.arguments.empty()) {
+            writer.key("arguments").beginArray();
+            for (const std::string& argument : entry.arguments) {
+                writer.value(argument);
+            }
+            writer.endArray();
+        }
+        if (entry.workingDirectory.has_value() &&
+            !entry.workingDirectory->empty()) {
+            writer.member("workingDirectory", *entry.workingDirectory);
+        }
+        if (entry.runAsAdministrator) {
+            writer.member("runAsAdministrator", true);
+        }
         writer.endObject();
     }
     writer.endArray();
@@ -543,6 +566,31 @@ ConfigStore::deserializeConfig(const std::string& text) {
                 if (entry.target.size() > core::kMaximumTargetLength) {
                     entry.target.resize(core::kMaximumTargetLength);
                 }
+
+                // v4 新增。没有 itemId = 手动添加的老条目，只认 target，
+                // 行为与 v3 完全一致。
+                entry.itemId = node.find("itemId").asString();
+                if (entry.itemId.size() > core::kMaximumIdLength) {
+                    entry.itemId.resize(core::kMaximumIdLength);
+                }
+                const JsonValue& arguments = node.find("arguments");
+                if (arguments.isArray()) {
+                    for (std::size_t a = 0; a < arguments.size(); ++a) {
+                        entry.arguments.push_back(arguments.at(a).asString());
+                    }
+                }
+                const std::string workingDirectory =
+                    node.find("workingDirectory").asString();
+                if (!workingDirectory.empty()) {
+                    entry.workingDirectory =
+                        workingDirectory.size() > core::kMaximumTargetLength
+                            ? workingDirectory.substr(0,
+                                                      core::kMaximumTargetLength)
+                            : workingDirectory;
+                }
+                entry.runAsAdministrator =
+                    node.find("runAsAdministrator").asBool(false);
+
                 config.followLaunch.push_back(std::move(entry));
             }
         }

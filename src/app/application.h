@@ -215,7 +215,24 @@ private:
     // 已经在运行（按完整映像路径判定）的跳过 —— 开机时这些程序往往
     // 已经被系统或用户自己启动过，再拉一次就是两个实例。
     // 逐条写日志：这是「为什么我的程序没起来」唯一的线索。
+    //
+    // 条目分两种来源，靠 FollowLaunchEntry::itemId 区分：手动添加的只认
+    // target；从磁贴添加的按 id 取磁贴当前值（参数 / 工作目录 / 管理员
+    // 都跟着磁贴走），磁贴已被删除时退回添加时的快照。
     void launchFollowStartupItems();
+
+    // 某块磁贴是否已在跟随启动清单里（右键菜单据此打勾）
+    bool isFollowingStartup(const std::string& itemId) const;
+    // 切换磁贴的跟随状态：未添加则加入（带参数/工作目录/管理员快照），
+    // 已添加则移除。落盘但不启动 —— 语义始终是「下次 KTile 启动时」。
+    void toggleFollowStartup(const core::LaunchItem& item);
+    // 用磁贴当前值刷新跟随清单里的快照（name / target / 参数 / 工作目录 /
+    // 管理员）。磁贴被删的条目原样保留，所以「删磁贴」不会静默清掉
+    // 开机启动项。返回是否真的改动了内容。
+    bool syncFollowLaunchWithTiles();
+    // 在全部标签页里按 id 找磁贴；找不到返回 nullptr（指针指向窗口文档，
+    // 调用方当次用完即弃，别存）。
+    const core::LaunchItem* findItemById(const std::string& itemId) const;
     // 把当前状态写回磁盘
     void persistItems();
     void persistConfig();

@@ -1213,8 +1213,12 @@ bool sameFollowLaunch(const std::vector<core::FollowLaunchEntry>& left,
         return false;
     }
     for (std::size_t i = 0; i < left.size(); ++i) {
+        // itemId 也要比：从磁贴加的条目和手动加的条目可能同名同路径，
+        // 只比名字会把「把手动那条删了、换成了磁贴那条」当成没变，
+        // 结果这次编辑白做（还要看来源，启动方式并不一样）。
         if (left[i].target != right[i].target ||
-            left[i].name != right[i].name) {
+            left[i].name != right[i].name ||
+            left[i].itemId != right[i].itemId) {
             return false;
         }
     }
