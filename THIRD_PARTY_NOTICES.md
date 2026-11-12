@@ -1,6 +1,7 @@
 # 第三方组件声明（Third-Party Notices）
 
-本项目的源代码除特别说明外，均以 [MIT License](LICENSE) 发布。
+本项目的源代码除特别说明外，均以 [Apache License 2.0](LICENSE) 发布。
+分发本项目的二进制或源码时，请一并保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
 项目使用了以下第三方资产，在此致谢并附其原始许可：
 
 ## Lucide Icons

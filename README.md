@@ -13,7 +13,7 @@
 
 [![Platform](https://img.shields.io/badge/Windows-7%20SP1%20~%2011-0078D4?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
 [![Size](https://img.shields.io/badge/single%20binary-~1.3%20MB-16A34A?style=flat-square)](#)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.3.1-blue?style=flat-square)](CHANGELOG.md)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus)](#)
 
@@ -326,7 +326,8 @@ KTile/
 
 ## 开源协议
 
-本项目以 [MIT License](LICENSE) 发布。
+本项目以 [Apache License 2.0](LICENSE) 发布——商用、修改、闭源分发都随你，
+分发时保留 `LICENSE` 与 `NOTICE` 即可，改动过的文件请注明。
 
 内置图标基于 [Lucide](https://lucide.dev)（ISC License），详见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
