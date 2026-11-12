@@ -34,13 +34,19 @@ namespace {
 // ---------------------------------------------------------------- 布局常量
 // 单位均为 DIP（96dpi 像素），绘制时按 DPI 缩放。
 //
-// 布局分两列：
+// 布局分两列（下列坐标是**中文基准**，实际值由 computeLayout 按实测文字递推）：
 //   左列（x=20..200）  —— 图标/磁贴预览 + 磁贴大小 + 换图按钮
 //   右列（x=212..600） —— 名称/目标/参数/工作目录/所属页面/管理员
 //
 // 左列存在的意义：图标是磁贴上最显眼的东西，改完能立刻看到结果，
 // 比「填一个 .ico 路径」直观得多。
 
+// 下面这一组是**中文界面下的基准值**：标签列 68 / 78 恰好排得下四个汉字，
+// 字段宽 306。英文的「Title display:」「Background:」比四个汉字长，定宽
+// STATIC 会把尾巴直接切掉（不换行、不给省略号，就是没了）。所以运行时
+// 由 computeLayout 先量再定宽：中文量出来的宽度落在基准上时一个像素不动，
+// 长语言把标签列撑开、整窗跟着变宽，**字段宽度保持 306 不压缩** ——
+// 压缩字段会让下面那两行提示重新折行，牵一发动全身。
 constexpr int kClientWidth = 620;
 constexpr int kClientHeight = 430;
 
@@ -183,6 +189,142 @@ HFONT dialogFont() {
         return CreateFontIndirectW(&metrics.lfMessageFont);
     }
     return static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
+
+// ---------------------------------------------------------------- 布局计算
+//
+// 一整块控件的 X 坐标都在这里定下来，createControls 只负责按值摆。
+// 为什么要提前算：窗口宽度取决于标签实测宽度，而窗口宽度必须在
+// CreateWindowExW 之前给出，所以测量发生在窗口还不存在的时候 ——
+// 借 owner 的 DC 量（对话框就开在 owner 上，DPI 相同）。
+struct EditorLayout {
+    int leftLabelW = 68;   // 左列标签列宽（磁贴大小 / 标题显示 / 图标大小共用）
+    int colorLabelW = 56;  // 「背景色」标签列宽（更短，色块要贴着它）
+    int sizeComboX = 88;
+    int comboW = kSizeComboWidth;  // 左列两个下拉共用一宽
+    int iconScaleValueX = 158;     // 滑块右侧的百分比数字
+    int swatchX = 80;
+    int clearX = 142;
+    int clearW = kTileColorClearWidth;
+    int labelX = kLabelX;
+    int labelW = kLabelWidth;
+    int fieldX = kFieldX;
+    int fieldW = kFieldWidth;
+    int browseFileX = kBrowseFileX;
+    int browseDirX = kBrowseDirX;
+    int builtinPickX = kBuiltinPickX;
+    int workDirEditW = 210;
+    int workDirBrowseX = kFieldX + 220;
+    int okX = 420;
+    int cancelX = 510;
+    int clientWidth = kClientWidth;
+    int clientHeight = kClientHeight;
+    int cardRight = kCardRight;
+};
+
+EditorLayout computeLayout(HWND host, HFONT font) {
+    auto text = [](const char* key) -> const wchar_t* {
+        return infrastructure::i18n::trw(key).c_str();
+    };
+    // 用对话框字体现量文字，按 96 DPI 逻辑像素返回
+    auto measure = [&](const wchar_t* value) -> int {
+        if (value == nullptr || value[0] == L'\0' || font == nullptr) {
+            return 0;
+        }
+        HDC dc = GetDC(host);
+        if (dc == nullptr) {
+            return 0;
+        }
+        HGDIOBJ previous = SelectObject(dc, font);
+        SIZE size{};
+        const bool measured =
+            GetTextExtentPoint32W(dc, value, lstrlenW(value), &size) != FALSE;
+        const int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+        SelectObject(dc, previous);
+        ReleaseDC(host, dc);
+        if (!measured || dpi <= 0) {
+            return 0;
+        }
+        return MulDiv(size.cx, 96, dpi);
+    };
+    // 标签：实测宽 + 与控件之间的间隙，但不少于中文基准
+    auto fitLabel = [&](const char* key, const int minWidth) -> int {
+        return (std::max)(minWidth, measure(text(key)) + 8);
+    };
+
+    EditorLayout layout;
+
+    // ---- 左列 ----
+    // 三个标签共用一列，取最宽的那个
+    layout.leftLabelW = (std::max)(layout.leftLabelW,
+                                   fitLabel("editor.tileSize", 68));
+    layout.leftLabelW = (std::max)(layout.leftLabelW,
+                                   fitLabel("editor.labelMode", 68));
+    layout.leftLabelW = (std::max)(layout.leftLabelW,
+                                   fitLabel("editor.iconSize", 68));
+    layout.sizeComboX = kPreviewX + layout.leftLabelW;
+    // 滑块跟着下拉左沿走，百分比数字再接在滑块右边
+    layout.iconScaleValueX =
+        layout.sizeComboX + kIconScaleSliderWidth + 6;
+
+    // 左列两个下拉（磁贴大小 / 标题显示方式）共用一宽，取两边的长项。
+    // CBS_DROPDOWNLIST 选中项超宽是直接截断、不给省略号，用户看不到自己
+    // 选的是哪一档 —— 英文的「Follow global setting」正好比中文宽一倍。
+    int comboW = kSizeComboWidth;
+    for (int index = 0; index < 4; ++index) {
+        comboW = (std::max)(comboW,
+                            measure(text(core::tileSizeLabelKey(
+                                        core::tileSizeFromInt(index)))) +
+                                24);
+    }
+    for (int index = 0; index < 3; ++index) {
+        comboW = (std::max)(comboW,
+                            measure(text(core::tileLabelModeLabelKey(
+                                        core::tileLabelModeFromIndex(index)))) +
+                                24);
+    }
+    layout.comboW = comboW;
+
+    // 左列右边界 = 预览块右沿、下拉右沿、背景色那行右沿三者取最大。
+    // 「图标大小」的百分比数字允许略微探出 —— 它右边就是右列标签，
+    // 中间还留着 10px，挤不着。
+    int leftRight = kPreviewX + kPreviewWidth;
+    leftRight = (std::max)(leftRight, layout.sizeComboX + layout.comboW);
+
+    layout.colorLabelW = fitLabel("editor.backgroundColor", 56);
+    layout.swatchX = kPreviewX + layout.colorLabelW + 4;
+    layout.clearX = layout.swatchX + kTileColorSwatchWidth + 6;
+    // 「默认」按钮：中文两个字刚好塞进 36，英文 Default 会顶到边上
+    layout.clearW =
+        (std::max)(kTileColorClearWidth, measure(text("editor.defaultColor")) + 10);
+    leftRight = (std::max)(leftRight, layout.clearX + layout.clearW);
+
+    // ---- 右列 ----
+    layout.labelX = leftRight + 12;
+    layout.labelW = (std::max)(layout.labelW, fitLabel("editor.name", 78));
+    layout.labelW = (std::max)(layout.labelW, fitLabel("editor.target", 78));
+    layout.labelW = (std::max)(layout.labelW, fitLabel("editor.arguments", 78));
+    layout.labelW = (std::max)(layout.labelW, fitLabel("editor.workDir", 78));
+    layout.labelW = (std::max)(layout.labelW, fitLabel("editor.page", 78));
+    layout.fieldX = layout.labelX + layout.labelW + 4;
+
+    // 字段宽度不压：窄下去提示行会多折一行，被固定高度裁掉
+    layout.fieldW = kFieldWidth;
+    // 「浏览文件 / 浏览目录 / 系统项」按字段左沿递推，间距沿用原值
+    layout.browseFileX = layout.fieldX;
+    layout.browseDirX = layout.fieldX + 98;
+    layout.builtinPickX = layout.fieldX + 198;
+    // 工作目录那行：输入框 + 右侧「浏览…」，右边缘与字段右沿对齐
+    layout.workDirEditW = layout.fieldW - 96;
+    layout.workDirBrowseX = layout.fieldX + layout.fieldW - 86;
+
+    // 标签列变宽就把整窗补上同样的宽度：内容整体右移，右边距不变
+    const int grow = layout.fieldX - kFieldX;
+    layout.clientWidth = kClientWidth + grow;
+    layout.cardRight = layout.clientWidth - 12;
+    layout.okX = 420 + grow;
+    layout.cancelX = 510 + grow;
+    return layout;
 }
 
 std::wstring controlText(HWND control) {
@@ -435,6 +577,12 @@ struct EditorDialogState {
     bool accepted = false;
     ItemEditorFields result;
 
+    // 窗口创建前就算好的控件坐标（见 computeLayout）+ 全程共用的对话框字体。
+    // 字体在这里就建好：算坐标要拿它量文字，而坐标得在 CreateWindowExW
+    // 之前定下来，WM_CREATE 里再建就晚了。销毁仍走 WM_DESTROY 的旧路径。
+    EditorLayout layout;
+    HFONT font = nullptr;
+
     // 新建还是修改：只影响标题与确认按钮文案
     ItemEditorMode mode = ItemEditorMode::Edit;
     // 对话框标题（WM_CREATE 里建控件、出错弹框都要用，存一份免得两处硬编码）
@@ -603,6 +751,7 @@ HWND addControl(HWND dialog, const wchar_t* windowClass, const wchar_t* text,
 }
 
 void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
+    const EditorLayout& layout = state->layout;
     auto label = [&](const wchar_t* text, int x, int y, int width) {
         addControl(dialog, L"STATIC", text, 0, x, y + 2, width, kLabelHeight, 0,
                    font);
@@ -618,10 +767,11 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kPreviewX, kPreviewY, kPreviewWidth, kPreviewHeight,
                kPreviewId, font);
 
-    label(infrastructure::i18n::trw("editor.tileSize").c_str(), kPreviewX, kSizeLabelY, 68);
+    label(infrastructure::i18n::trw("editor.tileSize").c_str(), kPreviewX, kSizeLabelY,
+          layout.leftLabelW);
     HWND sizeCombo = addControl(dialog, L"COMBOBOX", L"",
                                 CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-                                kSizeComboX, kSizeComboY, kSizeComboWidth,
+                                layout.sizeComboX, kSizeComboY, layout.comboW,
                                 160, kTileSizeId, font);
     for (int index = 0; index < 4; ++index) {
         SendMessageW(sizeCombo, CB_ADDSTRING, 0,
@@ -637,11 +787,12 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kResetIconId, font);
 
     // ---- 左列：标题显示方式（每块磁贴单独控制）----
-    label(infrastructure::i18n::trw("editor.labelMode").c_str(), kPreviewX, kLabelModeLabelY, 68);
+    label(infrastructure::i18n::trw("editor.labelMode").c_str(), kPreviewX, kLabelModeLabelY,
+          layout.leftLabelW);
     HWND labelCombo = addControl(dialog, L"COMBOBOX", L"",
                                  CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-                                 kLabelModeComboX, kLabelModeComboY,
-                                 kLabelModeComboWidth, 150, kLabelModeId, font);
+                                 layout.sizeComboX, kLabelModeComboY,
+                                 layout.comboW, 150, kLabelModeId, font);
     for (int index = 0; index < 3; ++index) {
         SendMessageW(labelCombo, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(infrastructure::i18n::trw(
@@ -655,17 +806,17 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
                kPreviewX, kIconScaleCheckY, kResetIconWidth, 20,
                kIconScaleCheckId, font);
     addControl(dialog, L"STATIC", infrastructure::i18n::trw("editor.iconSize").c_str(), 0, kPreviewX,
-               kIconScaleSliderY + 3, 68, kLabelHeight, 0, font);
+               kIconScaleSliderY + 3, layout.leftLabelW, kLabelHeight, 0, font);
     HWND scaleSlider = addControl(dialog, L"msctls_trackbar32", L"",
                                   WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
-                                  kSizeComboX, kIconScaleSliderY,
+                                  layout.sizeComboX, kIconScaleSliderY,
                                   kIconScaleSliderWidth, 24,
                                   kIconScaleSliderId, font);
     SendMessageW(scaleSlider, TBM_SETRANGE, TRUE,
                  MAKELPARAM(50, 100));  // 50% ~ 100%，与设置窗口同一范围
     SendMessageW(scaleSlider, TBM_SETLINESIZE, 0, 5);
     SendMessageW(scaleSlider, TBM_SETPAGESIZE, 0, 10);
-    addControl(dialog, L"STATIC", L"", 0, kIconScaleValueX,
+    addControl(dialog, L"STATIC", L"", 0, layout.iconScaleValueX,
                kIconScaleSliderY + 3, 44, kLabelHeight,
                kIconScaleValueId, font);
 
@@ -673,36 +824,37 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     // 色块（点击弹出内置色表）+「默认」清回全局默认。
     // SS_NOTIFY 是让 STATIC 把点击通知（STN_CLICKED）发给父窗口的开关，
     // 少了它色块只能看不能点。
-    label(infrastructure::i18n::trw("editor.backgroundColor").c_str(), kPreviewX, kTileColorLabelY, 56);
+    label(infrastructure::i18n::trw("editor.backgroundColor").c_str(), kPreviewX,
+          kTileColorLabelY, layout.colorLabelW);
     addControl(dialog, L"STATIC", L"", SS_OWNERDRAW | SS_NOTIFY,
-               kTileColorSwatchX, kTileColorSwatchY,
+               layout.swatchX, kTileColorSwatchY,
                kTileColorSwatchWidth, kTileColorSwatchHeight,
                kTileColorSwatchId, font);
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.defaultColor").c_str(), WS_TABSTOP,
-               kTileColorClearX, kTileColorSwatchY, kTileColorClearWidth,
+               layout.clearX, kTileColorSwatchY, layout.clearW,
                kTileColorSwatchHeight, kTileColorClearId, font);
 
     // ---- 右列：名称 ----
-    label(infrastructure::i18n::trw("editor.name").c_str(), kLabelX, 20, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.name").c_str(), layout.labelX, 20, layout.labelW);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-               kFieldX, 18, kFieldWidth, kFieldHeight, kNameId, font);
+               layout.fieldX, 18, layout.fieldW, kFieldHeight, kNameId, font);
 
     // ---- 右列：目标 ----
-    label(infrastructure::i18n::trw("editor.target").c_str(), kLabelX, 53, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.target").c_str(), layout.labelX, 53, layout.labelW);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-               kFieldX, 51, kFieldWidth, kFieldHeight, kTargetId, font);
+               layout.fieldX, 51, layout.fieldW, kFieldHeight, kTargetId, font);
     // 相对路径说明紧贴输入框下方：写在这儿才有人看见。塞进页脚那两句
     // 长提示里，用户要改完路径、发现没生效才会去读（那时已经改错了）。
     addControl(dialog, L"STATIC",
                infrastructure::i18n::trw("editor.targetHint").c_str(),
-               0, kFieldX, 108, kFieldWidth, 18, kTargetHintId, font);
+               0, layout.fieldX, 108, layout.fieldW, 18, kTargetHintId, font);
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.browseFile").c_str(), WS_TABSTOP,
-               kBrowseFileX, 80, kBrowseWidth, kBrowseHeight,
+               layout.browseFileX, 80, kBrowseWidth, kBrowseHeight,
                kBrowseTargetFileId, font);
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.browseFolder").c_str(), WS_TABSTOP,
-               kBrowseDirX, 80, kBrowseWidth, kBrowseHeight,
+               layout.browseDirX, 80, kBrowseWidth, kBrowseHeight,
                kBrowseTargetDirectoryId, font);
     // 「系统项…」只在新建时出现：内置命令是没法从文件系统浏览出来的，
     // 必须有入口；修改已有项目时目标已经定了，换目标该走删除重加。
@@ -710,36 +862,36 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     // 找不到，教训：同排控件坐标必须互斥。
     if (state->mode == ItemEditorMode::Create) {
         addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.systemItems").c_str(), WS_TABSTOP,
-                   kBuiltinPickX, 80, kBrowseWidth, kBrowseHeight,
+                   layout.builtinPickX, 80, kBrowseWidth, kBrowseHeight,
                    kBuiltinPickId, font);
     }
 
     // ---- 右列：参数（每行一个）----
-    label(infrastructure::i18n::trw("editor.arguments").c_str(), kLabelX, 130, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.arguments").c_str(), layout.labelX, 130, layout.labelW);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL |
                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
                    ES_WANTRETURN,
-               kFieldX, 128, kFieldWidth, 78, kArgumentsId, font);
+               layout.fieldX, 128, layout.fieldW, 78, kArgumentsId, font);
 
     // ---- 右列：工作目录 ----
-    label(infrastructure::i18n::trw("editor.workDir").c_str(), kLabelX, 214, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.workDir").c_str(), layout.labelX, 214, layout.labelW);
     addControl(dialog, L"EDIT", L"",
                WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-               kFieldX, 212, 210, kFieldHeight, kWorkingDirectoryId, font);
+               layout.fieldX, 212, layout.workDirEditW, kFieldHeight, kWorkingDirectoryId, font);
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("common.browse").c_str(), WS_TABSTOP,
-               kFieldX + 220, 210, 86, kBrowseHeight,
+               layout.workDirBrowseX, 210, 86, kBrowseHeight,
                kBrowseWorkingDirectoryId, font);
     addControl(dialog, L"STATIC",
                infrastructure::i18n::trw("editor.workDirHint").c_str(),
-               0, kFieldX, 239, kFieldWidth, 18, kWorkingDirectoryHintId,
+               0, layout.fieldX, 239, layout.fieldW, 18, kWorkingDirectoryHintId,
                font);
 
     // ---- 右列：所属页面 ----
-    label(infrastructure::i18n::trw("editor.page").c_str(), kLabelX, 264, kLabelWidth);
+    label(infrastructure::i18n::trw("editor.page").c_str(), layout.labelX, 264, layout.labelW);
     HWND tabCombo = addControl(dialog, L"COMBOBOX", L"",
                                CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-                               kFieldX, 262, 210, 160, kTabId, font);
+                               layout.fieldX, 262, 210, 160, kTabId, font);
     for (const std::wstring& tabName : state->tabNames) {
         SendMessageW(tabCombo, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(tabName.c_str()));
@@ -748,11 +900,11 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     // ---- 右列：管理员 ----
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("editor.admin").c_str(),
                BS_AUTOCHECKBOX | WS_TABSTOP,
-               kFieldX, 292, 220, 25, kAdministratorId, font);
+               layout.fieldX, 292, 220, 25, kAdministratorId, font);
 
     addControl(dialog, L"STATIC",
                T("editor.hint"),
-               0, kFieldX, 336, kFieldWidth, 34, kFooterHintId, font);
+               0, layout.fieldX, 336, layout.fieldW, 34, kFooterHintId, font);
 
     // ---- 保存 / 取消 ----
     // 新建时说「添加」而不是「保存」：用户心里做的是「加一个」，
@@ -760,9 +912,9 @@ void createControls(HWND dialog, EditorDialogState* state, HFONT font) {
     const bool creating = state->mode == ItemEditorMode::Create;
     addControl(dialog, L"BUTTON", creating ? infrastructure::i18n::trw("common.add").c_str() : infrastructure::i18n::trw("common.save").c_str(),
                WS_TABSTOP | BS_DEFPUSHBUTTON,
-               420, kClientHeight - 48, 80, 28, IDOK, font);
+               layout.okX, layout.clientHeight - 48, 80, 28, IDOK, font);
     addControl(dialog, L"BUTTON", infrastructure::i18n::trw("common.cancel").c_str(), WS_TABSTOP,
-               510, kClientHeight - 48, 80, 28, IDCANCEL, font);
+               layout.cancelX, layout.clientHeight - 48, 80, 28, IDCANCEL, font);
 
     // 输入长度上限（与 core 层校验一致，防极端输入）
     SendMessageW(GetDlgItem(dialog, kNameId), EM_SETLIMITTEXT, 256, 0);
@@ -1290,7 +1442,11 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
                 RECT card{};
                 card.left = scaleFor(hwnd, kCardLeft);
                 card.top = scaleFor(hwnd, kCardTop);
-                card.right = scaleFor(hwnd, kCardRight);
+                // 卡片宽度跟着标签列走：英文标签撑宽窗口时卡片要一起变宽，
+                // 否则右列控件会掉到卡片外面（白卡片上飘着几个输入框）
+                card.right = scaleFor(hwnd, state != nullptr
+                                                ? state->layout.cardRight
+                                                : kCardRight);
                 card.bottom = scaleFor(hwnd, kCardBottom);
                 dialog_style::paintCard(dc, card, scaleFor(hwnd, 8));
             }
@@ -1337,7 +1493,9 @@ LRESULT CALLBACK editorDialogProc(HWND hwnd, UINT message,
             if (state == nullptr) {
                 break;
             }
-            HFONT font = dialogFont();
+            // 字体在 showItemEditorDialog 里就建好了（算坐标要用它量文字），
+            // 这里只负责用与登记，销毁仍走 WM_DESTROY。
+            HFONT font = state->font;
             createControls(hwnd, state, font);
             populateControls(hwnd, state);
             SetFocus(GetDlgItem(hwnd, kNameId));
@@ -1667,8 +1825,12 @@ bool showItemEditorDialog(HWND owner,
     // 对话框居中于主窗口
     RECT ownerRect{};
     GetWindowRect(owner, &ownerRect);
-    const int width = scaleFor(owner, kClientWidth);
-    const int height = scaleFor(owner, kClientHeight);
+    // 字体与控件坐标都在这里先算：窗口宽度取决于标签实测宽度，
+    // 而宽度必须在 CreateWindowExW 之前给出来。
+    state.font = dialogFont();
+    state.layout = computeLayout(owner, state.font);
+    const int width = scaleFor(owner, state.layout.clientWidth);
+    const int height = scaleFor(owner, state.layout.clientHeight);
     const int x = ownerRect.left +
                   ((ownerRect.right - ownerRect.left) - width) / 2;
     const int y = ownerRect.top +
@@ -1694,6 +1856,10 @@ bool showItemEditorDialog(HWND owner,
         &state);
 
     if (dialog == nullptr) {
+        // 字体是这里建的，窗口没起来就没人能删它了
+        if (state.font != nullptr) {
+            DeleteObject(state.font);
+        }
         return false;
     }
 

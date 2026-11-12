@@ -227,7 +227,7 @@
     "editor.browseFile": "Browse file...",
     "editor.browseFolder": "Browse folder...",
     "editor.systemItems": "System items...",
-    "editor.workDirHint": "Starting folder used when the program runs; usually left empty.",
+    "editor.workDirHint": "Starting folder; usually left empty.",
     "editor.admin": "Run as administrator",
     "editor.hint": "Leave the name empty to use the target name; one argument per line.\nFolder tiles accept a pasted path in the target field.",
     "editor.tileSize": "Tile size:",
