@@ -444,7 +444,7 @@ abort 一律**不执行扇区动作**：用户已经作废了这次手势，再�
 {
   "schemaVersion": 1,
   "name": "文件资源管理器",
-  "processes": ["explorer.exe"],
+  "processes": ["explorer.exe@CabinetWClass"],
   "priority": 0,
   "menu": { "name": "资源管理器", "sectorCount": 8, "actions": [ ... ] }
 }
@@ -454,14 +454,20 @@ abort 一律**不执行扇区动作**：用户已经作废了这次手势，再�
   猜着读比不读更糟）。老插件缺字段则走默认值，照常加载。
 - `menu` 与用户配置里的 `menu` 共用同一个解析函数（`parseRadialMenuJson`），
   字段格式完全一致——少一份定义就少一处走样。
-- `processes` 只写进程名（`explorer.exe`），**不支持通配符**：`*app*.exe` 这种
-  写法误伤面太大，用户很难预估哪个应用会被抢走。
+- `processes` 条目写进程名（`explorer.exe`），或 `进程名@窗口类名`
+  （`explorer.exe@CabinetWClass`），**不支持通配符**：`*app*.exe` 这种
+  写法误伤面太大，用户很难预估哪个应用会被抢走。窗口类后缀用于区分
+  同进程的两类界面：explorer.exe 的文件窗口类是 `CabinetWClass`，
+  桌面是 `Progman` / `WorkerW`。类名取自前台窗口，ASCII 大小写不敏感；
+  `@` 前后留空的条目无效，永不命中。
 
 #### 匹配规则
 
-`core::findPluginForProcess(plugins, processName)`：
+`core::findPluginForProcess(plugins, processName, windowClass)`：
 
-1. 只考虑 `valid` 的插件，进程名逐项比较（ASCII 大小写不敏感）；
+1. 只考虑 `valid` 的插件，条目与前台进程名（带类后缀的还要比窗口类）
+   逐项比较（ASCII 大小写不敏感）；`windowClass` 为空时带类后缀的
+   条目不命中；
 2. 多个命中时 `priority` 大的赢；
 3. 仍并列则按 id **字典序**取第一个——目录遍历顺序在不同文件系统上不一致，
    没有这条兜底，同一份配置在两台机器上可能显示不同轮盘。

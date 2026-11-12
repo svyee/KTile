@@ -50,6 +50,23 @@ std::wstring foregroundProcessName() {
     return result;
 }
 
+std::wstring foregroundWindowClass() {
+    HWND foreground = GetForegroundWindow();
+    if (foreground == nullptr) {
+        return std::wstring();
+    }
+
+    wchar_t className[256] = {};
+    if (GetClassNameW(foreground, className, 256) == 0) {
+        return std::wstring();
+    }
+    std::wstring result = className;
+    for (wchar_t& ch : result) {
+        ch = static_cast<wchar_t>(std::towlower(ch));
+    }
+    return result;
+}
+
 }  // namespace win32
 }  // namespace platform
 }  // namespace ktile

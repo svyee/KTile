@@ -1307,9 +1307,12 @@ void Application::onRadialShow(POINT startPoint) {
     {
         const std::wstring process = platform::win32::foregroundProcessName();
         if (!process.empty()) {
+            const std::wstring windowClass =
+                platform::win32::foregroundWindowClass();
             const core::RadialPlugin* plugin = core::findPluginForProcess(
                 radialPluginStore_.plugins(),
-                base::wideToUtf8Lossy(process));
+                base::wideToUtf8Lossy(process),
+                base::wideToUtf8Lossy(windowClass));
             if (plugin != nullptr && plugin->valid) {
                 menu = &plugin->menu;
             }

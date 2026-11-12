@@ -85,15 +85,22 @@ void pump(const int milliseconds) {
     }
 }
 
-// 不带 kInjectSignature，钩子会当物理按键处理
-void inject(const WORD virtualKey, const bool down) {
+// 不带 kInjectSignature，钩子会当物理按键处理。
+// 返回 false：SendInput 被环境拒绝（锁屏 / 沙箱不在可交互桌面），注入不进去，
+// 此时整个测试应跳过而不是报假失败（0 触发会让三个用例看起来像回归）。
+bool inject(const WORD virtualKey, const bool down) {
     INPUT input{};
     input.type = INPUT_KEYBOARD;
     input.ki.wVk = virtualKey;
     input.ki.wScan = static_cast<WORD>(MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC));
     input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
     input.ki.dwExtraInfo = 0;
-    SendInput(1, &input, sizeof(INPUT));
+    return SendInput(1, &input, sizeof(INPUT)) == 1;
+}
+
+// 会话里注入被整体拒绝时（OpenInputDesktop 失败是同源信号）跳过全部用例。
+bool inputInjectionAvailable() {
+    return OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS) != nullptr;
 }
 
 HWND createMessageWindow() {
@@ -214,6 +221,12 @@ void testUninstallClearsState() {
 
 int main() {
     std::printf("test_gesture_win\n");
+
+    if (!inputInjectionAvailable()) {
+        std::printf("  跳过：当前会话注入不了输入（锁屏或非交互桌面），"
+                    "换到正常桌面会话再跑\n");
+        return 0;
+    }
 
     testAutoRepeatTriggersOnce();
     testCombinationDoesNotTrigger();

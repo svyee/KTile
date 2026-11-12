@@ -7,9 +7,24 @@ namespace core {
 namespace {
 
 bool containsProcess(const RadialPlugin& plugin,
-                     const std::string& processName) noexcept {
+                     const std::string& processName,
+                     const std::string& windowClass) noexcept {
     for (const auto& candidate : plugin.processes) {
-        if (processNameEquals(candidate, processName)) {
+        const std::size_t at = candidate.find('@');
+        if (at == std::string::npos) {
+            if (processNameEquals(candidate, processName)) {
+                return true;
+            }
+            continue;
+        }
+        // "进程名@窗口类名"：要求窗口类也一致，用于 explorer.exe 区分
+        // 桌面（Progman/WorkerW）与文件窗口（CabinetWClass）。
+        // @ 前后留空或没有窗口类信息可比时，条目视为无效。
+        if (at == 0 || at + 1 == candidate.size() || windowClass.empty()) {
+            continue;
+        }
+        if (processNameEquals(candidate.substr(0, at), processName) &&
+            processNameEquals(candidate.substr(at + 1), windowClass)) {
             return true;
         }
     }
@@ -20,14 +35,15 @@ bool containsProcess(const RadialPlugin& plugin,
 
 const RadialPlugin* findPluginForProcess(
     const std::vector<RadialPlugin>& plugins,
-    const std::string& processName) noexcept {
+    const std::string& processName,
+    const std::string& windowClass) noexcept {
     if (processName.empty()) {
         return nullptr;
     }
 
     const RadialPlugin* best = nullptr;
     for (const auto& plugin : plugins) {
-        if (!plugin.valid || !containsProcess(plugin, processName)) {
+        if (!plugin.valid || !containsProcess(plugin, processName, windowClass)) {
             continue;
         }
         if (best == nullptr) {

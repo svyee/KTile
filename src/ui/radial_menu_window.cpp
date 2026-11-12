@@ -258,8 +258,10 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
         SetCursorPos(centerScreen_.x, centerScreen_.y);
     }
 
+    // 只改位置不显示：分层窗口的旧位图还在，先渲染出新帧再显示，
+    // 否则复用窗口时会先闪一下上一份菜单的内容。
     SetWindowPos(hwnd_, HWND_TOPMOST, left, top, windowSizePx_, windowSizePx_,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                 SWP_NOACTIVATE);
 
     if (!createDeviceResources()) {
         return;
@@ -267,6 +269,9 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
 
     startAppearAnimation();
     render();
+
+    // UpdateLayeredWindow 对隐藏窗口同样生效，此时位图已是新内容。
+    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
 }
 
 void RadialMenuWindow::updateCursor(POINT screenPoint) {

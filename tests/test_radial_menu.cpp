@@ -330,6 +330,38 @@ static void testFindPluginForProcess() {
     CHECK(hit != nullptr && hit->id == "aaa");
 }
 
+static void testFindPluginForWindowClass() {
+    // explorer 同进程，靠窗口类分文件窗口与桌面
+    std::vector<RadialPlugin> plugins;
+    plugins.push_back(makePlugin("explorer-files", {"explorer.exe@cabinetwclass"}, 0));
+    plugins.push_back(makePlugin("explorer-desktop",
+                                 {"explorer.exe@progman", "explorer.exe@workerw"}, 0));
+
+    const RadialPlugin* hit =
+        findPluginForProcess(plugins, "explorer.exe", "cabinetwclass");
+    CHECK(hit != nullptr && hit->id == "explorer-files");
+    hit = findPluginForProcess(plugins, "explorer.exe", "progman");
+    CHECK(hit != nullptr && hit->id == "explorer-desktop");
+    hit = findPluginForProcess(plugins, "explorer.exe", "WORKERW");
+    CHECK(hit != nullptr && hit->id == "explorer-desktop");
+    hit = findPluginForProcess(plugins, "EXPLORER.EXE", "CabinetWClass");
+    CHECK(hit != nullptr && hit->id == "explorer-files");
+
+    // 无窗口类信息（老调用方式）时，带类后缀的条目不命中
+    CHECK(findPluginForProcess(plugins, "explorer.exe") == nullptr);
+
+    // 无后缀条目与类后缀条目混用：无类信息也能靠无后缀条目命中
+    plugins.push_back(makePlugin("explorer-any", {"explorer.exe"}, 0));
+    hit = findPluginForProcess(plugins, "explorer.exe");
+    CHECK(hit != nullptr && hit->id == "explorer-any");
+
+    // 无效写法：@ 前后留空，永不命中
+    plugins.clear();
+    plugins.push_back(makePlugin("bad1", {"@cabinetwclass"}, 0));
+    plugins.push_back(makePlugin("bad2", {"explorer.exe@"}, 0));
+    CHECK(findPluginForProcess(plugins, "explorer.exe", "cabinetwclass") == nullptr);
+}
+
 static void testValidateRadialPlugin() {
     RadialPlugin plugin = makePlugin("ok", {"a.exe"}, 0);
     CHECK(validateRadialPlugin(plugin));
@@ -441,6 +473,7 @@ int wmain() {
     testSuppressionApplies();
     testValidateRejectsSuppressionConflict();
     testFindPluginForProcess();
+    testFindPluginForWindowClass();
     testValidateRadialPlugin();
     testLabelWindowCenteredEqualsCardWidth();
     testLabelWindowNarrowsWhenRotated();

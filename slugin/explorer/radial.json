@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "文件资源管理器",
-  "processes": ["explorer.exe"],
+  "processes": ["explorer.exe@CabinetWClass"],
   "priority": 0,
   "menu": {
     "name": "资源管理器",

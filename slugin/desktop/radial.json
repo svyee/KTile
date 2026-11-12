@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "name": "桌面",
+  "processes": ["explorer.exe@Progman", "explorer.exe@WorkerW"],
+  "priority": 0,
+  "menu": {
+    "name": "桌面",
+    "sectorCount": 6,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "新建文件夹",
+        "modifiers": ["control", "shift"],
+        "key": "N",
+        "icon": "icons/folder-plus.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "粘贴",
+        "modifiers": ["control"],
+        "key": "V",
+        "icon": "icons/paste.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "刷新",
+        "key": "F5",
+        "icon": "icons/refresh.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "全选",
+        "modifiers": ["control"],
+        "key": "A",
+        "icon": "icons/copy.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "撤销",
+        "modifiers": ["control"],
+        "key": "Z",
+        "icon": "icons/arrow-left.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "属性",
+        "modifiers": ["alt"],
+        "key": "Enter",
+        "icon": "icons/info.svg"
+      }
+    ]
+  }
+}

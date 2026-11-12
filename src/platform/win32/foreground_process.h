@@ -16,6 +16,11 @@ namespace win32 {
 // 失败（无前台窗口 / 无法打开进程）返回空串。
 std::wstring foregroundProcessName();
 
+// 获取前台窗口的窗口类名（小写）。与进程名配合使用：explorer.exe 的
+// 文件窗口类是 CabinetWClass，桌面是 Progman / WorkerW，轮盘插件靠它
+// 区分同进程的两类界面。取不到返回空串。
+std::wstring foregroundWindowClass();
+
 }  // namespace win32
 }  // namespace platform
 }  // namespace ktile

@@ -23,7 +23,10 @@ inline constexpr std::uint32_t kRadialPluginSchemaVersion = 1;
 struct RadialPlugin {
     std::string id;                      // 目录名，如 "vscode"
     std::string name;                    // 显示名，空则用 id
-    std::vector<std::string> processes;  // 匹配的进程名（大小写不敏感）
+    // 条目格式 "进程名" 或 "进程名@窗口类名"（均大小写不敏感）。带类名后缀
+    // 的条目要求前台窗口类也一致：explorer.exe 的文件窗口是 CabinetWClass、
+    // 桌面是 Progman/WorkerW，同进程不同类，靠后缀分开配置。
+    std::vector<std::string> processes;
     int priority = 0;                    // 越大越优先，解决两个插件抢同一进程
     RadialMenu menu;                     // 扇区与动作
 
@@ -38,12 +41,14 @@ struct RadialPlugin {
     RadialPlugin() = default;
 };
 
-// 按前台进程名挑一份插件轮盘：processes 命中者优先，priority 大者赢，
-// 仍并列则按 id 字典序取第一个（不随文件系统遍历顺序变）。没有命中返回
-// nullptr，调用方回落到用户配置的通用轮盘。
+// 按前台进程名（及可选的窗口类名）挑一份插件轮盘：processes 命中者优先，
+// priority 大者赢，仍并列则按 id 字典序取第一个（不随文件系统遍历顺序变）。
+// windowClass 为空时带类名后缀的条目不命中。没有命中返回 nullptr，调用方
+// 回落到用户配置的通用轮盘。
 const RadialPlugin* findPluginForProcess(
     const std::vector<RadialPlugin>& plugins,
-    const std::string& processName) noexcept;
+    const std::string& processName,
+    const std::string& windowClass = {}) noexcept;
 
 // 插件菜单是否可用（扇区数与动作数一致且在合法区间内）。
 // 插件是外部文件，校验不过会被标记 valid=false 并跳过，而不是回落到默认
