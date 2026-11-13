@@ -68,7 +68,10 @@ bool validateRadialPlugin(const RadialPlugin& plugin) noexcept {
         plugin.menu.sectorCount > kMaxSectors) {
         return false;
     }
-    if (plugin.menu.actions.size() != plugin.menu.sectorCount) {
+    // 允许动作数多于扇区数：多出来的是带 when 条件的变体（如资源管理器
+    // 插件「有选中 / 无选中」两套动作共用一份清单），显示期会过滤回
+    // sectorCount 以内。少于扇区数仍然非法（补齐规则靠不住）。
+    if (plugin.menu.actions.size() < plugin.menu.sectorCount) {
         return false;
     }
     // 空进程名会让「按进程匹配」失去意义，还可能误命中（空串比较）

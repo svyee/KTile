@@ -66,6 +66,7 @@ WindowTarget targetForWindow(HWND window) {
     if (window == nullptr) {
         return target;
     }
+    target.window = window;
     target.processName = processNameForWindow(window);
     target.windowClass = classNameToLower(window);
     return target;

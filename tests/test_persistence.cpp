@@ -1079,8 +1079,9 @@ void testBundledPluginsLoad() {
             continue;
         }
         CHECK(!plugin.processes.empty());
-        CHECK_EQ(static_cast<long long>(plugin.menu.actions.size()),
-                 static_cast<long long>(plugin.menu.sectorCount));
+        // 动作数允许多于扇区数：多出来的是带 when 条件的变体（explorer /
+        // 桌面插件一份清单装「有选中 / 无选中」两套）
+        CHECK(plugin.menu.actions.size() >= plugin.menu.sectorCount);
 
         for (const auto& action : plugin.menu.actions) {
             CHECK(!action.name.empty());

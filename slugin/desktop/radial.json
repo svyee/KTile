@@ -9,7 +9,15 @@
     "actions": [
       {
         "type": "shortcut",
+        "name": "全选",
+        "modifiers": ["control"],
+        "key": "A",
+        "icon": "icons/box-select.svg"
+      },
+      {
+        "type": "shortcut",
         "name": "新建文件夹",
+        "when": "noselection",
         "modifiers": ["control", "shift"],
         "key": "N",
         "icon": "icons/folder-plus.svg"
@@ -17,6 +25,7 @@
       {
         "type": "shortcut",
         "name": "粘贴",
+        "when": "noselection",
         "modifiers": ["control"],
         "key": "V",
         "icon": "icons/paste.svg"
@@ -24,27 +33,61 @@
       {
         "type": "shortcut",
         "name": "刷新",
+        "when": "noselection",
         "key": "F5",
         "icon": "icons/refresh.svg"
       },
       {
-        "type": "shortcut",
-        "name": "全选",
-        "modifiers": ["control"],
-        "key": "A",
-        "icon": "icons/copy.svg"
-      },
-      {
         "type": "url",
         "name": "个性化",
+        "when": "noselection",
         "target": "ms-settings:personalization",
         "icon": "icons/palette.svg"
       },
       {
         "type": "url",
         "name": "显示设置",
+        "when": "noselection",
         "target": "ms-settings:display",
         "icon": "icons/monitor.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "重命名",
+        "when": "selection",
+        "key": "F2",
+        "icon": "icons/pencil.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "复制",
+        "when": "selection",
+        "modifiers": ["control"],
+        "key": "C",
+        "icon": "icons/copy.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "剪切",
+        "when": "selection",
+        "modifiers": ["control"],
+        "key": "X",
+        "icon": "icons/scissors.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "删除",
+        "when": "selection",
+        "key": "Delete",
+        "icon": "icons/trash.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "属性",
+        "when": "selection",
+        "modifiers": ["alt"],
+        "key": "Enter",
+        "icon": "icons/info.svg"
       }
     ]
   }

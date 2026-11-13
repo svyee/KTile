@@ -8,6 +8,49 @@
 namespace ktile {
 namespace core {
 
+// --- 选中状态过滤
+
+std::optional<RadialMenu> selectionFilteredMenu(const RadialMenu& source,
+                                                bool hasSelection) {
+    bool conditional = false;
+    for (const RadialAction& action : source.actions) {
+        if (action.when != RadialActionWhen::Always) {
+            conditional = true;
+            break;
+        }
+    }
+    if (!conditional) {
+        return std::nullopt;
+    }
+
+    std::vector<RadialAction> visible;
+    for (const RadialAction& action : source.actions) {
+        if (action.isEmpty()) {
+            continue;  // 补齐用的空槽位不参与计数
+        }
+        const bool show =
+            action.when == RadialActionWhen::Always ||
+            (hasSelection ? action.when == RadialActionWhen::WithSelection
+                          : action.when == RadialActionWhen::WithoutSelection);
+        if (show) {
+            visible.push_back(action);
+        }
+    }
+    if (visible.size() < kMinSectors) {
+        return std::nullopt;
+    }
+
+    RadialMenu result;
+    result.id = source.id;
+    result.name = source.name;
+    result.nameKey = source.nameKey;
+    result.sectorCount = static_cast<std::uint8_t>(
+        std::min<std::size_t>(visible.size(), kMaxSectors));
+    result.actions.assign(visible.begin(),
+                          visible.begin() + result.sectorCount);
+    return result;
+}
+
 // --- 抑制键
 
 bool modifierIsTriggerModifier(HotkeyModifier held,

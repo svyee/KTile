@@ -233,6 +233,7 @@ function Get-AppSources {
         (Join-Path $SrcDir "platform\win32\drop_target.cpp")
         (Join-Path $SrcDir "platform\win32\system_actions.cpp")
         (Join-Path $SrcDir "platform\win32\foreground_process.cpp")
+        (Join-Path $SrcDir "platform\win32\explorer_selection.cpp")
         (Join-Path $SrcDir "platform\win32\key_injector.cpp")
         (Join-Path $SrcDir "platform\win32\radial_mouse_hook.cpp")
         (Join-Path $SrcDir "platform\win32\builtin_icon.cpp")

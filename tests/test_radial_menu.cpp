@@ -382,9 +382,15 @@ static void testValidateRadialPlugin() {
     twoSectors.menu.actions.resize(2);
     CHECK(!validateRadialPlugin(twoSectors));
 
+    // 动作数少于扇区数：非法（补齐规则靠不住）
     RadialPlugin mismatch = makePlugin("x", {"a.exe"}, 0, 4);
-    mismatch.menu.actions.resize(6);
+    mismatch.menu.actions.resize(2);
     CHECK(!validateRadialPlugin(mismatch));
+
+    // 动作数多于扇区数：合法，多出来的是带 when 条件的变体动作
+    RadialPlugin extra = makePlugin("x", {"a.exe"}, 0, 4);
+    extra.menu.actions.resize(6);
+    CHECK(validateRadialPlugin(extra));
 
     RadialPlugin nine = makePlugin("x", {"a.exe"}, 0, 8);
     nine.menu.sectorCount = 9;

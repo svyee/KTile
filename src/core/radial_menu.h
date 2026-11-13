@@ -54,6 +54,31 @@ inline RadialActionType radialActionTypeFromKey(const std::string& key,
     return RadialActionType::Application;
 }
 
+// --- 动作生效条件（按目标窗口是否选中了文件切换两套动作）
+//
+// 主要给 explorer / 桌面插件用：有选中显示重命名/复制/删除，没选中显示
+// 刷新/新建。Always 是默认值，缺字段时行为与旧清单完全一致。
+enum class RadialActionWhen : std::uint8_t {
+    Always           = 0,   // 任何状态都显示（默认）
+    WithSelection    = 1,   // 仅目标窗口选中了文件时显示
+    WithoutSelection = 2,   // 仅目标窗口没有选中文件时显示
+};
+
+inline const char* radialActionWhenKey(RadialActionWhen when) noexcept {
+    switch (when) {
+        case RadialActionWhen::Always:           return "always";
+        case RadialActionWhen::WithSelection:    return "selection";
+        case RadialActionWhen::WithoutSelection: return "noselection";
+    }
+    return "always";
+}
+
+inline RadialActionWhen radialActionWhenFromKey(const std::string& key) noexcept {
+    if (key == "selection")   return RadialActionWhen::WithSelection;
+    if (key == "noselection") return RadialActionWhen::WithoutSelection;
+    return RadialActionWhen::Always;
+}
+
 // --- 轮盘动作
 
 struct RadialAction {
@@ -70,6 +95,9 @@ struct RadialAction {
     // 仅 Shortcut 类型有效
     std::vector<HotkeyModifier> modifiers;     // 修饰键（Ctrl/Shift/Alt/Win）
     std::string key;                           // 主键名（如 "C", "F4", "Space"）
+
+    // 显示条件（见 RadialActionWhen）。图标等其余字段与条件无关。
+    RadialActionWhen when = RadialActionWhen::Always;
 
     RadialAction() = default;
 
@@ -97,6 +125,14 @@ struct RadialMenu {
         : id(std::move(id_)), name(std::move(name_)),
           sectorCount(sectors), actions(sectors) {}
 };
+
+// 按目标窗口的文件选中状态过滤动作，重建一份可直接显示的菜单。
+// 没有任何条件动作（全部 Always）返回 nullopt，调用方沿用原菜单；
+// 过滤后可见动作不足 kMinSectors 也返回 nullopt：宁可整轮盘显示旧一套，
+// 不给用户一个只剩两三个扇区的残缺轮盘。重建的扇区数取可见动作数
+// （夹在 kMinSectors..kMaxSectors，超出截断），空槽位规则与原菜单一致。
+std::optional<RadialMenu> selectionFilteredMenu(const RadialMenu& source,
+                                                bool hasSelection);
 
 // --- 触发配置
 

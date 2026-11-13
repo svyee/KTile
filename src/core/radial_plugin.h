@@ -50,9 +50,10 @@ const RadialPlugin* findPluginForProcess(
     const std::string& processName,
     const std::string& windowClass = {}) noexcept;
 
-// 插件菜单是否可用（扇区数与动作数一致且在合法区间内）。
-// 插件是外部文件，校验不过会被标记 valid=false 并跳过，而不是回落到默认
-// 配置（那会让用户以为插件生效了）。
+// 插件菜单是否可用（扇区数合法且动作数不少于扇区数）。带 when 条件的
+// 变体动作允许超出扇区数，显示期过滤。插件是外部文件，校验不过会被
+// 标记 valid=false 并跳过，而不是回落到默认配置（那会让用户以为插件
+// 生效了）。
 bool validateRadialPlugin(const RadialPlugin& plugin) noexcept;
 
 }  // namespace core

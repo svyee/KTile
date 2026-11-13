@@ -488,6 +488,34 @@ abort 一律**不执行扇区动作**：用户已经作废了这次手势，再�
 
 没有命中返回 `nullptr`，调用方回落到通用轮盘。
 
+#### 选中状态条件（`when`）
+
+explorer / 桌面插件的动作可以带可选字段 `"when"`，按**光标下窗口是否选中了
+文件**切换两套动作：
+
+- `"when": "selection"`——仅选中了文件时显示（重命名 / 复制 / 删除 / 属性…）；
+- `"when": "noselection"`——仅没有选中时显示（刷新 / 新建 / 粘贴…）；
+- 不写（或写 `"always"`）——任何状态都显示。
+
+查询实现在 `platform/win32/explorer_selection.{h,cpp}`：`CLSID_ShellWindows`
+枚举 shell 视图，按目标窗口句柄（含 `GA_ROOT` 归一，多标签只认可见标签）匹配，
+`Document.SelectedItems()` 取选中数——与 StarPie 同款机制，只要 Count 一位
+比特，不取路径。桌面走 `FindWindowSW(SWC_DESKTOP)`（常规枚举首项是最近的
+资源管理器窗口，不是桌面，`Item()` 取首项的写法在桌面上拿错对象）。查询
+失败、非 shell 目标一律按「无选中」处理；过滤后动作不足 4 个时整份沿用
+原菜单，不出残缺轮盘。
+
+要点：
+
+- 带条件的动作**允许超过扇区数**（`validateRadialPlugin` 只要求 ≥）：
+  explorer / 桌面插件一份清单装两套各 5 个动作 + 1 个常显的「全选」，
+  实际显示扇区数取过滤后的可见动作数（夹在 4..8）。
+- 查询只在轮盘弹出瞬间做一次快照，弹窗期间选中变化不追踪；COM 环境按需
+  初始化、用完即释，常态开销几毫秒。
+- 无条件动作的插件（现有九个中的其余七个）完全不触发查询，行为与从前一致。
+- Total Commander（自绘控件，无公开 API）与 Directory Opus（有官方 COM 对象
+  但需单独适配器）暂不支持：目标不是 shell 视图时永远按无选中处理。
+
 #### 图标解析
 
 清单里的 `icon` 相对**插件目录**解析，且在**加载期**就转成绝对路径。
@@ -509,13 +537,13 @@ abort 一律**不执行扇区动作**：用户已经作废了这次手势，再�
 
 | 目录 | 适用进程 | 方向（0=正上，顺时针） |
 |---|---|---|
-| `slugin/explorer` | `explorer.exe` | 新建文件夹 / 复制路径 / 粘贴 / 删除 / 刷新 / 上一级 / 后退 / 属性 |
+| `slugin/explorer` | `explorer.exe@CabinetWClass` | 无选中：新建文件夹 / 粘贴 / 刷新 / 上一级 / 后退；有选中：重命名 / 复制路径 / 复制 / 剪切 / 删除 / 属性（`全选` 常显） |
 | `slugin/browser` | `chrome.exe`、`msedge.exe`、`firefox.exe`、`360chromex.exe`、`360chrome.exe`、`360se.exe` | 到顶 / 刷新 / 关闭标签 / 恢复 / 到底 / 新标签 / 后退 / 前进 |
-| `slugin/desktop` | `explorer.exe@Progman`、`explorer.exe@WorkerW` | 新建文件夹 / 粘贴 / 刷新 / 全选 / 个性化 / 显示设置 |
-| `slugin/word` | `winword.exe` | 保存 / 打印 / 撤销 / 恢复 / 加粗 / 下划线 / 查找 / 另存为 |
-| `slugin/excel` | `excel.exe` | 保存 / 撤销 / 恢复 / 自动求和 / 筛选 / 新工作表 / 查找 / 加粗 |
-| `slugin/powerpoint` | `powerpnt.exe` | 放映 / 当前页放映 / 新幻灯片 / 保存 / 撤销 / 打印 |
-| `slugin/photoshop` | `photoshop.exe` | 撤销 / 自由变换 / 新建图层 / 复制图层 / 取消选择 / 反相 / 适配屏幕 / 保存 |
+| `slugin/desktop` | `explorer.exe@Progman`、`explorer.exe@WorkerW` | 无选中：新建文件夹 / 粘贴 / 刷新 / 个性化 / 显示设置；有选中：重命名 / 复制 / 剪切 / 删除 / 属性（`全选` 常显） |
+| `slugin/word` | `winword.exe`、`wps.exe` | 保存 / 打印 / 撤销 / 恢复 / 加粗 / 下划线 / 查找 / 另存为 |
+| `slugin/excel` | `excel.exe`、`et.exe` | 保存 / 撤销 / 恢复 / 自动求和 / 筛选 / 新工作表 / 查找 / 加粗 |
+| `slugin/powerpoint` | `powerpnt.exe`、`wpp.exe` | 放映 / 当前页放映 / 新幻灯片 / 保存 / 撤销 / 打印 |
+| `slugin/photoshop` | `photoshop.exe`、`photocraft.exe` | 撤销 / 自由变换 / 新建图层 / 复制图层 / 取消选择 / 反相 / 适配屏幕 / 保存 |
 | `slugin/potplayer` | `potplayer.exe`、`potplayer64.exe`、`potplayermini.exe`、`potplayermini64.exe` | 播放/暂停 / 全屏 / 快进5秒 / 快退5秒 / 音量+ / 音量- / 静音 / 截图 |
 | `slugin/ttplayer` | `ttplayer.exe` | 播放/暂停 / 停止 / 上一首 / 下一首 / 快退 / 快进 / 静音开关 / 歌词秀 |
 

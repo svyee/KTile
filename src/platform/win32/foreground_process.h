@@ -7,6 +7,8 @@
 //
 #pragma once
 
+#include <Windows.h>
+
 #include <string>
 
 namespace ktile {
@@ -23,9 +25,12 @@ std::wstring foregroundProcessName();
 std::wstring foregroundWindowClass();
 
 // 轮盘的目标窗口快照：进程名 + 窗口类名（均小写，可都为空）。
+// window 保留原始句柄：explorer 多窗口时，查「选中了哪些文件」必须定位
+// 到光标下的那一个，只有进程名和类名区分不出来。
 struct WindowTarget {
     std::wstring processName;
     std::wstring windowClass;
+    HWND window = nullptr;
 };
 
 // 按「鼠标所在位置」解析轮盘的目标窗口：光标点命中的根窗口优先，

@@ -238,6 +238,11 @@ void parseRadialMenuJson(const json::JsonValue& m, core::RadialMenu* out) {
             if (a.hasKey("key")) {
                 action.key = a.find("key").asString();
             }
+            // 显示条件，缺省 always。老配置没有该字段，行为不变。
+            if (a.hasKey("when")) {
+                action.when = core::radialActionWhenFromKey(
+                    a.find("when").asString());
+            }
             out->actions.push_back(action);
         }
     }

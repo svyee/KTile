@@ -334,6 +334,13 @@ app/            组装与生命周期
     信 `GetAsyncKeyState`——那里的 Win down 是补给系统的，键盘状态确实在走。
     回归用例：`tests/test_gesture_win.cpp`。
 
+19. **`WIN32_LEAN_AND_MEAN` 下用 shell COM 头要自己补 `objbase.h`**：构建定义了
+    `LEAN_AND_MEAN`，`windows.h` 不带出 ole2.h，直接 `#include <ExDisp.h>` 会
+    炸出几十个「缺少类型说明符」（`interface` 宏没定义）。先 `#include
+    <objbase.h>` 再引 `ExDisp.h` / `ShlDisp.h`（见 `explorer_selection.cpp`）。
+    另注意 `IShellFolderViewDual::SelectedItems` 的参数就是 `FolderItems**`，
+    不用也不该绕 `IDispatch**`。
+
 ## 12. 关键文件导航
 
 | 文件 | 作用 |
@@ -345,7 +352,7 @@ app/            组装与生命周期
 | `src/core/item_operations.{h,cpp}` | 磁贴增删改、尺寸 / 坐标一致性 |
 | `src/core/tab_operations.{h,cpp}` | 标签页增删改与排序 |
 | `src/core/search.{h,cpp}` | 子串搜索与高亮区间 |
-| `src/core/radial_menu.{h,cpp}` | 轮盘动作模型、角度→扇区命中（纯函数，有单测） |
+| `src/core/radial_menu.{h,cpp}` | 轮盘动作模型、角度→扇区命中、按选中状态过滤动作（纯函数，有单测） |
 | `src/ui/radial_menu_window.{h,cpp}` | 轮盘花瓣卡片绘制、按角度算的标签窗口与跑马灯、命中测试、出现动画 |
 | `src/ui/radial_editor_dialog.{h,cpp}` | 轮盘编辑器（扇区动作 / 进程黑名单） |
 | `src/core/radial_plugin.{h,cpp}` | 轮盘插件模型：进程匹配（priority + id 字典序）、插件校验 |
