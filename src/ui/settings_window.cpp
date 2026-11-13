@@ -33,8 +33,9 @@ const wchar_t* T(const char* key) {
 // 全部按 96 DPI 逻辑像素书写，运行时统一用 scaleFor() 缩放。
 
 // 窗口尺寸：左侧竖向标签栏 + 右侧单列表单，150% 缩放下不顶到工作区顶部。
+// 高度给行为页的置顶快捷键单选组留两行，唤醒说明离底边至少 16px。
 constexpr int kDialogWidth = 700;
-constexpr int kDialogHeight = 470;
+constexpr int kDialogHeight = 492;
 
 constexpr int kMargin = 16;          // 窗口四周边距
 constexpr int kContentTop = 14;      // 内容区起始 y
@@ -188,7 +189,10 @@ constexpr int kHotkeyCtrlSpaceRadioId = 1142;   // 唤醒快捷键：Ctrl+Space
 constexpr int kHotkeyDoubleCtrlRadioId = 1143;  // 唤醒快捷键：双击 Ctrl
 constexpr int kHotkeyWinKeyRadioId = 1144;      // 唤醒快捷键：单按 Win
 constexpr int kStartupCheckId = 1111;
-constexpr int kTopmostCheckId = 1112;
+constexpr int kTopmostNoneRadioId = 1112;     // 置顶快捷键：无
+constexpr int kTopmostF7RadioId = 1113;       // 置顶快捷键：F7
+constexpr int kTopmostCtrlF7RadioId = 1114;   // 置顶快捷键：Ctrl+F7
+constexpr int kTopmostAltF7RadioId = 1115;    // 置顶快捷键：Alt+F7
 constexpr int kHintId = 1120;
 constexpr int kOkId = 1130;
 constexpr int kCancelId = 1131;
@@ -303,7 +307,8 @@ struct SettingsDialogState {
     core::WindowPlacement initialWindowPlacement = core::WindowPlacement::Mouse;
     core::HotkeyPreset initialHotkeyPreset = core::HotkeyPreset::AltSpace;
     bool initialStartup = false;
-    bool initialTopmostHotkey = true;
+    core::TopmostHotkeyPreset initialTopmostHotkey =
+        core::TopmostHotkeyPreset::F7;
 
     // 不透明度显示当前生效的百分比。touched 区分「拖动过」与「没动过」，
     // 否则点确定会把磁贴的「跟随皮肤」写死成数字。
@@ -1410,6 +1415,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                                     "settings.tabBarPosition",
                                     "settings.placement",
                                     "settings.wakeMethod",
+                                    "settings.topmostHotkey",
                                     "settings.languageLabel",
                                     "settings.radial.dragThreshold",
                                     "settings.radial.cancelRadius"}) {
@@ -1863,22 +1869,53 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRight += 26;
 
-            // F7 置顶开关。热键固定 F7，勾选框只表达启用与否。
+            // 置顶快捷键（2x2 单选，None = 关闭功能）。主键固定 F7，
+            // 只选修饰方案，理由同唤醒快捷键的预设化。
+            makeLabel(T("settings.topmostHotkey"), kColumnRightX + 8,
+                      yRight + 3, formLabelW - 8, 18);
             {
-                HWND topmost = makeControl(
-                    L"BUTTON", T("settings.topmostHotkey"),
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                    0, kColumnRightX + 8, yRight, kColumnWidth - 8, 20,
-                    kTopmostCheckId);
-                if (topmost != nullptr) {
-                    SendMessageW(topmost, BM_SETCHECK,
-                                 state->initialTopmostHotkey ? BST_CHECKED
-                                                             : BST_UNCHECKED,
-                                 0);
-                    addTooltip(hwnd, topmost, T("settings.topmostHotkey.tip"));
+                struct TopmostRadio {
+                    int id;
+                    const wchar_t* label;
+                    core::TopmostHotkeyPreset preset;
+                    int column;  // 0 = 左列，1 = 右列
+                    int y;
+                };
+                const TopmostRadio radios[] = {
+                    {kTopmostNoneRadioId, T("common.none"),
+                     core::TopmostHotkeyPreset::None, 0, yRight},
+                    {kTopmostF7RadioId, L"F7",
+                     core::TopmostHotkeyPreset::F7, 1, yRight},
+                    {kTopmostCtrlF7RadioId, L"Ctrl+F7",
+                     core::TopmostHotkeyPreset::CtrlF7, 0, yRight + 22},
+                    {kTopmostAltF7RadioId, L"Alt+F7",
+                     core::TopmostHotkeyPreset::AltF7, 1, yRight + 22},
+                };
+                const int columnGap = 14;
+                const int columnX[2] = {
+                    kColumnRightX + formLabelW,
+                    kColumnRightX + formLabelW + columnGap +
+                        (std::max)(radioWidth(radios[0].label),
+                                   radioWidth(radios[2].label))};
+                for (const auto& radio : radios) {
+                    const bool checked =
+                        radio.preset == state->initialTopmostHotkey;
+                    HWND button = makeControl(
+                        L"BUTTON", radio.label,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                            (radio.id == kTopmostNoneRadioId ? WS_GROUP : 0) |
+                            BS_AUTORADIOBUTTON,
+                        0, columnX[radio.column], radio.y,
+                        radioWidth(radio.label), 20, radio.id);
+                    if (button != nullptr) {
+                        SendMessageW(button, BM_SETCHECK,
+                                     checked ? BST_CHECKED : BST_UNCHECKED, 0);
+                        addTooltip(hwnd, button,
+                                   T("settings.topmostHotkey.tip"));
+                    }
                 }
             }
-            yRight += 26;
+            yRight += 48;
 
             // --- 跟随启动（与开机自启是一件事的两半，紧挨着放）
             {
@@ -2958,12 +2995,35 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         }
                     }
 
-                    HWND topmost = GetDlgItem(hwnd, kTopmostCheckId);
-                    if (topmost != nullptr) {
-                        const bool checked =
-                            SendMessageW(topmost, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                        if (checked != state->initialTopmostHotkey) {
-                            state->result.topmostHotkey = checked;
+                    // --- 置顶快捷键（单选组，找出被选中的那个）
+                    {
+                        struct TopmostRadio {
+                            int id;
+                            core::TopmostHotkeyPreset preset;
+                        };
+                        const TopmostRadio radios[] = {
+                            {kTopmostNoneRadioId,
+                             core::TopmostHotkeyPreset::None},
+                            {kTopmostF7RadioId, core::TopmostHotkeyPreset::F7},
+                            {kTopmostCtrlF7RadioId,
+                             core::TopmostHotkeyPreset::CtrlF7},
+                            {kTopmostAltF7RadioId,
+                             core::TopmostHotkeyPreset::AltF7},
+                        };
+                        for (const auto& radio : radios) {
+                            HWND button = GetDlgItem(hwnd, radio.id);
+                            if (button == nullptr) {
+                                continue;
+                            }
+                            if (SendMessageW(button, BM_GETCHECK, 0, 0) !=
+                                BST_CHECKED) {
+                                continue;
+                            }
+                            if (radio.preset != state->initialTopmostHotkey) {
+                                state->result.topmostHotkeyPreset =
+                                    radio.preset;
+                            }
+                            break;
                         }
                     }
 
@@ -3447,7 +3507,7 @@ bool showSettingsWindow(HWND owner,
                         const std::string& currentThemeName,
                         const std::string& currentLanguage,
                         const bool currentStartup,
-                        const bool currentTopmostHotkey,
+                        const core::TopmostHotkeyPreset currentTopmostHotkeyPreset,
                         const std::vector<core::FollowLaunchEntry>&
                             currentFollowLaunch,
                         const core::HotkeyPreset currentHotkeyPreset,
@@ -3488,7 +3548,7 @@ bool showSettingsWindow(HWND owner,
     state.initialThemeName = base::utf8ToWide(currentThemeName);
     state.initialLanguage.assign(currentLanguage);
     state.initialStartup = currentStartup;
-    state.initialTopmostHotkey = currentTopmostHotkey;
+    state.initialTopmostHotkey = currentTopmostHotkeyPreset;
     state.initialFollowLaunch = currentFollowLaunch;
     state.followLaunch = currentFollowLaunch;
     state.initialHotkeyPreset = currentHotkeyPreset;

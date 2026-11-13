@@ -2511,7 +2511,7 @@ void Application::openSettings() {
         config_.appearance.themeName,
         config_.language,
         config_.activation.startWithWindows,
-        config_.activation.topmostHotkeyEnabled,
+        config_.activation.topmostHotkey,
         config_.activation.followLaunch,
         core::hotkeyPresetOf(config_.activation.hotkey),
         // 不透明度传当前实际生效值：磁贴背景「跟随皮肤」(-1) 时换成
@@ -2672,9 +2672,10 @@ void Application::openSettings() {
         }
     }
 
-    // ---- F7 置顶热键 ----
-    if (result.topmostHotkey.has_value()) {
-        config_.activation.topmostHotkeyEnabled = *result.topmostHotkey;
+    // ---- 置顶快捷键 ----
+    if (result.topmostHotkeyPreset.has_value() &&
+        *result.topmostHotkeyPreset != config_.activation.topmostHotkey) {
+        config_.activation.topmostHotkey = *result.topmostHotkeyPreset;
         // 失败只记日志：热键被占用时界面照常保存，用户可自行排查
         initializeTopmostHotkey();
         configChanged = true;
@@ -2902,12 +2903,22 @@ bool Application::initializeHotkey() {
 
 bool Application::initializeTopmostHotkey() {
     topmostHotkey_.unregister();
-    if (!config_.activation.topmostHotkeyEnabled || messageWindow_ == nullptr) {
+    if (messageWindow_ == nullptr) {
+        return true;
+    }
+    const core::TopmostHotkeyPreset preset = config_.activation.topmostHotkey;
+    if (preset == core::TopmostHotkeyPreset::None) {
         return true;
     }
     core::HotkeyConfig config;
-    config.modifiers.clear();  // 裸键 F7
-    config.key = "F7";
+    config.key = "F7";  // 主键固定，只按预设换修饰键
+    if (preset == core::TopmostHotkeyPreset::CtrlF7) {
+        config.modifiers = {core::HotkeyModifier::Control};
+    } else if (preset == core::TopmostHotkeyPreset::AltF7) {
+        config.modifiers = {core::HotkeyModifier::Alt};
+    } else {
+        config.modifiers.clear();  // 裸键 F7
+    }
     const auto status =
         topmostHotkey_.registerHotkey(messageWindow_, kTopmostHotkeyId, config);
     if (!status) {
@@ -2915,7 +2926,9 @@ bool Application::initializeTopmostHotkey() {
                                       status.error().message);
         return false;
     }
-    infrastructure::applog::info("置顶热键已注册: F7");
+    infrastructure::applog::info(
+        "置顶热键已注册: " +
+        base::wideToUtf8Lossy(platform::win32::formatHotkey(config)));
     return true;
 }
 
