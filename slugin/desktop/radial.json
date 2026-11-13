@@ -35,18 +35,16 @@
         "icon": "icons/copy.svg"
       },
       {
-        "type": "shortcut",
-        "name": "撤销",
-        "modifiers": ["control"],
-        "key": "Z",
-        "icon": "icons/arrow-left.svg"
+        "type": "url",
+        "name": "个性化",
+        "target": "ms-settings:personalization",
+        "icon": "icons/palette.svg"
       },
       {
-        "type": "shortcut",
-        "name": "属性",
-        "modifiers": ["alt"],
-        "key": "Enter",
-        "icon": "icons/info.svg"
+        "type": "url",
+        "name": "显示设置",
+        "target": "ms-settings:display",
+        "icon": "icons/monitor.svg"
       }
     ]
   }
