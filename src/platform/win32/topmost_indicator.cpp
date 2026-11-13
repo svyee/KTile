@@ -2,7 +2,6 @@
 
 #include <cstdint>
 
-#include <string>
 #include <vector>
 
 namespace ktile {
@@ -15,8 +14,7 @@ namespace {
 
 struct Mark {
     HWND target;
-    HWND overlay;  // 自绘方式才有；DWM 方式为 nullptr
-    bool dwm;      // true = DWMWA_BORDER_COLOR 描边
+    HWND overlay;
 };
 
 std::vector<Mark>& marks() {
@@ -27,64 +25,28 @@ std::vector<Mark>& marks() {
 constexpr COLORREF kFrameColor = RGB(235, 140, 40);  // 钉子橙
 constexpr int kFramePx = 6;                          // 描边厚度（物理像素）
 constexpr UINT kValidateTimerId = 1;
-constexpr UINT kValidateIntervalMs = 200;
+constexpr UINT kValidateIntervalMs = 400;
 
-// --- DWM 路径（Win11）：原生窗口描边 ---
-
-using PFN_DwmSetWindowAttribute =
-    HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
-
-constexpr DWORD kDwmwaBorderColor = 34;
-// 官方约定值：恢复系统默认描边
-constexpr COLORREF kDwmColorDefault = COLORREF(0xFFFFFFFE);
-
-PFN_DwmSetWindowAttribute loadDwmSetWindowAttribute() {
-    // 只探一次：地址和 dwmapi.dll 都缓存住，退出时随进程释放
-    static const PFN_DwmSetWindowAttribute cached = []() -> PFN_DwmSetWindowAttribute {
-        const HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
-        if (dwmapi == nullptr) {
-            return nullptr;
-        }
-        return reinterpret_cast<PFN_DwmSetWindowAttribute>(
-            GetProcAddress(dwmapi, "DwmSetWindowAttribute"));
-    }();
-    return cached;
-}
-
-bool tryDwmMark(HWND target, bool marked) {
-    const PFN_DwmSetWindowAttribute setAttribute = loadDwmSetWindowAttribute();
-    if (setAttribute == nullptr) {
-        return false;
-    }
-    const COLORREF color = marked ? kFrameColor : kDwmColorDefault;
-    // 老系统上 DwmSetWindowAttribute 存在但不认识这个属性，返回错误码
-    const HRESULT result = setAttribute(target, kDwmwaBorderColor, &color,
-                                        sizeof(color));
-    return result == S_OK;
-}
-
-// --- 自绘路径：分层窗口描边悬浮框 ---
-
-const wchar_t kOverlayClassName[] = L"KTile.TopmostMarkFrame";
+HWINEVENTHOOK g_locationHook = nullptr;
 
 void renderFrame(HWND overlay, const int left, const int top, const int width,
                  const int height);
 
-void overlayValidate(HWND overlay) {
+// 把描边对齐到目标当前的位置与尺寸；目标最小化 / 隐藏时藏起来
+void syncOverlay(HWND overlay) {
     const HWND target = reinterpret_cast<HWND>(
         GetWindowLongPtrW(overlay, GWLP_USERDATA));
-    bool healthy = target != nullptr && IsWindow(target) &&
-                   IsWindowVisible(target) && !IsIconic(target) &&
-                   (GetWindowLongW(target, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-    RECT rect = {};
-    if (healthy && GetWindowRect(target, &rect) == FALSE) {
-        healthy = false;
-    }
-    if (!healthy) {
-        setTopmostMark(target, false);  // 目标失效自动撤
+    if (target == nullptr || !IsWindow(target)) {
         return;
     }
-
+    if (!IsWindowVisible(target) || IsIconic(target)) {
+        ShowWindow(overlay, SW_HIDE);
+        return;
+    }
+    RECT rect = {};
+    if (GetWindowRect(target, &rect) == FALSE) {
+        return;
+    }
     const int width = rect.right - rect.left + kFramePx * 2;
     const int height = rect.bottom - rect.top + kFramePx * 2;
     // 尺寸变了才重渲染（分层位图跟尺寸走），纯移动复用现成内容
@@ -92,11 +54,25 @@ void overlayValidate(HWND overlay) {
     if (GetWindowRect(overlay, &current) == FALSE ||
         current.right - current.left != width ||
         current.bottom - current.top != height) {
-        renderFrame(overlay, rect.left - kFramePx, rect.top - kFramePx,
-                    width, height);
+        renderFrame(overlay, rect.left - kFramePx, rect.top - kFramePx, width,
+                    height);
     }
     SetWindowPos(overlay, HWND_TOPMOST, rect.left - kFramePx,
-                 rect.top - kFramePx, width, height, SWP_NOACTIVATE);
+                 rect.top - kFramePx, width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+// 定时校验：目标没了 / 不再置顶就地收尾。位置跟随即时走 WinEvent 钩子，
+// 这里只兜底（也覆盖被 UIPI 挡掉的管理员窗口事件）。
+void overlayValidate(HWND overlay) {
+    const HWND target = reinterpret_cast<HWND>(
+        GetWindowLongPtrW(overlay, GWLP_USERDATA));
+    if (target == nullptr || !IsWindow(target) ||
+        (GetWindowLongW(target, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0) {
+        setTopmostMark(target, false);  // 目标失效自动撤
+        return;
+    }
+    syncOverlay(overlay);
 }
 
 // 渲染一帧描边（外圈实色、内部全透明），并按 (left, top, w, h) 落到屏幕
@@ -173,17 +149,38 @@ LRESULT CALLBACK overlayProc(HWND window, UINT message, WPARAM wParam,
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
+// 目标移动 / 缩放 / 显示时立即跟手（定时器只做兜底）
+void CALLBACK locationChangedProc(HWINEVENTHOOK, DWORD, HWND window,
+                                  LONG objectId, LONG, DWORD, DWORD) {
+    if (window == nullptr || objectId != OBJID_WINDOW) {
+        return;
+    }
+    for (const Mark& mark : marks()) {
+        if (mark.target != window || mark.overlay == nullptr) {
+            continue;
+        }
+        if (IsWindow(mark.overlay)) {
+            syncOverlay(mark.overlay);
+        }
+        return;
+    }
+}
+
 ATOM ensureOverlayClass() {
     WNDCLASSEXW desc = {};
     desc.cbSize = sizeof(desc);
     desc.lpfnWndProc = overlayProc;
     desc.hInstance = GetModuleHandleW(nullptr);
-    desc.lpszClassName = kOverlayClassName;
+    desc.lpszClassName = L"KTile.TopmostMarkFrame";
     return RegisterClassExW(&desc);
 }
 
-HWND createOverlay(HWND target, const RECT& rect) {
+HWND createOverlay(HWND target) {
     ensureOverlayClass();
+    RECT rect = {};
+    if (GetWindowRect(target, &rect) == FALSE) {
+        return nullptr;
+    }
     const int width = rect.right - rect.left + kFramePx * 2;
     const int height = rect.bottom - rect.top + kFramePx * 2;
     // LAYERED 分层合成 / TRANSPARENT+NOACTIVATE 点击全穿透 / TOPMOST
@@ -191,7 +188,7 @@ HWND createOverlay(HWND target, const RECT& rect) {
     HWND overlay = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE |
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        kOverlayClassName, L"", WS_POPUP,
+        L"KTile.TopmostMarkFrame", L"", WS_POPUP,
         rect.left - kFramePx, rect.top - kFramePx, width, height,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (overlay == nullptr) {
@@ -212,13 +209,15 @@ void removeMarkFor(HWND target) {
         if (table[i].target != target) {
             continue;
         }
-        if (table[i].dwm) {
-            tryDwmMark(target, false);
-        } else if (table[i].overlay != nullptr) {
+        if (table[i].overlay != nullptr && IsWindow(table[i].overlay)) {
             DestroyWindow(table[i].overlay);
         }
         table.erase(table.begin() + static_cast<std::ptrdiff_t>(i));
-        return;
+        break;
+    }
+    if (table.empty() && g_locationHook != nullptr) {
+        UnhookWinEvent(g_locationHook);
+        g_locationHook = nullptr;
     }
 }
 
@@ -239,30 +238,30 @@ void setTopmostMark(HWND target, bool marked) {
         }
     }
 
-    if (tryDwmMark(target, true)) {
-        table.push_back({target, nullptr, true});
+    const HWND overlay = createOverlay(target);
+    if (overlay == nullptr) {
         return;
     }
-
-    RECT rect = {};
-    if (GetWindowRect(target, &rect) == FALSE) {
-        return;
+    if (table.empty() && g_locationHook == nullptr) {
+        g_locationHook = SetWinEventHook(
+            EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
+            locationChangedProc, 0, 0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     }
-    const HWND overlay = createOverlay(target, rect);
-    if (overlay != nullptr) {
-        table.push_back({target, overlay, false});
-    }
+    table.push_back({target, overlay});
 }
 
 void clearAllTopmostMarks() {
     std::vector<Mark> table;
     table.swap(marks());
     for (const Mark& mark : table) {
-        if (mark.dwm) {
-            tryDwmMark(mark.target, false);
-        } else if (mark.overlay != nullptr && IsWindow(mark.overlay)) {
+        if (mark.overlay != nullptr && IsWindow(mark.overlay)) {
             DestroyWindow(mark.overlay);
         }
+    }
+    if (g_locationHook != nullptr) {
+        UnhookWinEvent(g_locationHook);
+        g_locationHook = nullptr;
     }
 }
 
