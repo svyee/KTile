@@ -349,6 +349,14 @@ app/            组装与生命周期
     确定 / 取消 / 关窗三条退出路径都要补回，否则取消一次功能就「消失」到
     下次启动。
 
+21. **悬浮描边不能一律 `HWND_TOPMOST`**：置顶窗口的橙框是独立分层窗口，若每次
+    都顶到最上层，同时置顶多个窗口时，被压住那份的描边会完整浮在前面。要按
+    目标窗口锚定 z 序：`GetWindow(target, GW_HWNDPREV)` 取目标的上邻窗口当
+    `hWndInsertAfter`（为空则 `HWND_TOP`），这样描边跟着目标一起被遮挡；
+    描边自身的 `WS_EX_TOPMOST` 不能去掉，否则普通窗口就能盖住它。z 序变化
+    不产生 `EVENT_OBJECT_LOCATIONCHANGE`，只能靠定时器定期重插（PowerToys 的
+    always-on-top 模块同样是 100ms 轮询）。见 `topmost_indicator.cpp`。
+
 ## 12. 关键文件导航
 
 | 文件 | 作用 |

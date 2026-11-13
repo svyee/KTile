@@ -25,7 +25,9 @@ std::vector<Mark>& marks() {
 constexpr COLORREF kFrameColor = RGB(235, 140, 40);  // 钉子橙
 constexpr int kFramePx = 6;                          // 描边厚度（物理像素）
 constexpr UINT kValidateTimerId = 1;
-constexpr UINT kValidateIntervalMs = 400;
+// 这个定时器既兜底目标失效，也负责维持描边的 z 序：用户激活别的窗口后，
+// 描边要尽快重新插回目标窗口上方，慢了会看到后置窗口的描边浮在前面。
+constexpr UINT kValidateIntervalMs = 100;
 
 HWINEVENTHOOK g_locationHook = nullptr;
 
@@ -57,8 +59,19 @@ void syncOverlay(HWND overlay) {
         renderFrame(overlay, rect.left - kFramePx, rect.top - kFramePx, width,
                     height);
     }
-    SetWindowPos(overlay, HWND_TOPMOST, rect.left - kFramePx,
-                 rect.top - kFramePx, width, height,
+    // 描边停在目标窗口正上方，跟着目标一起参与遮挡：两个窗口同时置顶时，
+    // 被前面那个压住的一份描边会一起被盖掉，而不是浮在屏幕上。
+    // z 序 API 只能「插到某窗口下面」，所以拿目标的上邻窗口当锚点
+    // （目标本身在最上层时退回 HWND_TOP）。只有描边自己在动。
+    const HWND above = GetWindow(target, GW_HWNDPREV);
+    if (above == overlay) {
+        SetWindowPos(overlay, nullptr, rect.left - kFramePx,
+                     rect.top - kFramePx, width, height,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOZORDER);
+        return;
+    }
+    SetWindowPos(overlay, above != nullptr ? above : HWND_TOP,
+                 rect.left - kFramePx, rect.top - kFramePx, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
@@ -184,7 +197,7 @@ HWND createOverlay(HWND target) {
     const int width = rect.right - rect.left + kFramePx * 2;
     const int height = rect.bottom - rect.top + kFramePx * 2;
     // LAYERED 分层合成 / TRANSPARENT+NOACTIVATE 点击全穿透 / TOPMOST
-    // 保证盖在同为置顶的目标上面 / TOOLWINDOW 不进 Alt+Tab
+    // 与置顶目标同处最上层（否则会被普通窗口盖住）/ TOOLWINDOW 不进 Alt+Tab
     HWND overlay = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE |
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
