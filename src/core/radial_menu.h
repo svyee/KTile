@@ -59,6 +59,10 @@ inline RadialActionType radialActionTypeFromKey(const std::string& key,
 struct RadialAction {
     RadialActionType type = RadialActionType::Application;
     std::string name;                          // 显示名（空时由 target 推导）
+    // 预置项的文案 key（如 "action.copy"），非空时显示层优先翻译它。
+    // 译名不能存进 name：写进配置就固化了，切语言或首次生成早于语言
+    // 加载时会显示成 key 原文。
+    std::string nameKey;
     std::string target;                        // 程序路径 / 文件 / 网址 / 内置命令 id
     std::vector<std::string> arguments;        // 启动参数（仅 Application）
     std::optional<std::string> icon;           // 自定义图标（相对 data 目录）
@@ -71,7 +75,7 @@ struct RadialAction {
 
     // 是否为空槽位（未配置动作）
     bool isEmpty() const noexcept {
-        return name.empty() && target.empty() && key.empty();
+        return name.empty() && nameKey.empty() && target.empty() && key.empty();
     }
 };
 
@@ -84,6 +88,7 @@ inline constexpr std::uint8_t kMaxSectors = 8;
 struct RadialMenu {
     std::string id;
     std::string name;
+    std::string nameKey;                       // 预置菜单名 key，语义同 nameKey
     std::uint8_t sectorCount = 8;              // 4 / 6 / 8
     std::vector<RadialAction> actions;         // 固定 sectorCount 个
 

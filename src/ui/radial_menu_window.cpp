@@ -7,6 +7,7 @@
 #include "platform/win32/icon_loader.h"
 #include "platform/win32/icon_store.h"   // isDecodableImageFile
 #include "platform/win32/svg_path.h"
+#include "ui/radial_labels.h"
 
 #include <Windows.h>
 #include <d2d1.h>
@@ -919,8 +920,9 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
             }
         }
 
-        if (!action.name.empty()) {
-            const std::wstring wideName = base::utf8ToWideLossy(action.name);
+        const std::string displayName = radialActionName(action);
+        if (!displayName.empty()) {
+            const std::wstring wideName = base::utf8ToWideLossy(displayName);
             // 标签带宽度不是卡片宽度：卡片斜着，能容多宽由角度决定；
             // 没有图标时文字带回卡片中间，能宽出十来 DIP。
             const float bandCenter =
@@ -932,7 +934,7 @@ void RadialMenuWindow::paintCell(std::uint8_t index, bool highlighted) {
                 // 不同，是两份排版。
                 std::string cacheKey = std::to_string(index);
                 cacheKey += hasIcon ? "|1|" : "|0|";
-                cacheKey += action.name;
+                cacheKey += displayName;
 
                 const LabelLayout layout =
                     layoutLabel(cacheKey, wideName, windowWidth);

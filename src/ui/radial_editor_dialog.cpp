@@ -10,6 +10,7 @@
 #include "core/builtin_items.h"
 #include "infrastructure/i18n.h"
 #include "ui/dialog_style.h"
+#include "ui/radial_labels.h"
 
 #include <Windows.h>
 #include <commctrl.h>
@@ -305,7 +306,7 @@ void refreshSectorList(HWND dialog, RadialEditorState* state) {
                 continue;
             }
             const std::wstring typeText = actionTypeLabel(action);
-            const std::wstring nameText = base::utf8ToWide(action.name);
+            const std::wstring nameText = base::utf8ToWide(radialActionName(action));
             const std::wstring targetText = actionTargetLabel(action);
             ListView_SetItemText(list, index, 1,
                                  const_cast<LPWSTR>(typeText.c_str()));
@@ -334,7 +335,7 @@ void refreshSectorRow(HWND dialog, RadialEditorState* state) {
     }
     const int row = state->currentSector;
     const std::wstring typeText = actionTypeLabel(*action);
-    const std::wstring nameText = base::utf8ToWide(action->name);
+    const std::wstring nameText = base::utf8ToWide(radialActionName(*action));
     const std::wstring targetText = actionTargetLabel(*action);
     state->suppressNotify = true;
     ListView_SetItemText(list, row, 1, const_cast<LPWSTR>(typeText.c_str()));
@@ -449,8 +450,9 @@ void refreshActionForm(HWND dialog, RadialEditorState* state) {
     }
 
     setControlText(dialog, kActionNameEditId,
-                   action != nullptr ? base::utf8ToWide(action->name)
-                                     : std::wstring());
+                   action != nullptr
+                       ? base::utf8ToWide(radialActionName(*action))
+                       : std::wstring());
     setControlText(dialog, kActionTargetEditId,
                    action != nullptr ? base::utf8ToWide(action->target)
                                      : std::wstring());
@@ -601,7 +603,15 @@ void commitActionForm(HWND dialog, RadialEditorState* state) {
     }
 
     action->type = kActionTypes[typeIndex].type;
-    action->name = base::wideToUtf8Lossy(name);
+    // 名字没改就继续存 key，让它跟着语言切换；改过才固化用户输入，
+    // 同时丢掉 key，否则翻译永远盖住他写的字。
+    const std::string typedName = base::wideToUtf8Lossy(name);
+    if (!action->nameKey.empty() && typedName == radialActionName(*action)) {
+        action->name.clear();
+    } else {
+        action->name = typedName;
+        action->nameKey.clear();
+    }
 
     // 按类型清理无关字段：残留值会让动作「看着配好了、按了没反应」
     // （例如 target 已空而 key 还留着，isEmpty() 为假就去启动空路径）。

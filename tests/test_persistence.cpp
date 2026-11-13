@@ -755,6 +755,54 @@ void testRadialTriggerValuesClamped() {
     CHECK_EQ(static_cast<long long>(loaded.value.menu.actions.size()), 8);
 }
 
+// 预置项的文案以 key 存盘：写译文进配置就会固化，切语言不变。
+void testRadialPresetNameKeys() {
+    // 默认配置只带 key，不带译名
+    const auto defaults = RadialStore::deserialize("{\"schemaVersion\": 4}");
+    CHECK(defaults.ok);
+    if (defaults.ok) {
+        CHECK(defaults.value.menu.nameKey == "radial.defaultMenuName");
+        CHECK(defaults.value.menu.name.empty());
+        CHECK(defaults.value.menu.actions[0].nameKey == "action.copy");
+        CHECK(defaults.value.menu.actions[0].name.empty());
+    }
+
+    // 旧配置把 key 原文（或某次生成的译文）存在 name 里：能翻译说明它是
+    // key，迁回 nameKey；用户自己敲的字面量原样留在 name。
+    const std::string legacy =
+        "{\"schemaVersion\": 4,"
+        "\"menu\": {\"name\": \"radial.defaultMenuName\", \"sectorCount\": 4,"
+        "\"actions\": ["
+        "  {\"type\": \"shortcut\", \"name\": \"action.paste\", \"key\": \"V\"},"
+        "  {\"type\": \"url\", \"name\": \"我的网址\","
+        "   \"target\": \"https://example.com\"},"
+        "  {}, {}]}}";
+    const auto migrated = RadialStore::deserialize(legacy);
+    CHECK(migrated.ok);
+    if (migrated.ok) {
+        CHECK(migrated.value.menu.nameKey == "radial.defaultMenuName");
+        CHECK(migrated.value.menu.name.empty());
+        CHECK(migrated.value.menu.actions[0].nameKey == "action.paste");
+        CHECK(migrated.value.menu.actions[0].name.empty());
+        CHECK(migrated.value.menu.actions[1].nameKey.empty());
+        CHECK(migrated.value.menu.actions[1].name == "我的网址");
+    }
+
+    // key 往返：存 nameKey，读回来还是 nameKey（不会被译名替换）
+    core::RadialConfig config;
+    config.menu = core::RadialMenu("default", std::string(), 4);
+    config.menu.nameKey = "radial.defaultMenuName";
+    config.menu.actions[0].nameKey = "action.undo";
+    config.menu.actions[0].key = "Z";
+    const auto roundTrip = RadialStore::deserialize(RadialStore::serialize(config));
+    CHECK(roundTrip.ok);
+    if (roundTrip.ok) {
+        CHECK(roundTrip.value.menu.nameKey == "radial.defaultMenuName");
+        CHECK(roundTrip.value.menu.actions[0].nameKey == "action.undo");
+        CHECK(roundTrip.value.menu.actions[0].name.empty());
+    }
+}
+
 // 抑制键往返：JSON 里写成 alt/control/shift/win，读回来必须一一对应。
 void testRadialSuppressionRoundTrip() {
     core::RadialConfig config;
@@ -1104,6 +1152,7 @@ int wmain() {
     testLabelModeRoundTripAndFallback();
     testPluginItemRoundTrip();
     testRadialConfigRoundTrip();
+    testRadialPresetNameKeys();
     testRadialTriggerValuesClamped();
     testRadialSuppressionRoundTrip();
     testRadialSuppressionFilteredOnLoad();

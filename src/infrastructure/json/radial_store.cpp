@@ -43,34 +43,61 @@ core::HotkeyModifier hotkeyModifierFromKey(const std::string& key,
 // 生成默认的 8 扇区全局轮盘（首次运行用）
 core::RadialConfig makeDefaultConfig() {
     core::RadialConfig config;
-    // 默认菜单名与预置动作名取自语言文件，英文环境首次生成的配置就是英文。
-    // 用户改过的名字属于用户数据，不跟随语言切换。
-    core::RadialMenu global(
-        "default", infrastructure::i18n::tr("radial.defaultMenuName"), 8);
+    // 预置项只写文案 key，不写译文：译文进配置就固化了，切语言不变，
+    // 首次生成早于语言加载时还会把 key 原文存下来。
+    core::RadialMenu global("default", std::string(), 8);
+    global.nameKey = "radial.defaultMenuName";
 
     // 预置几个常用动作，其余留空
     global.actions[0].type = core::RadialActionType::Shortcut;
-    global.actions[0].name = infrastructure::i18n::tr("action.copy");
+    global.actions[0].nameKey = "action.copy";
     global.actions[0].modifiers = {core::HotkeyModifier::Control};
     global.actions[0].key = "C";
 
     global.actions[2].type = core::RadialActionType::Shortcut;
-    global.actions[2].name = infrastructure::i18n::tr("action.paste");
+    global.actions[2].nameKey = "action.paste";
     global.actions[2].modifiers = {core::HotkeyModifier::Control};
     global.actions[2].key = "V";
 
     global.actions[4].type = core::RadialActionType::Shortcut;
-    global.actions[4].name = infrastructure::i18n::tr("action.cut");
+    global.actions[4].nameKey = "action.cut";
     global.actions[4].modifiers = {core::HotkeyModifier::Control};
     global.actions[4].key = "X";
 
     global.actions[6].type = core::RadialActionType::Shortcut;
-    global.actions[6].name = infrastructure::i18n::tr("action.undo");
+    global.actions[6].nameKey = "action.undo";
     global.actions[6].modifiers = {core::HotkeyModifier::Control};
     global.actions[6].key = "Z";
 
     config.menu = global;
     return config;
+}
+
+// 旧配置把预置项的译名或 key 原文存进了 name。能被语言文件翻译的说明它
+// 本来就是 key，挪回 nameKey；用户自己敲的字面量翻不动，原样保留。
+void migratePresetNames(core::RadialMenu* menu) {
+    if (menu == nullptr) return;
+
+    // 语言文件缺失时 tr() 返回 key 本身，光靠「能翻译」判不出来，
+    // 预置 key 的两类前缀再兜一层。
+    const auto looksLikeKey = [](const std::string& value) {
+        return value.rfind("action.", 0) == 0 || value.rfind("radial.", 0) == 0;
+    };
+
+    const auto migrate = [&](std::string* name, std::string* nameKey) {
+        if (name == nullptr || nameKey == nullptr) return;
+        if (!nameKey->empty() || name->empty()) return;
+        if (looksLikeKey(*name) ||
+            infrastructure::i18n::tr(name->c_str()) != *name) {
+            *nameKey = *name;
+            name->clear();
+        }
+    };
+
+    migrate(&menu->name, &menu->nameKey);
+    for (auto& action : menu->actions) {
+        migrate(&action.name, &action.nameKey);
+    }
 }
 
 }  // namespace
@@ -108,6 +135,9 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
         const auto& menu = config.menu;
         writer.key("menu").beginObject();
         writer.member("name", menu.name);
+        if (!menu.nameKey.empty()) {
+            writer.member("nameKey", menu.nameKey);
+        }
         writer.member("sectorCount", static_cast<std::uint32_t>(menu.sectorCount));
 
         writer.key("actions").beginArray();
@@ -115,6 +145,9 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
             writer.beginObject();
             writer.member("type", core::radialActionTypeKey(action.type));
             writer.member("name", action.name);
+            if (!action.nameKey.empty()) {
+                writer.member("nameKey", action.nameKey);
+            }
             writer.member("target", action.target);
 
             if (!action.arguments.empty()) {
@@ -161,6 +194,7 @@ std::string RadialStore::serialize(const core::RadialConfig& config) {
 void parseRadialMenuJson(const json::JsonValue& m, core::RadialMenu* out) {
     if (out == nullptr) return;
     out->name = m.find("name").asString();
+    out->nameKey = m.find("nameKey").asString();
     out->sectorCount = static_cast<std::uint8_t>(
         m.find("sectorCount").asUint32(8));
     if (out->sectorCount < core::kMinSectors) {
@@ -182,6 +216,7 @@ void parseRadialMenuJson(const json::JsonValue& m, core::RadialMenu* out) {
             action.type = core::radialActionTypeFromKey(
                 a.find("type").asString(), &recognized);
             action.name = a.find("name").asString();
+            action.nameKey = a.find("nameKey").asString();
             action.target = a.find("target").asString();
 
             const JsonValue& args = a.find("arguments");
@@ -319,6 +354,9 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
             }
         }
     }
+
+    // 旧配置里的预置项存的是译文 / key 原文，迁回 nameKey
+    migratePresetNames(&result.value.menu);
 
     // ---- blacklist ----
     result.value.blacklist.clear();

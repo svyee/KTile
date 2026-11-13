@@ -100,7 +100,8 @@ enum class RadialActionType : std::uint8_t {
 // 单个扇区的动作
 struct RadialAction {
     RadialActionType type = RadialActionType::Application;
-    std::string name;                          // 显示名
+    std::string name;                          // 显示名（用户 / 插件填的字面量）
+    std::string nameKey;                       // 预置项的文案 key，非空时优先翻译
     std::string target;                        // 程序路径 / 文件 / 网址 / 内置命令 id
     std::vector<std::string> arguments;        // 启动参数（仅 Application）
     std::optional<std::string> icon;           // 自定义图标（相对 data 目录）
@@ -112,6 +113,7 @@ struct RadialAction {
 struct RadialMenu {
     std::string id;
     std::string name;
+    std::string nameKey;                       // 预置菜单名 key，语义同上
     std::uint8_t sectorCount = 8;              // 4 / 6 / 8
     std::vector<RadialAction> actions;         // 固定 sectorCount 个，空槽位留空 action
 };
@@ -158,7 +160,12 @@ struct RadialConfig {
 
 ### 3.2 持久化
 
-- 独立文件 `data/radial.json`，带 `schemaVersion`（当前为 **3**）。
+- 独立文件 `data/radial.json`，带 `schemaVersion`（当前为 **4**）。
+- **预置项的显示名只存文案 key**（`nameKey`，如 `action.copy`），渲染时按当前
+  语言翻译（`ui/radial_labels.h`）。把译名写进配置会固化：切语言不变，首次生成
+  早于语言文件加载时还会把 key 原文存下来。旧配置里 name 是 key 原文的，加载时
+  迁回 `nameKey`（语言文件缺失时 `tr()` 返回 key 本身，所以 `action.` / `radial.`
+  前缀也作为判定依据）。用户与插件填的字面量留在 `name`，不跟随语言切换。
 - 版本线独立：用 `core::kRadialSchemaVersion` 而不是 `data_model.h` 的
   `kCurrentSchemaVersion`——两者结构毫无关系，共用常量会让给轮盘加字段时
   连带把磁贴配置的版本号推上去。
@@ -182,6 +189,8 @@ struct RadialConfig {
     剔除（撞车等于永远不触发）；剔除单项而不是整份打回默认——用户的扇区配置
     比抑制键值钱
   - `blacklist` 逐项削首尾空白、去掉空项、按大小写不敏感去重
+  - 菜单名 / 动作名是文案 key 的（`action.` / `radial.` 前缀，或翻译后与原值
+    不同）迁到 `nameKey`，`name` 清空
 
 **修饰键与抑制键互斥**（设置页与钩子共用同一条规则 `core::suppressionApplies`）：
 
