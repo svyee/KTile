@@ -194,6 +194,7 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     // ---- activation ----
     writer.key("activation").beginObject();
     writer.member("startWithWindows", config.activation.startWithWindows);
+    writer.member("topmostHotkeyEnabled", config.activation.topmostHotkeyEnabled);
     writer.member("screenEdgeEnabled", config.activation.screenEdgeEnabled);
 
     // ---- 跟随启动 ----
@@ -529,6 +530,8 @@ ConfigStore::deserializeConfig(const std::string& text) {
     if (activation.isObject()) {
         auto& config = result.value.activation;
         config.startWithWindows = activation.find("startWithWindows").asBool(false);
+        config.topmostHotkeyEnabled =
+            activation.find("topmostHotkeyEnabled").asBool(true);
         config.screenEdgeEnabled = activation.find("screenEdgeEnabled").asBool(false);
 
         // 跟随启动：缺键 = 空表（v2 及更老的配置都走这里）。

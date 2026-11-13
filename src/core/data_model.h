@@ -571,6 +571,10 @@ inline constexpr std::size_t kMaximumFollowLaunchItems = 32;
 struct ActivationConfig {
     HotkeyConfig hotkey;
 
+    // F7 切换前台窗口置顶（替代第三方置顶小工具）。固定单键 F7 不做
+    // 自由配置：热键录制要配冲突检测与反馈，唤醒键当年也是这么取舍的。
+    bool topmostHotkeyEnabled = true;
+
     bool startWithWindows = false;
 
     // 跟随启动：KTile 启动时一并启动的外部程序，已在运行的不重复启动。

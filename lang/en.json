@@ -129,6 +129,8 @@
     "settings.placement.rightTop": "Top right",
     "settings.placement.last": "Last position",
     "settings.startWithWindows": "Start with Windows",
+    "settings.topmostHotkey": "F7 toggles always-on-top",
+    "settings.topmostHotkey.tip": "Press F7 to pin / unpin the current window; replaces third-party topmost tools",
     "settings.followLaunch": "Launch with KTile",
     "settings.followLaunch.add": "Add…",
     "settings.followLaunch.remove": "Remove",

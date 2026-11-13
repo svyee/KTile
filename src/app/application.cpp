@@ -12,6 +12,7 @@
 #include "ui/radial_menu_window.h"
 #include "platform/win32/follow_launcher.h"
 #include "platform/win32/foreground_process.h"
+#include "platform/win32/explorer_selection.h"
 #include "platform/win32/item_launcher.h"
 #include "platform/win32/program_paths.h"
 #include "platform/win32/icon_store.h"
@@ -328,6 +329,10 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
         case WM_HOTKEY: {
             if (self != nullptr && wParam == static_cast<WPARAM>(kToggleHotkeyId)) {
                 self->toggleLauncher();
+                return 0;
+            }
+            if (self != nullptr && wParam == static_cast<WPARAM>(kTopmostHotkeyId)) {
+                self->toggleTopmost();
                 return 0;
             }
             break;
@@ -659,6 +664,9 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
                     kApplicationName,
                     MB_OK | MB_ICONWARNING);
     }
+
+    // F7 置顶热键注册失败不提示框：被占用只记日志，面板唤醒不能被它连累。
+    initializeTopmostHotkey();
 
     // 安装轮盘菜单鼠标钩子（Ctrl+右键拖动等）
     if (radialConfig_.trigger.enabled) {
@@ -1304,10 +1312,10 @@ void Application::onRadialShow(POINT startPoint) {
     // 用户配置的通用轮盘。插件优先是有意的：插件是「这个应用该有哪些
     // 动作」的专门答案，通用轮盘是兜底，反过来插件永远轮不到。
     const core::RadialMenu* menu = &radialConfig_.menu;
+    platform::win32::WindowTarget target;
     {
         // 目标按鼠标所在窗口取（悬停不改前台，只看前台会配错窗口）。
-        const platform::win32::WindowTarget target =
-            platform::win32::radialTargetWindow();
+        target = platform::win32::radialTargetWindow();
         if (!target.processName.empty()) {
             const core::RadialPlugin* plugin = core::findPluginForProcess(
                 radialPluginStore_.plugins(),
@@ -1316,6 +1324,30 @@ void Application::onRadialShow(POINT startPoint) {
             if (plugin != nullptr && plugin->valid) {
                 menu = &plugin->menu;
             }
+        }
+    }
+
+    // 带 when 条件的菜单（explorer / 桌面插件的「有选中 / 无选中」两套）：
+    // 按光标下窗口的文件选中状态过滤成真正要显示的一份。shell 查询失败
+    // 与非 shell 目标都按无选中处理；过滤结果不合法时沿用原菜单。
+    bool anyConditional = false;
+    for (const core::RadialAction& action : menu->actions) {
+        if (action.when != core::RadialActionWhen::Always) {
+            anyConditional = true;
+            break;
+        }
+    }
+    if (anyConditional) {
+        std::optional<bool> selection;
+        if (platform::win32::isShellSelectionTarget(target.processName,
+                                                    target.windowClass)) {
+            selection = platform::win32::shellWindowHasSelection(target.window);
+        }
+        std::optional<core::RadialMenu> filtered =
+            core::selectionFilteredMenu(*menu, selection.value_or(false));
+        if (filtered.has_value()) {
+            shownRadialMenu_ = std::move(*filtered);
+            menu = &shownRadialMenu_;
         }
     }
 
@@ -2479,6 +2511,7 @@ void Application::openSettings() {
         config_.appearance.themeName,
         config_.language,
         config_.activation.startWithWindows,
+        config_.activation.topmostHotkeyEnabled,
         config_.activation.followLaunch,
         core::hotkeyPresetOf(config_.activation.hotkey),
         // 不透明度传当前实际生效值：磁贴背景「跟随皮肤」(-1) 时换成
@@ -2637,6 +2670,14 @@ void Application::openSettings() {
                         kApplicationName,
                         MB_OK | MB_ICONWARNING);
         }
+    }
+
+    // ---- F7 置顶热键 ----
+    if (result.topmostHotkey.has_value()) {
+        config_.activation.topmostHotkeyEnabled = *result.topmostHotkey;
+        // 失败只记日志：热键被占用时界面照常保存，用户可自行排查
+        initializeTopmostHotkey();
+        configChanged = true;
     }
 
     // 只落盘不立即执行：语义是「下次 KTile 启动时一并拉起」，
@@ -2857,6 +2898,48 @@ bool Application::initializeHotkey() {
         "热键已注册: " +
         base::wideToUtf8Lossy(platform::win32::formatHotkey(config)));
     return true;
+}
+
+bool Application::initializeTopmostHotkey() {
+    topmostHotkey_.unregister();
+    if (!config_.activation.topmostHotkeyEnabled || messageWindow_ == nullptr) {
+        return true;
+    }
+    core::HotkeyConfig config;
+    config.modifiers.clear();  // 裸键 F7
+    config.key = "F7";
+    const auto status =
+        topmostHotkey_.registerHotkey(messageWindow_, kTopmostHotkeyId, config);
+    if (!status) {
+        infrastructure::applog::error("置顶热键注册失败: " +
+                                      status.error().message);
+        return false;
+    }
+    infrastructure::applog::info("置顶热键已注册: F7");
+    return true;
+}
+
+void Application::toggleTopmost() {
+    const HWND window = GetForegroundWindow();
+    if (window == nullptr) {
+        return;
+    }
+    // 自己的面板/对话框不参与：热键落在本进程窗口上没有意义，还会把
+    // 面板钉死在最前。
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    if (processId == GetCurrentProcessId()) {
+        return;
+    }
+    const bool topmost =
+        (GetWindowLongW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+    SetWindowPos(window, topmost ? HWND_NOTOPMOST : HWND_TOPMOST,
+                 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    wchar_t title[128] = {};
+    GetWindowTextW(window, title, 128);
+    infrastructure::applog::info(std::string(topmost ? "取消置顶: " : "置顶: ") +
+                                 base::wideToUtf8Lossy(title));
 }
 
 void Application::reinstallGestureHotkey(const char* reason) {

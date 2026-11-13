@@ -188,6 +188,7 @@ constexpr int kHotkeyCtrlSpaceRadioId = 1142;   // 唤醒快捷键：Ctrl+Space
 constexpr int kHotkeyDoubleCtrlRadioId = 1143;  // 唤醒快捷键：双击 Ctrl
 constexpr int kHotkeyWinKeyRadioId = 1144;      // 唤醒快捷键：单按 Win
 constexpr int kStartupCheckId = 1111;
+constexpr int kTopmostCheckId = 1112;
 constexpr int kHintId = 1120;
 constexpr int kOkId = 1130;
 constexpr int kCancelId = 1131;
@@ -302,6 +303,7 @@ struct SettingsDialogState {
     core::WindowPlacement initialWindowPlacement = core::WindowPlacement::Mouse;
     core::HotkeyPreset initialHotkeyPreset = core::HotkeyPreset::AltSpace;
     bool initialStartup = false;
+    bool initialTopmostHotkey = true;
 
     // 不透明度显示当前生效的百分比。touched 区分「拖动过」与「没动过」，
     // 否则点确定会把磁贴的「跟随皮肤」写死成数字。
@@ -1861,6 +1863,23 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
             }
             yRight += 26;
 
+            // F7 置顶开关。热键固定 F7，勾选框只表达启用与否。
+            {
+                HWND topmost = makeControl(
+                    L"BUTTON", T("settings.topmostHotkey"),
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                    0, kColumnRightX + 8, yRight, kColumnWidth - 8, 20,
+                    kTopmostCheckId);
+                if (topmost != nullptr) {
+                    SendMessageW(topmost, BM_SETCHECK,
+                                 state->initialTopmostHotkey ? BST_CHECKED
+                                                             : BST_UNCHECKED,
+                                 0);
+                    addTooltip(hwnd, topmost, T("settings.topmostHotkey.tip"));
+                }
+            }
+            yRight += 26;
+
             // --- 跟随启动（与开机自启是一件事的两半，紧挨着放）
             {
                 HWND followLabel = makeLabel(
@@ -2939,6 +2958,15 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         }
                     }
 
+                    HWND topmost = GetDlgItem(hwnd, kTopmostCheckId);
+                    if (topmost != nullptr) {
+                        const bool checked =
+                            SendMessageW(topmost, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        if (checked != state->initialTopmostHotkey) {
+                            state->result.topmostHotkey = checked;
+                        }
+                    }
+
                     // 跟随启动：整份交回，顺序也算改动。
                     if (!sameFollowLaunch(state->followLaunch,
                                           state->initialFollowLaunch)) {
@@ -3419,6 +3447,7 @@ bool showSettingsWindow(HWND owner,
                         const std::string& currentThemeName,
                         const std::string& currentLanguage,
                         const bool currentStartup,
+                        const bool currentTopmostHotkey,
                         const std::vector<core::FollowLaunchEntry>&
                             currentFollowLaunch,
                         const core::HotkeyPreset currentHotkeyPreset,
@@ -3459,6 +3488,7 @@ bool showSettingsWindow(HWND owner,
     state.initialThemeName = base::utf8ToWide(currentThemeName);
     state.initialLanguage.assign(currentLanguage);
     state.initialStartup = currentStartup;
+    state.initialTopmostHotkey = currentTopmostHotkey;
     state.initialFollowLaunch = currentFollowLaunch;
     state.followLaunch = currentFollowLaunch;
     state.initialHotkeyPreset = currentHotkeyPreset;

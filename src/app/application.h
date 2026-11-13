@@ -53,6 +53,8 @@ inline constexpr const wchar_t* kStartupRegistryValueName = L"KTile";
 
 // 热键 ID
 inline constexpr int kToggleHotkeyId = 1;
+// F7 切换前台窗口置顶（同一条 WM_HOTKEY 下游，靠 ID 区分）
+inline constexpr int kTopmostHotkeyId = 2;
 
 // 托盘回调消息（消息窗口使用）
 inline constexpr UINT WM_TRAYICON_CALLBACK = WM_APP + 100;
@@ -130,6 +132,8 @@ public:
     void toggleLauncher();
     void showTrayMenu();
     void handleTrayCommand(UINT commandId);
+    // F7：切换前台窗口的置顶状态（WS_EX_TOPMOST 取反）
+    void toggleTopmost();
 
     // 重装手势钩子（reason 只用于写日志）。WH_KEYBOARD_LL 钩子链是 LIFO，
     // Explorer 重启会把它的钩子排到前面使吞 Win 键失效，系统高负载时还会
@@ -164,6 +168,8 @@ private:
     bool initializeWindow();
     bool initializeTray();
     bool initializeHotkey();
+    // 注册/注销 F7 置顶热键。被占用等失败只记日志，不影响启动
+    bool initializeTopmostHotkey();
     // 托盘提示文字跟随当前唤醒方式（热键 / 手势）刷新
     void updateTrayTooltip();
 
@@ -276,6 +282,8 @@ private:
 
     platform::win32::SingleInstance singleInstance_;
     platform::win32::GlobalHotkey hotkey_;
+    // F7 置顶热键（与唤醒热键互不相干，各自独立注册/注销）
+    platform::win32::GlobalHotkey topmostHotkey_;
     // 手势唤醒（双击 Ctrl / 单按 Win 键）。只在选中手势时安装。
     platform::win32::GestureHotkey gestureHotkey_;
     // 唤醒快捷键注册失败的原因（空 = 成功）。供启动提示说明具体是哪个键。
@@ -325,6 +333,9 @@ private:
     std::unique_ptr<ui::RadialMenuWindow> radialWindow_;
     // 轮盘当前显示的方案（显示期间保持引用，避免悬空）
     const core::RadialMenu* activeRadialMenu_ = nullptr;
+    // when 条件过滤后的显示副本。指向插件或用户配置的原菜单无需拷贝，
+    // 只有过滤发生时才重写这里。
+    core::RadialMenu shownRadialMenu_;
     // 轮盘出现时刻（兜底的可见时长上限用）；0 表示当前没有轮盘在显示
     ULONGLONG radialShownTick_ = 0;
     // 「窗口亮着但钩子已回 Idle」的连续观察次数
