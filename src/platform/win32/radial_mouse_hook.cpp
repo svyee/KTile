@@ -260,7 +260,8 @@ bool RadialMouseHook::foregroundBlocked() const noexcept {
     if (blacklist_.empty()) {
         return false;  // 常见情况，连进程都不查
     }
-    const std::wstring process = foregroundProcessName();
+    // 按下瞬间前台可能还没切到刚点中的窗口，按鼠标所在窗口判。
+    const std::wstring process = radialTargetWindow().processName;
     if (process.empty()) {
         return false;  // 查不到就按「不拉黑」处理，别让功能静默失效
     }

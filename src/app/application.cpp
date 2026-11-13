@@ -1305,14 +1305,14 @@ void Application::onRadialShow(POINT startPoint) {
     // 动作」的专门答案，通用轮盘是兜底，反过来插件永远轮不到。
     const core::RadialMenu* menu = &radialConfig_.menu;
     {
-        const std::wstring process = platform::win32::foregroundProcessName();
-        if (!process.empty()) {
-            const std::wstring windowClass =
-                platform::win32::foregroundWindowClass();
+        // 目标按鼠标所在窗口取（悬停不改前台，只看前台会配错窗口）。
+        const platform::win32::WindowTarget target =
+            platform::win32::radialTargetWindow();
+        if (!target.processName.empty()) {
             const core::RadialPlugin* plugin = core::findPluginForProcess(
                 radialPluginStore_.plugins(),
-                base::wideToUtf8Lossy(process),
-                base::wideToUtf8Lossy(windowClass));
+                base::wideToUtf8Lossy(target.processName),
+                base::wideToUtf8Lossy(target.windowClass));
             if (plugin != nullptr && plugin->valid) {
                 menu = &plugin->menu;
             }

@@ -245,7 +245,7 @@ struct RadialConfig {
 | core | `radial_menu.cpp` | 角度 → 扇区索引、命中测试、配置校验等纯逻辑 |
 | core | `radial_plugin.h` / `.cpp` | 轮盘插件模型：进程匹配（priority + id 字典序）、插件校验 |
 | infrastructure | `radial_plugin_store.h` / `.cpp` | 扫描 `slugin/<id>/radial.json`、解析、图标路径解析成绝对路径 |
-| platform/win32 | `foreground_process.h` / `.cpp` | 获取前台窗口的进程名 |
+| platform/win32 | `foreground_process.h` / `.cpp` | 按鼠标位置解析轮盘目标窗口（进程名 + 窗口类） |
 | platform/win32 | `radial_mouse_hook.h` / `.cpp` | `WH_MOUSE_LL` 钩子 + 手势状态机 |
 | platform/win32 | `key_injector.h` / `.cpp` | `SendInput` 注入任意修饰键+主键组合 |
 | infrastructure/json | `radial_store.h` / `.cpp` | `radial.json` 的读写、越界夹取、损坏备份 |
@@ -300,8 +300,12 @@ std::wstring foregroundProcessName();
 #### app 层组装
 - `Application` 持有 `RadialConfig`、`RadialMouseHook`、`RadialMenuWindow`。
 - 钩子回调 `PostMessage` 到消息窗口 → `Application::onRadialTrigger(...)`：
-  1. 调 `foregroundProcessName()` 取前台进程名。
-  2. 先在 `slugin` 插件里按前台进程名匹配（大小写不敏感，多命中看 priority，
+  1. 调 `radialTargetWindow()` 取目标窗口快照：光标点命中的根窗口优先
+     （`WindowFromPoint` → `GetAncestor(GA_ROOT)`），不可见、最小化或属于
+     本进程的回退前台窗口。悬停不改变前台，只看 `GetForegroundWindow`
+     会把轮盘配给错误窗口（此电脑 + 浏览器双开时尤其明显）。黑名单
+     判定同样按这个目标走。
+  2. 先在 `slugin` 插件里按目标进程名匹配（大小写不敏感，多命中看 priority，
      并列按 id 字典序），没命中才用通用轮盘 `RadialConfig::menu`。
      插件优先是有意的：插件是「这个应用该有哪些动作」的专门答案，通用轮盘是
      「所有应用都能凑合用」的兜底；反过来插件永远轮不到。
@@ -467,14 +471,15 @@ abort 一律**不执行扇区动作**：用户已经作废了这次手势，再�
   （`explorer.exe@CabinetWClass`），**不支持通配符**：`*app*.exe` 这种
   写法误伤面太大，用户很难预估哪个应用会被抢走。窗口类后缀用于区分
   同进程的两类界面：explorer.exe 的文件窗口类是 `CabinetWClass`，
-  桌面是 `Progman` / `WorkerW`。类名取自前台窗口，ASCII 大小写不敏感；
+  桌面是 `Progman` / `WorkerW`。类名取自目标窗口（光标点命中的，回退
+  前台窗口），ASCII 大小写不敏感；
   `@` 前后留空的条目无效，永不命中。
 
 #### 匹配规则
 
 `core::findPluginForProcess(plugins, processName, windowClass)`：
 
-1. 只考虑 `valid` 的插件，条目与前台进程名（带类后缀的还要比窗口类）
+1. 只考虑 `valid` 的插件，条目与目标进程名（带类后缀的还要比窗口类）
    逐项比较（ASCII 大小写不敏感）；`windowClass` 为空时带类后缀的
    条目不命中；
 2. 多个命中时 `priority` 大的赢；

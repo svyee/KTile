@@ -1,8 +1,9 @@
-// KTile - Win32 平台层：获取前台进程名
+// KTile - Win32 平台层：轮盘目标窗口解析
 //
-// 供轮盘菜单按前台进程匹配方案使用。所用 API（GetForegroundWindow /
-// OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) / QueryFullProcessImageNameW）
-// 均在 Win7 SP1 可用范围内。
+// 供轮盘菜单按窗口归属匹配方案使用。核心是 radialTargetWindow()：光标点
+// 命中的窗口优先，回退前台窗口。所用 API（GetCursorPos / WindowFromPoint /
+// GetForegroundWindow / OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) /
+// QueryFullProcessImageNameW）均在 Win7 SP1 可用范围内。
 //
 #pragma once
 
@@ -20,6 +21,18 @@ std::wstring foregroundProcessName();
 // 文件窗口类是 CabinetWClass，桌面是 Progman / WorkerW，轮盘插件靠它
 // 区分同进程的两类界面。取不到返回空串。
 std::wstring foregroundWindowClass();
+
+// 轮盘的目标窗口快照：进程名 + 窗口类名（均小写，可都为空）。
+struct WindowTarget {
+    std::wstring processName;
+    std::wstring windowClass;
+};
+
+// 按「鼠标所在位置」解析轮盘的目标窗口：光标点命中的根窗口优先，
+// 不可见 / 最小化 / 属于本进程（自己的覆盖层）时回退前台窗口。
+// 悬停不改变前台，只看 GetForegroundWindow 会把轮盘配给错误的窗口，
+// 双窗口场景（此电脑 + 浏览器）尤其明显。
+WindowTarget radialTargetWindow();
 
 }  // namespace win32
 }  // namespace platform
