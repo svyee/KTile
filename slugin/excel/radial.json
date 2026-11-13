@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "name": "Excel",
   "processes": [
-    "excel.exe"
+    "excel.exe",
+    "et.exe"
   ],
   "priority": 0,
   "menu": {

@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "name": "Photoshop",
   "processes": [
-    "photoshop.exe"
+    "photoshop.exe",
+    "photocraft.exe"
   ],
   "priority": 0,
   "menu": {

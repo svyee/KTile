@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "name": "Word",
   "processes": [
-    "winword.exe"
+    "winword.exe",
+    "wps.exe"
   ],
   "priority": 0,
   "menu": {
