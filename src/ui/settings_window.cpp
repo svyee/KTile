@@ -360,6 +360,9 @@ struct SettingsDialogState {
     // 轮盘插件页回调（不拥有；为空时该页只显示说明文字）
     const SettingsRadialPluginHooks* radialPlugins = nullptr;
 
+    // 录制快捷键时让出全局热键的回调（不拥有；为空时录制可能收不到按键）
+    const SettingsHotkeyCaptureHooks* hotkeyCapture = nullptr;
+
     // 轮盘菜单配置的草稿。radial_editor 子对话框直接改这份副本，确定时才
     // 交回应用层，取消则整份丢弃，无需回滚。
     core::RadialConfig radial;
@@ -1082,6 +1085,34 @@ void refreshTopmostRecorder(HWND dialog, const SettingsDialogState* state) {
                    topmostHotkeyDisplayText(state->topmostHotkey).c_str());
 }
 
+// 进入 / 退出录制。注册中的全局热键会被系统截成 WM_HOTKEY 送给消息窗口，
+// 对话框收不到原始按键，所以录制期间要先让出来，结束后按已生效配置补回。
+void beginTopmostCapture(HWND dialog, SettingsDialogState* state) {
+    if (state == nullptr || state->topmostCapturing) {
+        return;
+    }
+    state->topmostCapturing = true;
+    if (state->hotkeyCapture != nullptr &&
+        state->hotkeyCapture->captureChanged) {
+        state->hotkeyCapture->captureChanged(true);
+    }
+    SetWindowTextW(GetDlgItem(dialog, kTopmostRecorderId),
+                   T("settings.hotkey.pressKeys"));
+    SetFocus(GetDlgItem(dialog, kTopmostRecorderId));
+}
+
+void endTopmostCapture(HWND dialog, SettingsDialogState* state) {
+    if (state == nullptr || !state->topmostCapturing) {
+        return;
+    }
+    state->topmostCapturing = false;
+    if (state->hotkeyCapture != nullptr &&
+        state->hotkeyCapture->captureChanged) {
+        state->hotkeyCapture->captureChanged(false);
+    }
+    refreshTopmostRecorder(dialog, state);
+}
+
 LRESULT CALLBACK topmostRecorderProc(HWND hwnd, UINT message, WPARAM wParam,
                                      LPARAM lParam, UINT_PTR, DWORD_PTR refData) {
     auto* state = reinterpret_cast<SettingsDialogState*>(refData);
@@ -1105,17 +1136,15 @@ LRESULT CALLBACK topmostRecorderProc(HWND hwnd, UINT message, WPARAM wParam,
         case WM_SYSKEYDOWN: {
             const UINT key = static_cast<UINT>(wParam);
             if (key == VK_ESCAPE) {
-                state->topmostCapturing = false;
                 state->swallowRecorderKeyUp = true;
-                refreshTopmostRecorder(GetParent(hwnd), state);
+                endTopmostCapture(GetParent(hwnd), state);
                 return 0;
             }
             if (key == VK_BACK || key == VK_DELETE) {
                 state->topmostHotkey = core::defaultTopmostHotkey();
                 state->topmostHotkey.enabled = false;
-                state->topmostCapturing = false;
                 state->swallowRecorderKeyUp = true;
-                refreshTopmostRecorder(GetParent(hwnd), state);
+                endTopmostCapture(GetParent(hwnd), state);
                 return 0;
             }
             if (isModifierVirtualKey(key)) {
@@ -1133,14 +1162,13 @@ LRESULT CALLBACK topmostRecorderProc(HWND hwnd, UINT message, WPARAM wParam,
             state->topmostHotkey.enabled = true;
             state->topmostHotkey.modifiers = pressedModifiers();
             state->topmostHotkey.key = name;
-            state->topmostCapturing = false;
             state->swallowRecorderKeyUp = true;
-            refreshTopmostRecorder(GetParent(hwnd), state);
+            endTopmostCapture(GetParent(hwnd), state);
             return 0;
         }
 
         case WM_KILLFOCUS:
-            state->topmostCapturing = false;
+            endTopmostCapture(GetParent(hwnd), state);
             break;
 
         default:
@@ -2737,6 +2765,12 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 controlId = kCancelId;
             }
 
+            // 确定 / 取消：录制中先把全局热键补回去，否则取消后功能会「消失」
+            // 到下次启动。
+            if (controlId == kOkId || controlId == kCancelId) {
+                endTopmostCapture(hwnd, state);
+            }
+
             // --- 分页切换
             if ((controlId == kAppearanceTabId ||
                  controlId == kBehaviorTabId ||
@@ -2763,12 +2797,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
 
             // --- 置顶快捷键录制：点一下进入录制，键盘交给子类处理
             if (controlId == kTopmostRecorderId && notification == BN_CLICKED) {
-                if (state != nullptr && !state->topmostCapturing) {
-                    state->topmostCapturing = true;
-                    SetWindowTextW(GetDlgItem(hwnd, kTopmostRecorderId),
-                                   T("settings.hotkey.pressKeys"));
-                    SetFocus(GetDlgItem(hwnd, kTopmostRecorderId));
-                }
+                beginTopmostCapture(hwnd, state);
                 return 0;
             }
 
@@ -3476,6 +3505,7 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
         case WM_CLOSE:
             // 关闭等同于取消，避免「关掉窗口但改动被默默套用」
             if (state != nullptr) {
+                endTopmostCapture(hwnd, state);
                 state->accepted = false;
             }
             DestroyWindow(hwnd);
@@ -3660,7 +3690,8 @@ bool showSettingsWindow(HWND owner,
                         SettingsResult* out,
                         const SettingsPreviewHooks* preview,
                         const SettingsPluginHooks* plugins,
-                        const SettingsRadialPluginHooks* radialPlugins) {
+                        const SettingsRadialPluginHooks* radialPlugins,
+                        const SettingsHotkeyCaptureHooks* hotkeyCapture) {
     if (out == nullptr) {
         return false;
     }
@@ -3702,6 +3733,7 @@ bool showSettingsWindow(HWND owner,
     state.preview = preview;
     state.plugins = plugins;
     state.radialPlugins = radialPlugins;
+    state.hotkeyCapture = hotkeyCapture;
 
     // --- 尺寸：客户区按设计稿，换算成含标题栏边框的窗口尺寸
     RECT desired{0, 0, scaleFor(owner, kDialogWidth),

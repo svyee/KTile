@@ -2499,6 +2499,21 @@ void Application::openSettings() {
         return radialPluginStore_.rootDirectory();
     };
 
+    // 录制快捷键时要让出全局热键：注册中的组合会被系统截成 WM_HOTKEY
+    // 送给本窗口，对话框收不到原始按键（F7 录不进去就是这个原因）。
+    // 结束后按当前已生效的配置补回，录制阶段不动 config。
+    ui::SettingsHotkeyCaptureHooks hotkeyCaptureHooks;
+    hotkeyCaptureHooks.captureChanged = [this](const bool capturing) {
+        if (capturing) {
+            hotkey_.unregister();
+            gestureHotkey_.uninstall();
+            topmostHotkey_.unregister();
+            return;
+        }
+        initializeHotkey();
+        initializeTopmostHotkey();
+    };
+
     ui::SettingsResult result;
     const bool accepted = ui::showSettingsWindow(
         launcherWindow_->hwnd(),
@@ -2526,7 +2541,8 @@ void Application::openSettings() {
         &result,
         &preview,
         &pluginHooks,
-        &radialPluginHooks);
+        &radialPluginHooks,
+        &hotkeyCaptureHooks);
 
     // 设置窗口已关闭：解除模态保护（无论确定还是取消都要解）。
     launcherWindow_->setModalGuard(false);

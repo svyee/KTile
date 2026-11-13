@@ -123,6 +123,14 @@ struct SettingsRadialPluginHooks {
     std::function<std::wstring()> rootDirectory;
 };
 
+// 「附加小工具」页录制快捷键时的宿主回调（可选）。录制要拿到原始按键，
+// 而被 RegisterHotKey 注册中的组合只会变成 WM_HOTKEY 送给消息窗口，对话框
+// 一个按键也收不到——录 F7 没反应就是这个原因，所以录制期间必须临时注销。
+struct SettingsHotkeyCaptureHooks {
+    // true = 开始录制（注销全局热键），false = 结束（按已生效配置重新注册）
+    std::function<void(bool capturing)> captureChanged;
+};
+
 // 实时预览回调（可选）。这几项一改就反映到旁边保持可见的主窗口，但都
 // 不落盘：点「确定」才写 config，点「取消」由调用方重新套用配置还原。
 struct SettingsPreviewHooks {
@@ -178,7 +186,8 @@ bool showSettingsWindow(HWND owner,
                         SettingsResult* out,
                         const SettingsPreviewHooks* preview = nullptr,
                         const SettingsPluginHooks* plugins = nullptr,
-                        const SettingsRadialPluginHooks* radialPlugins = nullptr);
+                        const SettingsRadialPluginHooks* radialPlugins = nullptr,
+                        const SettingsHotkeyCaptureHooks* hotkeyCapture = nullptr);
 
 }  // namespace ui
 }  // namespace ktile
