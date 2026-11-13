@@ -2673,9 +2673,8 @@ void Application::openSettings() {
     }
 
     // ---- 置顶快捷键 ----
-    if (result.topmostHotkeyPreset.has_value() &&
-        *result.topmostHotkeyPreset != config_.activation.topmostHotkey) {
-        config_.activation.topmostHotkey = *result.topmostHotkeyPreset;
+    if (result.topmostHotkey.has_value()) {
+        config_.activation.topmostHotkey = *result.topmostHotkey;
         // 失败只记日志：热键被占用时界面照常保存，用户可自行排查
         initializeTopmostHotkey();
         configChanged = true;
@@ -2906,18 +2905,9 @@ bool Application::initializeTopmostHotkey() {
     if (messageWindow_ == nullptr) {
         return true;
     }
-    const core::TopmostHotkeyPreset preset = config_.activation.topmostHotkey;
-    if (preset == core::TopmostHotkeyPreset::None) {
-        return true;
-    }
-    core::HotkeyConfig config;
-    config.key = "F7";  // 主键固定，只按预设换修饰键
-    if (preset == core::TopmostHotkeyPreset::CtrlF7) {
-        config.modifiers = {core::HotkeyModifier::Control};
-    } else if (preset == core::TopmostHotkeyPreset::AltF7) {
-        config.modifiers = {core::HotkeyModifier::Alt};
-    } else {
-        config.modifiers.clear();  // 裸键 F7
+    const core::HotkeyConfig& config = config_.activation.topmostHotkey;
+    if (!config.enabled) {
+        return true;  // 用户选了「无」
     }
     const auto status =
         topmostHotkey_.registerHotkey(messageWindow_, kTopmostHotkeyId, config);

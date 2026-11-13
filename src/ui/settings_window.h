@@ -43,8 +43,8 @@ struct SettingsResult {
     std::optional<std::string> backgroundImage;
     // 是否开机自动启动
     std::optional<bool> startWithWindows;
-    // 窗口置顶快捷键预设（None = 关闭功能）
-    std::optional<core::TopmostHotkeyPreset> topmostHotkeyPreset;
+    // 窗口置顶快捷键（enabled=false 表示关闭该功能）
+    std::optional<core::HotkeyConfig> topmostHotkey;
     // 跟随启动清单。整份交回：界面上是对一张表的编辑，不为逐条增删设计事件。
     std::optional<std::vector<core::FollowLaunchEntry>> followLaunch;
     // 唤醒快捷键（预设）。未改动则留空
@@ -164,7 +164,7 @@ bool showSettingsWindow(HWND owner,
                         const std::string& currentThemeName,
                         const std::string& currentLanguage,
                         bool currentStartup,
-                        core::TopmostHotkeyPreset currentTopmostHotkeyPreset,
+                        const core::HotkeyConfig& currentTopmostHotkey,
                         const std::vector<core::FollowLaunchEntry>&
                             currentFollowLaunch,
                         core::HotkeyPreset currentHotkeyPreset,

@@ -3,6 +3,7 @@
 #include "base/text_convert.h"
 #include "core/data_model.h"
 #include "infrastructure/i18n.h"
+#include "platform/win32/global_hotkey.h"
 #include "platform/win32/icon_loader.h"
 #include "platform/win32/unique_handles.h"
 #include "ui/color_picker.h"
@@ -33,9 +34,8 @@ const wchar_t* T(const char* key) {
 // 全部按 96 DPI 逻辑像素书写，运行时统一用 scaleFor() 缩放。
 
 // 窗口尺寸：左侧竖向标签栏 + 右侧单列表单，150% 缩放下不顶到工作区顶部。
-// 高度给行为页的置顶快捷键单选组留两行，唤醒说明离底边至少 16px。
 constexpr int kDialogWidth = 700;
-constexpr int kDialogHeight = 492;
+constexpr int kDialogHeight = 470;
 
 constexpr int kMargin = 16;          // 窗口四周边距
 constexpr int kContentTop = 14;      // 内容区起始 y
@@ -71,6 +71,8 @@ constexpr int kCardHeightRadialPlugins = 350;
 
 // 轮盘页：说明文字进 tooltip 后只剩三行设置 + 扇区入口，白卡留空白会误导。
 constexpr int kCardHeightRadial = 262;
+// 附加小工具页：一节标题 + 一行快捷键 + 两行说明。
+constexpr int kCardHeightTools = 132;
 constexpr int kRadialPluginHintHeight = 66;
 constexpr int kSliderWidth = 160;    // 滑块宽度
 constexpr int kSliderValueOffset = kSliderWidth + 6;  // 百分比文字的 x 偏移
@@ -189,10 +191,8 @@ constexpr int kHotkeyCtrlSpaceRadioId = 1142;   // 唤醒快捷键：Ctrl+Space
 constexpr int kHotkeyDoubleCtrlRadioId = 1143;  // 唤醒快捷键：双击 Ctrl
 constexpr int kHotkeyWinKeyRadioId = 1144;      // 唤醒快捷键：单按 Win
 constexpr int kStartupCheckId = 1111;
-constexpr int kTopmostNoneRadioId = 1112;     // 置顶快捷键：无
-constexpr int kTopmostF7RadioId = 1113;       // 置顶快捷键：F7
-constexpr int kTopmostCtrlF7RadioId = 1114;   // 置顶快捷键：Ctrl+F7
-constexpr int kTopmostAltF7RadioId = 1115;    // 置顶快捷键：Alt+F7
+// 附加小工具页：快捷键录制按钮（点击后按键，Backspace 清除即关闭功能）
+constexpr int kTopmostRecorderId = 1216;
 constexpr int kHintId = 1120;
 constexpr int kOkId = 1130;
 constexpr int kCancelId = 1131;
@@ -203,6 +203,7 @@ constexpr int kCancelId = 1131;
 constexpr int kAppearanceTabId = 1135;
 constexpr int kPluginsTabId = 1136;
 constexpr int kBehaviorTabId = 1137;
+constexpr int kToolsTabId = 1215;  // 附加小工具（窗口置顶等零散功能）
 
 constexpr int kPluginListId = 1138;
 constexpr int kPluginInstallId = 1170;
@@ -267,7 +268,8 @@ constexpr int kSectionIconLabelId = 1206;   // 图标与标签
 constexpr int kSectionRadialTriggerId = 1207;  // 轮盘：触发方式
 constexpr int kSectionRadialSectorId = 1208;   // 轮盘：扇区动作
 constexpr int kSectionLanguageId = 1209;       // 语言
-constexpr int kSectionHeaderIdEnd = 1210;
+constexpr int kSectionToolsId = 1210;          // 附加小工具：窗口置顶
+constexpr int kSectionHeaderIdEnd = 1211;
 // 语言下拉：1211 在分组标题区间之外，不会被 WM_CTLCOLORSTATIC 画灰。
 constexpr int kLanguageComboId = 1211;
 
@@ -307,8 +309,14 @@ struct SettingsDialogState {
     core::WindowPlacement initialWindowPlacement = core::WindowPlacement::Mouse;
     core::HotkeyPreset initialHotkeyPreset = core::HotkeyPreset::AltSpace;
     bool initialStartup = false;
-    core::TopmostHotkeyPreset initialTopmostHotkey =
-        core::TopmostHotkeyPreset::F7;
+    // 置顶快捷键：initial 用于判「改没改」，draft 是录制控件的当前值。
+    core::HotkeyConfig initialTopmostHotkey;
+    core::HotkeyConfig topmostHotkey;
+    // 录制中：键盘输入归录制控件所有，不参与对话框导航
+    bool topmostCapturing = false;
+    // 录制刚结束：吞掉配对的 keyup。按钮在 Space 抬起时会发 BN_CLICKED，
+    // 不吞等于刚录好 Space 就重新进入录制。
+    bool swallowRecorderKeyUp = false;
 
     // 不透明度显示当前生效的百分比。touched 区分「拖动过」与「没动过」，
     // 否则点确定会把磁贴的「跟随皮肤」写死成数字。
@@ -356,14 +364,15 @@ struct SettingsDialogState {
     // 交回应用层，取消则整份丢弃，无需回滚。
     core::RadialConfig radial;
 
-    // 分页：0 = 外观，1 = 行为，2 = 插件管理，3 = 轮盘，4 = 轮盘插件。
-    // 各页控件已按绝对坐标摆好，切页只做显隐，保持滚动条与焦点。
+    // 分页：0 = 外观，1 = 行为，2 = 插件管理，3 = 轮盘，4 = 轮盘插件，
+    // 5 = 附加小工具。各页控件已按绝对坐标摆好，切页只做显隐。
     int activePage = 0;
     std::vector<HWND> appearanceControls;
     std::vector<HWND> behaviorControls;
     std::vector<HWND> pluginControls;
     std::vector<HWND> radialControls;
     std::vector<HWND> radialPluginControls;
+    std::vector<HWND> toolsControls;
     // 列表行与 ListView 下标一一对应，选中项据此反查 id
     std::vector<SettingsPluginInfo> pluginRows;
     std::vector<SettingsRadialPluginInfo> radialPluginRows;
@@ -1003,9 +1012,147 @@ void refreshRadialPluginList(HWND dialog, SettingsDialogState* state) {
     }
 }
 
+// --- 置顶快捷键录制
+//
+// 组合键自由录制，不比预设多的界面元素：点击按钮进入录制，之后键盘输入
+// 全归它（WM_GETDLGCODE 挡住对话框的 Tab/Enter/Esc 导航）。按下非修饰键
+// 即提交；Backspace/Delete 清空并关闭功能；Esc 放弃本次录制。
+
+std::wstring hotkeyModifiersPrefix(
+    const std::vector<core::HotkeyModifier>& modifiers) {
+    std::wstring text;
+    for (const auto modifier : modifiers) {
+        switch (modifier) {
+            case core::HotkeyModifier::Control: text += L"Ctrl+";  break;
+            case core::HotkeyModifier::Shift:   text += L"Shift+"; break;
+            case core::HotkeyModifier::Alt:     text += L"Alt+";   break;
+            case core::HotkeyModifier::Win:     text += L"Win+";   break;
+        }
+    }
+    return text;
+}
+
+bool isModifierVirtualKey(const UINT key) {
+    return key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU ||
+           key == VK_LCONTROL || key == VK_RCONTROL ||
+           key == VK_LSHIFT || key == VK_RSHIFT ||
+           key == VK_LMENU || key == VK_RMENU ||
+           key == VK_LWIN || key == VK_RWIN;
+}
+
+// 按下的修饰键（固定 Ctrl → Shift → Alt → Win 顺序，显示才稳定）
+std::vector<core::HotkeyModifier> pressedModifiers() {
+    std::vector<core::HotkeyModifier> modifiers;
+    if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+        modifiers.push_back(core::HotkeyModifier::Control);
+    }
+    if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+        modifiers.push_back(core::HotkeyModifier::Shift);
+    }
+    if ((GetKeyState(VK_MENU) & 0x8000) != 0) {
+        modifiers.push_back(core::HotkeyModifier::Alt);
+    }
+    if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+        (GetKeyState(VK_RWIN) & 0x8000) != 0) {
+        modifiers.push_back(core::HotkeyModifier::Win);
+    }
+    return modifiers;
+}
+
+std::wstring topmostHotkeyDisplayText(const core::HotkeyConfig& config) {
+    if (!config.enabled) {
+        return std::wstring(T("common.none"));
+    }
+    return platform::win32::formatHotkey(config);
+}
+
+// 相等判定用在这里只为「改没改」，不追求 core 层的通用语义。
+bool sameHotkeyConfig(const core::HotkeyConfig& left,
+                      const core::HotkeyConfig& right) {
+    return left.enabled == right.enabled && left.key == right.key &&
+           left.modifiers == right.modifiers;
+}
+
+void refreshTopmostRecorder(HWND dialog, const SettingsDialogState* state) {
+    HWND recorder = GetDlgItem(dialog, kTopmostRecorderId);
+    if (recorder == nullptr || state == nullptr) {
+        return;
+    }
+    SetWindowTextW(recorder,
+                   topmostHotkeyDisplayText(state->topmostHotkey).c_str());
+}
+
+LRESULT CALLBACK topmostRecorderProc(HWND hwnd, UINT message, WPARAM wParam,
+                                     LPARAM lParam, UINT_PTR, DWORD_PTR refData) {
+    auto* state = reinterpret_cast<SettingsDialogState*>(refData);
+    if (state == nullptr) {
+        return DefSubclassProc(hwnd, message, wParam, lParam);
+    }
+    if (!state->topmostCapturing) {
+        if ((message == WM_KEYUP || message == WM_SYSKEYUP) &&
+            state->swallowRecorderKeyUp) {
+            state->swallowRecorderKeyUp = false;
+            return 0;
+        }
+        return DefSubclassProc(hwnd, message, wParam, lParam);
+    }
+    switch (message) {
+        case WM_GETDLGCODE:
+            return DefSubclassProc(hwnd, message, wParam, lParam) |
+                   DLGC_WANTALLKEYS;
+
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN: {
+            const UINT key = static_cast<UINT>(wParam);
+            if (key == VK_ESCAPE) {
+                state->topmostCapturing = false;
+                state->swallowRecorderKeyUp = true;
+                refreshTopmostRecorder(GetParent(hwnd), state);
+                return 0;
+            }
+            if (key == VK_BACK || key == VK_DELETE) {
+                state->topmostHotkey = core::defaultTopmostHotkey();
+                state->topmostHotkey.enabled = false;
+                state->topmostCapturing = false;
+                state->swallowRecorderKeyUp = true;
+                refreshTopmostRecorder(GetParent(hwnd), state);
+                return 0;
+            }
+            if (isModifierVirtualKey(key)) {
+                // 只按了修饰键：先把组合显示出来，等主键按下再提交
+                const std::wstring pending =
+                    hotkeyModifiersPrefix(pressedModifiers()) + L"\u2026";
+                SetWindowTextW(hwnd, pending.c_str());
+                return 0;
+            }
+            const std::string name =
+                platform::win32::virtualKeyToKeyName(key);
+            if (name.empty()) {
+                return 0;  // 不认识的键：忽略，继续等
+            }
+            state->topmostHotkey.enabled = true;
+            state->topmostHotkey.modifiers = pressedModifiers();
+            state->topmostHotkey.key = name;
+            state->topmostCapturing = false;
+            state->swallowRecorderKeyUp = true;
+            refreshTopmostRecorder(GetParent(hwnd), state);
+            return 0;
+        }
+
+        case WM_KILLFOCUS:
+            state->topmostCapturing = false;
+            break;
+
+        default:
+            break;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
 // 切换分页：每页的控件各管各的，互不重叠。
 void switchSettingsPage(HWND dialog, SettingsDialogState* state,
-                        const int page) {    if (state == nullptr) {
+                        const int page) {
+    if (state == nullptr) {
         return;
     }
     state->activePage = page;
@@ -1025,6 +1172,9 @@ void switchSettingsPage(HWND dialog, SettingsDialogState* state,
     for (const HWND control : state->radialPluginControls) {
         ShowWindow(control, page == 4 ? SW_SHOW : SW_HIDE);
     }
+    for (const HWND control : state->toolsControls) {
+        ShowWindow(control, page == 5 ? SW_SHOW : SW_HIDE);
+    }
 
     // 自绘标签不靠勾选态，切页后直接重画标签；卡片高度按页变化，整窗也重画。
     InvalidateRect(GetDlgItem(dialog, kAppearanceTabId), nullptr, TRUE);
@@ -1032,6 +1182,7 @@ void switchSettingsPage(HWND dialog, SettingsDialogState* state,
     InvalidateRect(GetDlgItem(dialog, kPluginsTabId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kRadialTabId), nullptr, TRUE);
     InvalidateRect(GetDlgItem(dialog, kRadialPluginsTabId), nullptr, TRUE);
+    InvalidateRect(GetDlgItem(dialog, kToolsTabId), nullptr, TRUE);
     InvalidateRect(dialog, nullptr, TRUE);
 
     if (page == 2) {
@@ -1277,6 +1428,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     cardHeight = kCardHeightRadial;
                 } else if (state->activePage == 4) {
                     cardHeight = kCardHeightRadialPlugins;
+                } else if (state->activePage == 5) {
+                    cardHeight = kCardHeightTools;
                 }
                 RECT card{};
                 card.left = scaleFor(hwnd, kContentLeft - kCardInset);
@@ -1454,6 +1607,11 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 4,
                         kSidebarWidth, kSidebarTabHeight,
                         kRadialPluginsTabId);
+            makeControl(L"BUTTON", T("settings.tab.tools"),
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
+                        kSidebarLeft,
+                        kSidebarTop + (kSidebarTabHeight + kSidebarTabGap) * 5,
+                        kSidebarWidth, kSidebarTabHeight, kToolsTabId);
 
             sink = &state->appearanceControls;
             // 单列表单：外观页的分组自上而下排成一列。
@@ -1868,54 +2026,6 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                              0);
             }
             yRight += 26;
-
-            // 置顶快捷键（2x2 单选，None = 关闭功能）。主键固定 F7，
-            // 只选修饰方案，理由同唤醒快捷键的预设化。
-            makeLabel(T("settings.topmostHotkey"), kColumnRightX + 8,
-                      yRight + 3, formLabelW - 8, 18);
-            {
-                struct TopmostRadio {
-                    int id;
-                    const wchar_t* label;
-                    core::TopmostHotkeyPreset preset;
-                    int column;  // 0 = 左列，1 = 右列
-                    int y;
-                };
-                const TopmostRadio radios[] = {
-                    {kTopmostNoneRadioId, T("common.none"),
-                     core::TopmostHotkeyPreset::None, 0, yRight},
-                    {kTopmostF7RadioId, L"F7",
-                     core::TopmostHotkeyPreset::F7, 1, yRight},
-                    {kTopmostCtrlF7RadioId, L"Ctrl+F7",
-                     core::TopmostHotkeyPreset::CtrlF7, 0, yRight + 22},
-                    {kTopmostAltF7RadioId, L"Alt+F7",
-                     core::TopmostHotkeyPreset::AltF7, 1, yRight + 22},
-                };
-                const int columnGap = 14;
-                const int columnX[2] = {
-                    kColumnRightX + formLabelW,
-                    kColumnRightX + formLabelW + columnGap +
-                        (std::max)(radioWidth(radios[0].label),
-                                   radioWidth(radios[2].label))};
-                for (const auto& radio : radios) {
-                    const bool checked =
-                        radio.preset == state->initialTopmostHotkey;
-                    HWND button = makeControl(
-                        L"BUTTON", radio.label,
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
-                            (radio.id == kTopmostNoneRadioId ? WS_GROUP : 0) |
-                            BS_AUTORADIOBUTTON,
-                        0, columnX[radio.column], radio.y,
-                        radioWidth(radio.label), 20, radio.id);
-                    if (button != nullptr) {
-                        SendMessageW(button, BM_SETCHECK,
-                                     checked ? BST_CHECKED : BST_UNCHECKED, 0);
-                        addTooltip(hwnd, button,
-                                   T("settings.topmostHotkey.tip"));
-                    }
-                }
-            }
-            yRight += 48;
 
             // --- 跟随启动（与开机自启是一件事的两半，紧挨着放）
             {
@@ -2381,6 +2491,40 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 kContentLeft, kPluginHintTop, kContentWidth,
                 kRadialPluginHintHeight, -1);
 
+            // --- 附加小工具页：零散系统能力，各占一节。置顶快捷键放这里
+            // 而不是行为页：行为页回答「窗口在哪儿、怎么出现」，置顶是额外
+            // 能力，混在一起把该页撑得过长。
+            sink = &state->toolsControls;
+            int yTools = kContentTop;
+            makeSection(T("settings.section.tools"), kSectionToolsId,
+                        kContentLeft, yTools, false);
+            makeLabel(T("settings.topmostHotkey"), kContentLeft + 8,
+                      yTools + 5, formLabelW - 8, 18);
+            {
+                // 宽度按最长的提示文字实测：录制中是「请按下快捷键…」，
+                // 定格后是组合键本身，两者都放得下。
+                const int recorderWidth =
+                    fitWidth(T("settings.hotkey.pressKeys"), 180);
+                HWND recorder = makeControl(
+                    L"BUTTON", L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    0, kContentLeft + formLabelW, yTools, recorderWidth,
+                    kButtonHeight, kTopmostRecorderId);
+                if (recorder != nullptr) {
+                    SetWindowTextW(
+                        recorder,
+                        topmostHotkeyDisplayText(state->topmostHotkey).c_str());
+                    SetWindowSubclass(recorder, topmostRecorderProc, 1,
+                                      reinterpret_cast<DWORD_PTR>(state));
+                    addTooltip(hwnd, recorder,
+                               T("settings.topmostHotkey.tip"));
+                }
+            }
+            yTools += 32;
+            makeControl(L"STATIC", T("settings.topmostHotkey.hint"),
+                        WS_CHILD | WS_VISIBLE | SS_LEFT, 0, kContentLeft,
+                        yTools, kColumnWidth, 40, -1);
+
             // 行为页与插件页的控件先全部隐藏，启动时停在外观页
             for (const HWND control : state->behaviorControls) {
                 ShowWindow(control, SW_HIDE);
@@ -2392,6 +2536,9 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 ShowWindow(control, SW_HIDE);
             }
             for (const HWND control : state->radialPluginControls) {
+                ShowWindow(control, SW_HIDE);
+            }
+            for (const HWND control : state->toolsControls) {
                 ShowWindow(control, SW_HIDE);
             }
 
@@ -2490,7 +2637,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                  draw->CtlID == static_cast<UINT>(kBehaviorTabId) ||
                  draw->CtlID == static_cast<UINT>(kPluginsTabId) ||
                  draw->CtlID == static_cast<UINT>(kRadialTabId) ||
-                 draw->CtlID == static_cast<UINT>(kRadialPluginsTabId))) {
+                 draw->CtlID == static_cast<UINT>(kRadialPluginsTabId) ||
+                 draw->CtlID == static_cast<UINT>(kToolsTabId))) {
                 wchar_t text[64] = {};
                 GetWindowTextW(draw->hwndItem, text, 64);
                 int tabPage = 2;
@@ -2503,6 +2651,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                 } else if (draw->CtlID ==
                            static_cast<UINT>(kRadialPluginsTabId)) {
                     tabPage = 4;
+                } else if (draw->CtlID == static_cast<UINT>(kToolsTabId)) {
+                    tabPage = 5;
                 }
                 const bool active =
                     state != nullptr && state->activePage == tabPage;
@@ -2592,7 +2742,8 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                  controlId == kBehaviorTabId ||
                  controlId == kPluginsTabId ||
                  controlId == kRadialTabId ||
-                 controlId == kRadialPluginsTabId) &&
+                 controlId == kRadialPluginsTabId ||
+                 controlId == kToolsTabId) &&
                 notification == BN_CLICKED) {
                 int page = 2;
                 if (controlId == kAppearanceTabId) {
@@ -2603,8 +2754,21 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                     page = 3;
                 } else if (controlId == kRadialPluginsTabId) {
                     page = 4;
+                } else if (controlId == kToolsTabId) {
+                    page = 5;
                 }
                 switchSettingsPage(hwnd, state, page);
+                return 0;
+            }
+
+            // --- 置顶快捷键录制：点一下进入录制，键盘交给子类处理
+            if (controlId == kTopmostRecorderId && notification == BN_CLICKED) {
+                if (state != nullptr && !state->topmostCapturing) {
+                    state->topmostCapturing = true;
+                    SetWindowTextW(GetDlgItem(hwnd, kTopmostRecorderId),
+                                   T("settings.hotkey.pressKeys"));
+                    SetFocus(GetDlgItem(hwnd, kTopmostRecorderId));
+                }
                 return 0;
             }
 
@@ -2995,36 +3159,10 @@ LRESULT CALLBACK settingsDialogProc(HWND hwnd, UINT message,
                         }
                     }
 
-                    // --- 置顶快捷键（单选组，找出被选中的那个）
-                    {
-                        struct TopmostRadio {
-                            int id;
-                            core::TopmostHotkeyPreset preset;
-                        };
-                        const TopmostRadio radios[] = {
-                            {kTopmostNoneRadioId,
-                             core::TopmostHotkeyPreset::None},
-                            {kTopmostF7RadioId, core::TopmostHotkeyPreset::F7},
-                            {kTopmostCtrlF7RadioId,
-                             core::TopmostHotkeyPreset::CtrlF7},
-                            {kTopmostAltF7RadioId,
-                             core::TopmostHotkeyPreset::AltF7},
-                        };
-                        for (const auto& radio : radios) {
-                            HWND button = GetDlgItem(hwnd, radio.id);
-                            if (button == nullptr) {
-                                continue;
-                            }
-                            if (SendMessageW(button, BM_GETCHECK, 0, 0) !=
-                                BST_CHECKED) {
-                                continue;
-                            }
-                            if (radio.preset != state->initialTopmostHotkey) {
-                                state->result.topmostHotkeyPreset =
-                                    radio.preset;
-                            }
-                            break;
-                        }
+                    // --- 置顶快捷键（录制控件直接改草稿，与初值比较）
+                    if (!sameHotkeyConfig(state->topmostHotkey,
+                                          state->initialTopmostHotkey)) {
+                        state->result.topmostHotkey = state->topmostHotkey;
                     }
 
                     // 跟随启动：整份交回，顺序也算改动。
@@ -3507,7 +3645,7 @@ bool showSettingsWindow(HWND owner,
                         const std::string& currentThemeName,
                         const std::string& currentLanguage,
                         const bool currentStartup,
-                        const core::TopmostHotkeyPreset currentTopmostHotkeyPreset,
+                        const core::HotkeyConfig& currentTopmostHotkey,
                         const std::vector<core::FollowLaunchEntry>&
                             currentFollowLaunch,
                         const core::HotkeyPreset currentHotkeyPreset,
@@ -3548,7 +3686,8 @@ bool showSettingsWindow(HWND owner,
     state.initialThemeName = base::utf8ToWide(currentThemeName);
     state.initialLanguage.assign(currentLanguage);
     state.initialStartup = currentStartup;
-    state.initialTopmostHotkey = currentTopmostHotkeyPreset;
+    state.initialTopmostHotkey = currentTopmostHotkey;
+    state.topmostHotkey = currentTopmostHotkey;
     state.initialFollowLaunch = currentFollowLaunch;
     state.followLaunch = currentFollowLaunch;
     state.initialHotkeyPreset = currentHotkeyPreset;

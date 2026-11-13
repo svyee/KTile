@@ -133,7 +133,8 @@ std::string virtualKeyToKeyName(const UINT virtualKey) {
             return entry.name;
         }
     }
-    return "Space";
+    // 空串 = 不认识的键（录制时据此忽略，不能静默当成 Space）。
+    return std::string();
 }
 
 std::wstring formatHotkey(const core::HotkeyConfig& config) {

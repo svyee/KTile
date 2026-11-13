@@ -568,38 +568,20 @@ struct FollowLaunchEntry {
 // 跟随启动列表的上限：不是省内存，是防配置写坏后每次启动拉起几百个进程。
 inline constexpr std::size_t kMaximumFollowLaunchItems = 32;
 
-// 置顶快捷键预设。None = 关闭窗口置顶功能；其余经 RegisterHotKey 注册。
-enum class TopmostHotkeyPreset : std::uint8_t {
-    None = 0,
-    F7 = 1,
-    CtrlF7 = 2,
-    AltF7 = 3,
-};
-
-inline const char* topmostHotkeyKey(TopmostHotkeyPreset preset) noexcept {
-    switch (preset) {
-        case TopmostHotkeyPreset::None:   return "none";
-        case TopmostHotkeyPreset::F7:     return "f7";
-        case TopmostHotkeyPreset::CtrlF7: return "ctrlF7";
-        case TopmostHotkeyPreset::AltF7:  return "altF7";
-    }
-    return "f7";
-}
-
-inline TopmostHotkeyPreset topmostHotkeyFromKey(const std::string& key) noexcept {
-    if (key == "none")   return TopmostHotkeyPreset::None;
-    if (key == "ctrlF7") return TopmostHotkeyPreset::CtrlF7;
-    if (key == "altF7")  return TopmostHotkeyPreset::AltF7;
-    return TopmostHotkeyPreset::F7;
+// 置顶快捷键的默认值：裸 F7（无修饰）。
+inline HotkeyConfig defaultTopmostHotkey() {
+    HotkeyConfig config;
+    config.modifiers.clear();
+    config.key = "F7";
+    return config;
 }
 
 struct ActivationConfig {
     HotkeyConfig hotkey;
 
-    // 窗口置顶快捷键（切换前台窗口 WS_EX_TOPMOST）。固定主键 F7 只选
-    // 修饰方案，不做自由录制：热键录制要配冲突检测与反馈，唤醒键当年
-    // 也是这么取舍的。None = 功能整体关闭。
-    TopmostHotkeyPreset topmostHotkey = TopmostHotkeyPreset::F7;
+    // 窗口置顶快捷键（切换前台窗口 WS_EX_TOPMOST）。任意修饰键 + 主键，
+    // enabled=false 表示关闭该功能。与唤醒热键各自独立注册。
+    HotkeyConfig topmostHotkey = defaultTopmostHotkey();
 
     bool startWithWindows = false;
 

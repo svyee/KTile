@@ -194,8 +194,6 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     // ---- activation ----
     writer.key("activation").beginObject();
     writer.member("startWithWindows", config.activation.startWithWindows);
-    writer.member("topmostHotkey",
-                  core::topmostHotkeyKey(config.activation.topmostHotkey));
     writer.member("screenEdgeEnabled", config.activation.screenEdgeEnabled);
 
     // ---- 跟随启动 ----
@@ -241,6 +239,16 @@ std::string ConfigStore::serializeConfig(const core::ApplicationConfig& config) 
     writer.member("gesture",
                   core::hotkeyGestureKey(config.activation.hotkey.gesture));
     writer.endObject();  // hotkey
+
+    writer.key("topmostHotkey").beginObject();
+    writer.member("enabled", config.activation.topmostHotkey.enabled);
+    writer.key("modifiers").beginArray();
+    for (const auto modifier : config.activation.topmostHotkey.modifiers) {
+        writer.value(hotkeyModifierToKey(modifier));
+    }
+    writer.endArray();
+    writer.member("key", config.activation.topmostHotkey.key);
+    writer.endObject();  // topmostHotkey
 
     writer.endObject();  // activation
 
@@ -531,18 +539,6 @@ ConfigStore::deserializeConfig(const std::string& text) {
     if (activation.isObject()) {
         auto& config = result.value.activation;
         config.startWithWindows = activation.find("startWithWindows").asBool(false);
-        // 置顶快捷键：新格式是预设 key；老配置只有 bool 开关，迁过去
-        //（true → F7，false → None）。
-        const JsonValue& topmostKey = activation.find("topmostHotkey");
-        if (topmostKey.isString()) {
-            config.topmostHotkey =
-                core::topmostHotkeyFromKey(topmostKey.asString());
-        } else {
-            config.topmostHotkey =
-                activation.find("topmostHotkeyEnabled").asBool(true)
-                    ? core::TopmostHotkeyPreset::F7
-                    : core::TopmostHotkeyPreset::None;
-        }
         config.screenEdgeEnabled = activation.find("screenEdgeEnabled").asBool(false);
 
         // 跟随启动：缺键 = 空表（v2 及更老的配置都走这里）。
@@ -622,6 +618,39 @@ ConfigStore::deserializeConfig(const std::string& text) {
             // 手势缺键 = none（用 modifiers + key），保证老配置零迁移
             config.hotkey.gesture = core::hotkeyGestureFromKey(
                 hotkey.find("gesture").asString());
+        }
+
+        // 置顶快捷键。两代旧格式都要认：更早是 bool 开关
+        //（topmostHotkeyEnabled），上一版是预设字符串（"f7" / "none" /
+        // "ctrlF7" / "altF7"），当前是 {enabled, modifiers, key} 对象。
+        const JsonValue& topmost = activation.find("topmostHotkey");
+        if (topmost.isObject()) {
+            config.topmostHotkey.enabled = topmost.find("enabled").asBool(true);
+            const JsonValue& modifiers = topmost.find("modifiers");
+            if (modifiers.isArray()) {
+                config.topmostHotkey.modifiers.clear();
+                for (std::size_t i = 0; i < modifiers.size(); ++i) {
+                    config.topmostHotkey.modifiers.push_back(
+                        hotkeyModifierFromKey(modifiers.at(i).asString()));
+                }
+            }
+            const std::string key = topmost.find("key").asString();
+            if (!key.empty()) {
+                config.topmostHotkey.key = key;
+            }
+        } else if (topmost.isString()) {
+            const std::string preset = topmost.asString();
+            config.topmostHotkey = core::defaultTopmostHotkey();
+            if (preset == "none") {
+                config.topmostHotkey.enabled = false;
+            } else if (preset == "ctrlF7") {
+                config.topmostHotkey.modifiers = {core::HotkeyModifier::Control};
+            } else if (preset == "altF7") {
+                config.topmostHotkey.modifiers = {core::HotkeyModifier::Alt};
+            }
+        } else if (!activation.find("topmostHotkeyEnabled").asBool(true)) {
+            config.topmostHotkey = core::defaultTopmostHotkey();
+            config.topmostHotkey.enabled = false;
         }
     }
 

@@ -24,7 +24,7 @@ UINT modifiersToWin32(const std::vector<core::HotkeyModifier>& modifiers) noexce
 // 无法识别时返回 0。
 UINT keyNameToVirtualKey(const std::string& key) noexcept;
 
-// 反向：虚拟键码转显示名
+// 反向：虚拟键码转显示名。不认识的键返回空串（调用方自行决定忽略还是兜底）。
 std::string virtualKeyToKeyName(UINT virtualKey);
 
 // 把热键配置格式化成可读文本（如 "Alt+Space"），用于界面显示
