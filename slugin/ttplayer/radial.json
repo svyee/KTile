@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "name": "千千静听",
+  "processes": [
+    "ttplayer.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "千千静听",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "播放/暂停",
+        "key": "F5",
+        "icon": "icons/play.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "停止",
+        "key": "F6",
+        "icon": "icons/stop.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "上一首",
+        "key": "Left",
+        "icon": "icons/prev.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "下一首",
+        "key": "Right",
+        "icon": "icons/next.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "快退",
+        "key": "F7",
+        "icon": "icons/rewind.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "快进",
+        "key": "F8",
+        "icon": "icons/fast-forward.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "静音开关",
+        "key": "S",
+        "icon": "icons/volume-x.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "歌词秀",
+        "key": "F2",
+        "icon": "icons/captions.svg"
+      }
+    ]
+  }
+}

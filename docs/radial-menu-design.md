@@ -505,12 +505,23 @@ abort 一律**不执行扇区动作**：用户已经作废了这次手势，再�
   里几乎全是快捷键动作，否则「图标外置」这条诉求等于白提。
 - 缓存键带文件修改时间：换掉插件目录里的 SVG 后下一帧就生效，不必重启。
 
-#### 随包提供的两个插件
+#### 随包提供的插件
 
-| 目录 | 适用进程 | 八个方向（0=正上，顺时针） |
+| 目录 | 适用进程 | 方向（0=正上，顺时针） |
 |---|---|---|
 | `slugin/explorer` | `explorer.exe` | 新建文件夹 / 复制路径 / 粘贴 / 删除 / 刷新 / 上一级 / 后退 / 属性 |
 | `slugin/browser` | `chrome.exe`、`msedge.exe`、`firefox.exe`、`360chromex.exe`、`360chrome.exe`、`360se.exe` | 到顶 / 刷新 / 关闭标签 / 恢复 / 到底 / 新标签 / 后退 / 前进 |
+| `slugin/desktop` | `explorer.exe@Progman`、`explorer.exe@WorkerW` | 新建文件夹 / 粘贴 / 刷新 / 全选 / 个性化 / 显示设置 |
+| `slugin/word` | `winword.exe` | 保存 / 打印 / 撤销 / 恢复 / 加粗 / 下划线 / 查找 / 另存为 |
+| `slugin/excel` | `excel.exe` | 保存 / 撤销 / 恢复 / 自动求和 / 筛选 / 新工作表 / 查找 / 加粗 |
+| `slugin/powerpoint` | `powerpnt.exe` | 放映 / 当前页放映 / 新幻灯片 / 保存 / 撤销 / 打印 |
+| `slugin/photoshop` | `photoshop.exe` | 撤销 / 自由变换 / 新建图层 / 复制图层 / 取消选择 / 反相 / 适配屏幕 / 保存 |
+| `slugin/potplayer` | `potplayer.exe`、`potplayer64.exe`、`potplayermini.exe`、`potplayermini64.exe` | 播放/暂停 / 全屏 / 快进5秒 / 快退5秒 / 音量+ / 音量- / 静音 / 截图 |
+| `slugin/ttplayer` | `ttplayer.exe` | 播放/暂停 / 停止 / 上一首 / 下一首 / 快退 / 快进 / 静音开关 / 歌词秀 |
+
+图标源文件集中在 `slugin/_shared/icons/`（无 radial.json，加载器自动跳过），
+各插件目录里只放自己用到的拷贝；新增插件时从共享库复制，保持 24×24
+Lucide 线条风格。
 
 浏览器这份之所以一份清单挂六个进程，是因为这四家快捷键本来就同源：`Ctrl+W` 关
 标签、`Ctrl+Shift+T` 恢复刚关掉的标签、`Ctrl+T` 新标签、`Ctrl+R` 刷新、

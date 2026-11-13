@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "name": "PotPlayer",
+  "processes": [
+    "potplayer.exe",
+    "potplayer64.exe",
+    "potplayermini.exe",
+    "potplayermini64.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "PotPlayer",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "播放/暂停",
+        "key": "Space",
+        "icon": "icons/play.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "全屏",
+        "key": "Enter",
+        "icon": "icons/maximize.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "快进5秒",
+        "key": "Right",
+        "icon": "icons/fast-forward.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "快退5秒",
+        "key": "Left",
+        "icon": "icons/rewind.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "音量+",
+        "key": "Up",
+        "icon": "icons/volume-2.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "音量-",
+        "key": "Down",
+        "icon": "icons/volume-1.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "静音",
+        "key": "M",
+        "icon": "icons/volume-x.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "截图",
+        "key": "E",
+        "icon": "icons/camera.svg",
+        "modifiers": [
+          "control"
+        ]
+      }
+    ]
+  }
+}

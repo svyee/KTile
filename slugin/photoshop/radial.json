@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "name": "Photoshop",
+  "processes": [
+    "photoshop.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "Photoshop",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "撤销",
+        "key": "Z",
+        "icon": "icons/undo.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "自由变换",
+        "key": "T",
+        "icon": "icons/move.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "新建图层",
+        "key": "N",
+        "icon": "icons/layers.svg",
+        "modifiers": [
+          "control",
+          "shift"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "复制图层",
+        "key": "J",
+        "icon": "icons/copy.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "取消选择",
+        "key": "D",
+        "icon": "icons/x-circle.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "反相",
+        "key": "I",
+        "icon": "icons/contrast.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "适配屏幕",
+        "key": "0",
+        "icon": "icons/scan.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "保存",
+        "key": "S",
+        "icon": "icons/save.svg",
+        "modifiers": [
+          "control"
+        ]
+      }
+    ]
+  }
+}

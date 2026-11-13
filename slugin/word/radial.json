@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "name": "Word",
+  "processes": [
+    "winword.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "Word",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "保存",
+        "key": "S",
+        "icon": "icons/save.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "打印",
+        "key": "P",
+        "icon": "icons/print.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "撤销",
+        "key": "Z",
+        "icon": "icons/undo.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "恢复",
+        "key": "Y",
+        "icon": "icons/redo.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "加粗",
+        "key": "B",
+        "icon": "icons/bold.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "下划线",
+        "key": "U",
+        "icon": "icons/underline.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "查找",
+        "key": "F",
+        "icon": "icons/search.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "另存为",
+        "key": "F12",
+        "icon": "icons/save.svg"
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "name": "PowerPoint",
+  "processes": [
+    "powerpnt.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "PowerPoint",
+    "sectorCount": 6,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "放映",
+        "key": "F5",
+        "icon": "icons/play.svg"
+      },
+      {
+        "type": "shortcut",
+        "name": "当前页放映",
+        "key": "F5",
+        "icon": "icons/monitor.svg",
+        "modifiers": [
+          "shift"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "新幻灯片",
+        "key": "M",
+        "icon": "icons/file-plus.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "保存",
+        "key": "S",
+        "icon": "icons/save.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "撤销",
+        "key": "Z",
+        "icon": "icons/undo.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "打印",
+        "key": "P",
+        "icon": "icons/print.svg",
+        "modifiers": [
+          "control"
+        ]
+      }
+    ]
+  }
+}

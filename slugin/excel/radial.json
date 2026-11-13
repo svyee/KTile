@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "name": "Excel",
+  "processes": [
+    "excel.exe"
+  ],
+  "priority": 0,
+  "menu": {
+    "name": "Excel",
+    "sectorCount": 8,
+    "actions": [
+      {
+        "type": "shortcut",
+        "name": "保存",
+        "key": "S",
+        "icon": "icons/save.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "撤销",
+        "key": "Z",
+        "icon": "icons/undo.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "恢复",
+        "key": "Y",
+        "icon": "icons/redo.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "自动求和",
+        "key": "=",
+        "icon": "icons/plus.svg",
+        "modifiers": [
+          "alt"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "筛选",
+        "key": "L",
+        "icon": "icons/filter.svg",
+        "modifiers": [
+          "control",
+          "shift"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "新工作表",
+        "key": "F11",
+        "icon": "icons/file-plus.svg",
+        "modifiers": [
+          "shift"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "查找",
+        "key": "F",
+        "icon": "icons/search.svg",
+        "modifiers": [
+          "control"
+        ]
+      },
+      {
+        "type": "shortcut",
+        "name": "加粗",
+        "key": "B",
+        "icon": "icons/bold.svg",
+        "modifiers": [
+          "control"
+        ]
+      }
+    ]
+  }
+}
