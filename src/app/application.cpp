@@ -2943,11 +2943,18 @@ void Application::toggleTopmost() {
     if (window == nullptr) {
         return;
     }
-    // 自己的面板/对话框不参与：热键落在本进程窗口上没有意义，还会把
-    // 面板钉死在最前。
     DWORD processId = 0;
     GetWindowThreadProcessId(window, &processId);
     if (processId == GetCurrentProcessId()) {
+        // 面板的置顶样式是常驻的（创建即 WS_EX_TOPMOST），对它切样式没有
+        // 意义。快捷键在面板上是另一个语义：钉住 / 松开——钉住 = 点窗口外
+        // 不收起，当常驻面板用，与右上角钉子按钮同一状态。只接管面板本窗，
+        // 设置窗口等对话框不参与。
+        if (launcherWindow_ != nullptr && window == launcherWindow_->hwnd()) {
+            const bool pinned = !launcherWindow_->isPinned();
+            launcherWindow_->setPinned(pinned);
+            infrastructure::applog::info(pinned ? "面板已钉住" : "面板已松开");
+        }
         return;
     }
     const bool topmost =
