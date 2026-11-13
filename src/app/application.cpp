@@ -12,6 +12,7 @@
 #include "ui/radial_menu_window.h"
 #include "platform/win32/follow_launcher.h"
 #include "platform/win32/foreground_process.h"
+#include "platform/win32/topmost_indicator.h"
 #include "platform/win32/explorer_selection.h"
 #include "platform/win32/item_launcher.h"
 #include "platform/win32/program_paths.h"
@@ -414,6 +415,8 @@ Application::~Application() {
         hotkey_.unregister();
     }
     gestureHotkey_.uninstall();
+    // 描边标志写在别的进程的窗口上，不撤会一直留在用户屏幕上
+    platform::win32::clearAllTopmostMarks();
     tray_.destroy();
     // 兜底覆盖调试开关的提前返回路径（正常退出已在 runMessageLoop 之后
     // shutdown 过日志）。
@@ -2962,6 +2965,9 @@ void Application::toggleTopmost() {
     SetWindowPos(window, topmost ? HWND_NOTOPMOST : HWND_TOPMOST,
                  0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    // 置顶是看不见的状态，挂个描边标志让用户知道钉给谁了（Win11 用
+    // 原生窗口描边，老系统用自绘描边悬浮框）
+    platform::win32::setTopmostMark(window, !topmost);
     wchar_t title[128] = {};
     GetWindowTextW(window, title, 128);
     infrastructure::applog::info(std::string(topmost ? "取消置顶: " : "置顶: ") +
