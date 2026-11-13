@@ -25,16 +25,16 @@ reach them with a single drag.**
 ## Preview
 
 <p align="center">
-  <img src="docs/screenshot-main.jpg" alt="KTile main panel: multi-tab tile layout" width="720" style="max-width:100%; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+  <img src="docs/screenshot-main.png" alt="KTile main panel: multi-tab tile layout with plugin tiles showing live data" width="720" style="max-width:100%; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.3);">
   <br>
-  <sub>The tile panel: four sizes mixed freely, grouped into tabs</sub>
+  <sub>The tile panel: four sizes mixed freely, grouped into tabs, plugin tiles showing CPU / memory / disk and weather</sub>
 </p>
 
 <p align="center">
-  <img src="docs/screenshot-radial.png" alt="KTile wheel menu: eight-sector radial menu" width="300" style="border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
+  <img src="docs/feature-selection.gif" alt="Two sets of wheel actions depending on whether files are selected on the desktop" width="760" style="max-width:100%; border-radius:8px;">
   <br>
   <sub>The wheel menu: hold <code>Ctrl</code> and drag the right button; release to run the highlighted sector
-  (the wheel of the File Explorer plugin in this shot)</sub>
+  (the wheel of the desktop plugin in this shot — one file is selected, so it shows the file actions)</sub>
 </p>
 
 ## What's new in v1.3.1
@@ -109,8 +109,13 @@ The trigger is "when KTile starts", regardless of how KTile itself was started
 (sign-in, tray, hotkey, clicking a tile). The `--debug-*` automation entry points
 do not run it, so a screenshot script does not leave a pile of processes behind.
 
-> **Image placeholder** `docs/feature-follow.gif`: tick "Launch with KTile" on a
-> tile, restart KTile, watch the program come up (screenshot or GIF)
+<p align="center">
+  <img src="docs/feature-follow.gif" alt="Ticking Launch with KTile in a tile's context menu, then the entry appearing in Settings" width="760" style="max-width:100%; border-radius:8px;">
+  <br>
+  <sub>Tick "Launch with KTile" in a tile's context menu — such entries start the way the tile does,
+  arguments, start-in folder and administrator flag included; they are listed, and removable,
+  in Settings → Behavior → "Launch with KTile"</sub>
+</p>
 
 ### 2. Tile plugins: a tile is not just an icon
 
@@ -126,8 +131,12 @@ small one. `refreshSeconds` is the cache TTL when the panel is summoned;
 for the system monitor) and stops when the panel hides. Two examples ship with the
 package — Weather and System Monitor — installable and removable in Settings.
 
-> **Image placeholder** `docs/feature-plugin.gif`: installing a tile plugin and
-> watching it refresh (screenshot or GIF)
+<p align="center">
+  <img src="docs/feature-plugin.gif" alt="Adding the System Monitor plugin tile and watching CPU and memory update" width="760" style="max-width:100%; border-radius:8px;">
+  <br>
+  <sub>Right-click → "Add plugin tile" installs System Monitor: CPU / memory / disk refresh every second,
+  and stretching the tile to a wide size switches it to a two-metric layout</sub>
+</p>
 
 ### 3. Wheel menu: one per app, blind-operable once you are fluent
 
@@ -139,6 +148,11 @@ eight sectors; both the trigger and the modifier are configurable.
   `radial.json` lists the process names it applies to and the sector actions. Switch
   to that program and its wheel appears; anything unmatched falls back to the general
   wheel. No code, no recompile
+- **It knows whether you have files selected** — the wheel on the desktop and in
+  File Explorer carries two sets of actions: with nothing selected you get new
+  folder, paste and refresh; with files selected it becomes rename, copy, cut,
+  delete and properties. The state is read once, when the wheel opens; if it cannot
+  be read, the no-selection set is used
 - **Blind operation once you are used to it** — sectors stay in place, so within a
   few days it is muscle memory, and a drag is faster than hunting through a menu
 - **Legible when it is new** — every sector carries an icon and a name, so you can
@@ -151,8 +165,18 @@ In my own use it has replaced mouse gestures: gestures have to be memorised stro
 by stroke, while the wheel keeps every candidate in view — and if you drift towards
 the wrong sector you can still correct before releasing.
 
-> **Image placeholder** `docs/feature-radial.gif`: switching to a browser swaps the
-> wheel for that app's set, then one drag runs an action (screenshot or GIF)
+<p align="center">
+  <img src="docs/feature-radial.gif" alt="Switching to a browser swaps the wheel for the browser's set, then a drag runs an action" width="760" style="max-width:100%; border-radius:8px;">
+  <br>
+  <sub>The wheel follows the foreground program: in a browser it becomes back / forward / reload /
+  close tab / new tab / scroll to top / scroll to bottom</sub>
+</p>
+
+<p align="center">
+  <sub>The same wheel reads the current state: with nothing selected it offers new folder, paste,
+  refresh, personalise and display settings; select a file and it becomes rename, copy, cut, delete
+  and properties (the clip ends with a duplicated copy of that file)</sub>
+</p>
 
 ### 4. Multiple languages: switch the UI language at will
 
@@ -167,8 +191,12 @@ current language to English to the key itself, so a missing translation shows
 something like `settings.title` instead of a blank, which is far easier to track
 down. Details in [docs/i18n.md](docs/i18n.md) (in Chinese).
 
-> **Image placeholder** `docs/feature-i18n.png`: the same screen in Chinese and in
-> English (two screenshots side by side is fine)
+<p align="center">
+  <img src="docs/feature-i18n.png" alt="The same Settings page in English and in Simplified Chinese" width="760" style="max-width:100%; border-radius:8px;">
+  <br>
+  <sub>One Settings page: English on the left, Simplified Chinese on the right. A switch takes effect
+  immediately; the Settings window itself changes language the next time it opens</sub>
+</p>
 
 ### Everything else
 
