@@ -341,6 +341,14 @@ app/            组装与生命周期
     另注意 `IShellFolderViewDual::SelectedItems` 的参数就是 `FolderItems**`，
     不用也不该绕 `IDispatch**`。
 
+20. **`RegisterHotKey` 注册中的组合收不到 `WM_KEYDOWN`**：系统把它截成
+    `WM_HOTKEY` 直接投给注册窗口，前台窗口、对话框、录制控件全都看不到这个
+    按键。所以做「按键录制」时必须先注销全局热键，录完再按已生效配置注册
+    回去（见 `settings_window.cpp` 的 `beginTopmostCapture` /
+    `endTopmostCapture` 与 `application.cpp` 的 `SettingsHotkeyCaptureHooks`）；
+    确定 / 取消 / 关窗三条退出路径都要补回，否则取消一次功能就「消失」到
+    下次启动。
+
 ## 12. 关键文件导航
 
 | 文件 | 作用 |
