@@ -199,6 +199,7 @@ void RadialMenuWindow::show(const core::RadialMenu& menu, POINT centerScreen,
     menu_ = menu;
     centerScreen_ = centerScreen;
     highlightedValid_ = false;
+    hubHighlighted_ = false;
 
     // 换了一份菜单，标签的排版结果（窗口宽度随角度、字号随文字）全部作废
     labelLayoutCache_.clear();
@@ -281,21 +282,27 @@ void RadialMenuWindow::updateCursor(POINT screenPoint) {
     float dx = 0, dy = 0;
     screenToDipOffset(screenPoint, dx, dy);
 
+    // 中心圆优先：它嵌在花瓣环里面，落在里面时不再判扇区
+    const bool inHub =
+        dx * dx + dy * dy <= kHubHitRadiusDip * kHubHitRadiusDip;
+
     auto hit = core::hitTestSector(dx, dy, kInnerRadiusDip, cancelRadiusDip_,
                                    menu_.sectorCount);
     std::optional<std::uint8_t> next;
-    if (hit.has_value() && *hit < menu_.actions.size() &&
+    if (!inHub && hit.has_value() && *hit < menu_.actions.size() &&
         !menu_.actions[*hit].isEmpty()) {
         next = *hit;
     }
 
     const bool changed = next.has_value() != highlightedValid_ ||
-                         (next.has_value() && *next != highlightedSector_);
+                         (next.has_value() && *next != highlightedSector_) ||
+                         inHub != hubHighlighted_;
     if (changed) {
         highlightedValid_ = next.has_value();
         if (next.has_value()) {
             highlightedSector_ = *next;
         }
+        hubHighlighted_ = inHub;
         render();
     }
 }
@@ -303,6 +310,12 @@ void RadialMenuWindow::updateCursor(POINT screenPoint) {
 void RadialMenuWindow::releaseAt(POINT screenPoint) {
     if (!isVisible()) return;
     updateCursor(screenPoint);
+    // 中心圆先判：松开时轮盘还盖在屏幕上，直接唤面板会先闪一下旧内容
+    if (hubHighlighted_ && hubHandler_ != nullptr) {
+        hide();
+        hubHandler_();
+        return;
+    }
     if (highlightedValid_ && actionHandler_ != nullptr) {
         actionHandler_(highlightedSector_);
     }
@@ -322,6 +335,7 @@ void RadialMenuWindow::hide() {
         }
     }
     highlightedValid_ = false;
+    hubHighlighted_ = false;
 }
 
 bool RadialMenuWindow::isVisible() const noexcept {
@@ -998,11 +1012,30 @@ void RadialMenuWindow::paintHub() {
         D2D1::Matrix3x2F::Scale(animScale_, animScale_, center);
     renderTarget_->SetTransform(base);
 
-    renderTarget_->FillEllipse(
-        D2D1::Ellipse(center, kHubRadiusDip, kHubRadiusDip), hubBrush_.get());
-    renderTarget_->DrawEllipse(
-        D2D1::Ellipse(center, kHubRadiusDip, kHubRadiusDip),
-        hubBorderBrush_.get(), 1.2F);
+    const D2D1_ELLIPSE hub = D2D1::Ellipse(center, kHubRadiusDip, kHubRadiusDip);
+    const bool hot = hubHighlighted_;
+    renderTarget_->FillEllipse(hub, hot ? highlightBrush_.get() : hubBrush_.get());
+    renderTarget_->DrawEllipse(hub, hot ? highlightBrush_.get() : hubBorderBrush_.get(),
+                               1.2F);
+
+    // 四宫格：和磁贴面板同一套标识，告诉用户这个圆点回得去
+    constexpr float kTileDip = 7.5F;
+    constexpr float kGapDip = 2.0F;
+    const float originX = center.x - kTileDip - kGapDip / 2.0F;
+    const float originY = center.y - kTileDip - kGapDip / 2.0F;
+    ID2D1Brush* glyph =
+        hot ? accentTextBrush_.get() : glyphAccentBrush_.get();
+    for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 2; ++col) {
+            const float left = originX + col * (kTileDip + kGapDip);
+            const float top = originY + row * (kTileDip + kGapDip);
+            renderTarget_->FillRoundedRectangle(
+                D2D1::RoundedRect(
+                    D2D1::RectF(left, top, left + kTileDip, top + kTileDip),
+                    1.8F, 1.8F),
+                glyph);
+        }
+    }
 
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 }

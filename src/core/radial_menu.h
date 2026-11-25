@@ -187,16 +187,19 @@ inline RadialTriggerModifier radialTriggerModifierFromKey(const std::string& key
 struct RadialTriggerConfig {
     bool enabled = true;
     RadialTriggerButton button = RadialTriggerButton::Right;
-    RadialTriggerModifier modifier = RadialTriggerModifier::Ctrl;  // 默认 Ctrl+右键
+    // 默认纯右键拖动呼出：轮盘取代的就是右键菜单，多按一个修饰键等于
+    // 每次多一道手续。需要原生右键菜单时按住抑制键即可。
+    RadialTriggerModifier modifier = RadialTriggerModifier::None;
     // 拖动超过此距离才呼出轮盘（物理像素）。15 而不是 8：按右键带出几个
     // 像素很常见，8 的窗口太窄，普通单击也会拽出轮盘；15 仍远小于卡片环
     // 内半径（47 DIP），正常选择不受影响。
     std::uint16_t activationThresholdPx = 15;
     std::uint16_t cancelRadiusPx = 160;        // 拖出此半径外松手 = 取消
 
-    // 抑制键：按住其中任意一个时轮盘不弹出，事件原样放行，给 Alt+Tab
-    // 这类组合键让路。空列表 = 不抑制。
-    std::vector<HotkeyModifier> suppressWhileHeld;
+    // 抑制键：按住其中任意一个时轮盘不弹出，事件原样放行，给原生右键
+    // 菜单和 Alt+Tab 这类组合键让路。默认 Ctrl：不按住就是轮盘，按住
+    // 就是系统的右键菜单，两套行为各归其位。
+    std::vector<HotkeyModifier> suppressWhileHeld = {HotkeyModifier::Control};
 };
 
 // 抑制键是否与触发修饰键撞车：同一个键既必须按又必须不按，永远不触发。

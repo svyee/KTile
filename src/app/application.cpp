@@ -542,6 +542,7 @@ int Application::run(const HINSTANCE instance, const DebugOptions& debug) {
         // 可选：钉住滚动相位（默认 0 = 标签开头），让导出结果可复现
         radialWindow->setMarqueePhaseForDebug(
             static_cast<float>(debug.radialScrollMs));
+        radialWindow->setHubHotForDebug(debug.radialHubHot);
         const bool ok = radialWindow->debugExportPng(L"radial-shot.png");
         radialWindow->hide();
         return ok ? 0 : 4;
@@ -1317,6 +1318,9 @@ void Application::onRadialShow(POINT startPoint) {
     // 动作」的专门答案，通用轮盘是兜底，反过来插件永远轮不到。
     const core::RadialMenu* menu = &radialConfig_.menu;
     platform::win32::WindowTarget target;
+    // 命中的插件 id，只用于日志：微信这类「同一宿主里嵌了别的进程」的场景，
+    // 靠日志才能看出到底用的是哪套轮盘
+    std::string pluginId;
     {
         // 目标按鼠标所在窗口取（悬停不改前台，只看前台会配错窗口）。
         target = platform::win32::radialTargetWindow();
@@ -1327,6 +1331,7 @@ void Application::onRadialShow(POINT startPoint) {
                 base::wideToUtf8Lossy(target.windowClass));
             if (plugin != nullptr && plugin->valid) {
                 menu = &plugin->menu;
+                pluginId = plugin->id;
             }
         }
     }
@@ -1359,7 +1364,9 @@ void Application::onRadialShow(POINT startPoint) {
 
     infrastructure::applog::info(
         "轮盘菜单：显示 起点 " + std::to_string(startPoint.x) + "," +
-        std::to_string(startPoint.y) + " 扇区 " +
+        std::to_string(startPoint.y) + " 目标 " +
+        base::wideToUtf8Lossy(target.processName) + " 方案 " +
+        (pluginId.empty() ? std::string("通用") : pluginId) + " 扇区 " +
         std::to_string(menu->sectorCount) + " 动作 " +
         std::to_string(menu->actions.size()));
 
@@ -1375,6 +1382,12 @@ void Application::onRadialShow(POINT startPoint) {
                 if (sectorIndex >= activeRadialMenu_->actions.size()) return;
                 executeRadialAction(activeRadialMenu_->actions[sectorIndex]);
             });
+        // 中心圆：回主面板。轮盘亮着的时候面板必然已经失焦收起，
+        // 直接唤起即可，不必走 toggle 的分支。
+        radialWindow_->setHubHandler([this]() {
+            infrastructure::applog::info("轮盘中心：唤出主面板");
+            showLauncher();
+        });
     }
     radialWindow_->show(*menu, startPoint,
                         static_cast<int>(radialConfig_.trigger.cancelRadiusPx));

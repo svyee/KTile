@@ -869,8 +869,15 @@ void testRadialSchemaVersionStamped() {
     }
     CHECK_EQ(static_cast<long long>(loaded.value.schemaVersion),
              static_cast<long long>(core::kRadialSchemaVersion));
-    // 缺省的 trigger 字段走默认值：Ctrl + 右键，阈值 15，取消半径 160
-    CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::Ctrl);
+    // 缺省的 trigger 字段走默认值：纯右键，Ctrl 抑制，阈值 15，取消半径 160
+    CHECK(loaded.value.trigger.modifier == core::RadialTriggerModifier::None);
+    CHECK_EQ(static_cast<long long>(
+                 loaded.value.trigger.suppressWhileHeld.size()),
+             1);
+    if (loaded.value.trigger.suppressWhileHeld.size() == 1) {
+        CHECK(loaded.value.trigger.suppressWhileHeld[0] ==
+              core::HotkeyModifier::Control);
+    }
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.activationThresholdPx), 15);
     CHECK_EQ(static_cast<long long>(loaded.value.trigger.cancelRadiusPx), 160);
 }
@@ -1116,6 +1123,12 @@ void testBundledPluginsLoad() {
         CHECK(hit->id == "browser");
     }
     hit = core::findPluginForProcess(plugins, "360ChromeX.exe");
+    CHECK(hit != nullptr);
+    if (hit != nullptr) {
+        CHECK(hit->id == "browser");
+    }
+    // 微信内置浏览器（独立窗口与主窗里的文章子窗口都是这个进程）
+    hit = core::findPluginForProcess(plugins, "WeChatAppEx.exe");
     CHECK(hit != nullptr);
     if (hit != nullptr) {
         CHECK(hit->id == "browser");

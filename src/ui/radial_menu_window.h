@@ -29,6 +29,8 @@ public:
     // 扇区动作被触发时的回调（参数是扇区索引）
     using ActionHandler = std::function<void(std::uint8_t sectorIndex)>;
     using CloseHandler = std::function<void()>;
+    // 中心圆被点中：唤出主面板
+    using HubHandler = std::function<void()>;
 
     RadialMenuWindow();
     ~RadialMenuWindow();
@@ -61,6 +63,7 @@ public:
 
     void setActionHandler(ActionHandler handler) { actionHandler_ = std::move(handler); }
     void setCloseHandler(CloseHandler handler) { closeHandler_ = std::move(handler); }
+    void setHubHandler(HubHandler handler) { hubHandler_ = std::move(handler); }
 
     HWND hwnd() const noexcept { return hwnd_; }
 
@@ -70,6 +73,8 @@ public:
     // 调试用：把跑马灯进度拨到指定毫秒（--debug-radial-scroll），否则截图
     // 相位不定、无法自动比对。只在 debugExportPng 之前调用有意义。
     void setMarqueePhaseForDebug(float ms) { marqueeMs_ = ms; }
+    // 调试用：导出前把中心圆切成悬停态（--debug-hub）
+    void setHubHotForDebug(bool hot) noexcept { hubHighlighted_ = hot; }
 
 private:
     static LRESULT CALLBACK windowProcThunk(HWND hwnd, UINT message,
@@ -144,6 +149,8 @@ private:
     core::RadialMenu menu_;
     std::uint8_t highlightedSector_ = 0;
     bool highlightedValid_ = false;
+    // 光标落进中心圆：松开唤出主面板。独立于扇区高亮，两者互斥
+    bool hubHighlighted_ = false;
 
     // D2D / DWrite / WIC
     platform::win32::ComPtr<ID2D1Factory> d2dFactory_;
@@ -205,6 +212,7 @@ private:
 
     ActionHandler actionHandler_;
     CloseHandler closeHandler_;
+    HubHandler hubHandler_;
 
     static constexpr const wchar_t* kWindowClassName = L"KTileRadialMenu";
 
@@ -241,6 +249,10 @@ private:
     // 命中测试用的内/外半径（与花瓣布局对应）
     static constexpr float kInnerRadiusDip = 47.0F;
     static constexpr float kOuterRadiusDip = 153.0F;
+
+    // 中心圆的命中半径，比 kHubRadiusDip(21) 大一圈当容错：对着圆点拖过去
+    // 手会飘几像素。上限受内半径 47 约束，留出中心与花瓣环之间的取消空档。
+    static constexpr float kHubHitRadiusDip = 30.0F;
 
     // 实际生效的外甩取消半径（DIP）。下界 core::kMinCancelRadiusDip 保证
     // 不小于花瓣环外缘。

@@ -7,7 +7,8 @@
     "firefox.exe",
     "360chromex.exe",
     "360chrome.exe",
-    "360se.exe"
+    "360se.exe",
+    "wechatappex.exe"
   ],
   "priority": 0,
   "menu": {

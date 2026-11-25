@@ -155,6 +155,9 @@ int WINAPI wWinMain(HINSTANCE instance,
         }
     }
 
+    // --debug-hub：配合 --debug-radial，把中心圆切成悬停态导出
+    debugOptions.radialHubHot = hasFlag(L"--debug-hub");
+
     if (debugOptions.shot) {
         // 可选参数都在 = 之后：--debug-shot=x,y 模拟悬停，
         // --debug-shot=x,y@sx,sy@dx,dy 再加拖拽（sx,sy 来源磁贴，dx,dy 落点）。

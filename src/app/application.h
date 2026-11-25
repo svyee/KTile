@@ -43,10 +43,10 @@ const wchar_t* applicationWindowTitle();
 
 // 版本号。改这里时记得同步 app.rc 里的 VERSIONINFO
 // （rc 文件必须保持纯 ASCII，中文版本描述只放 About 对话框）。
-inline constexpr const wchar_t* kApplicationVersion = L"1.3.1";
+inline constexpr const wchar_t* kApplicationVersion = L"1.3.2";
 inline constexpr int kApplicationVersionMajor = 1;
 inline constexpr int kApplicationVersionMinor = 3;
-inline constexpr int kApplicationVersionPatch = 1;
+inline constexpr int kApplicationVersionPatch = 2;
 inline constexpr const wchar_t* kSingleInstanceMutexName =
     L"KTile.SingleInstance.{8F3A1C2D-4B5E-4A6F-9C8D-7E6F5A4B3C2D}";
 inline constexpr const wchar_t* kStartupRegistryValueName = L"KTile";
@@ -108,6 +108,9 @@ struct DebugOptions {
     // --debug-radial-scroll=<ms>：配合 --debug-radial，钉住超宽标签的
     // 滚动相位，否则时间相关的滚动让导出截图无法自动比对。
     int radialScrollMs = 0;
+    // --debug-hub：配合 --debug-radial，把中心圆切成悬停态导出。
+    // 不叫 --debug-radial-hub 是因为 hasFlag 走子串匹配，会连累 --debug-radial。
+    bool radialHubHot = false;
 
     bool any() const noexcept {
         return shot || settings || settingsKeepAlive || radialEditor || about ||

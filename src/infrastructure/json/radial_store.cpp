@@ -277,9 +277,8 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
         result.value.trigger.button =
             core::radialTriggerButtonFromKey(trigger.find("button").asString());
 
-        // modifier 字段缺失（而非写了认不出的值）时回落到默认 Ctrl：
-        // 手写配置漏掉这项的用户多半想保留右键，而 fromKey 对空串给的是
-        // None（纯右键拖动），会把右键整个吞掉。
+        // modifier 字段缺失（而非写了认不出的值）时回落到默认值：默认是
+        // 纯右键拖动，配合默认抑制键 Ctrl，手写配置漏掉这两项也能直接用。
         const std::string modifierKey = trigger.find("modifier").asString();
         result.value.trigger.modifier =
             modifierKey.empty() ? defaults.modifier
@@ -332,6 +331,17 @@ LoadResult<core::RadialConfig> RadialStore::deserialize(const std::string& text)
                 }
             }
         }
+
+        // 默认抑制键是 Ctrl，老配置里写的是 modifier=ctrl 且没有 suppress
+        // 字段，两者撞车会让整份配置校验不过（永远弹不出来）。按同一套
+        // 规则剔除，而不是把用户配好的扇区打回默认。
+        auto& held = result.value.trigger.suppressWhileHeld;
+        held.erase(std::remove_if(held.begin(), held.end(),
+                                  [&](core::HotkeyModifier modifier) {
+                                      return core::modifierIsTriggerModifier(
+                                          modifier, result.value.trigger.modifier);
+                                  }),
+                   held.end());
     }
 
     // ---- menu：新格式是单个对象，老格式是 menus 数组 ----

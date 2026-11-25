@@ -33,29 +33,48 @@ reach them with a single drag.**
 <p align="center">
   <img src="docs/feature-selection.gif" alt="Two sets of wheel actions depending on whether files are selected on the desktop" width="760" style="max-width:100%; border-radius:8px;">
   <br>
-  <sub>The wheel menu: hold <code>Ctrl</code> and drag the right button; release to run the highlighted sector
+  <sub>The wheel menu: drag the right button; release to run the highlighted sector
   (the wheel of the desktop plugin in this shot — one file is selected, so it shows the file actions)</sub>
 </p>
 
-## What's new in v1.3.1
+## What's new in v1.3.2
 
-- **Launch with KTile** — in Settings → Behavior, in the "Startup and activation"
-  group right below Start with Windows, you can attach a list of programs to come up
-  together with KTile: pick them with "Add…" (exe / lnk / bat / cmd / com) and the
-  list shows each one's icon and path. Anything already running is skipped —
-  including programs started through an app-execution alias (Notepad, Calculator),
-  so you never end up with two copies
-- **"Launch with KTile" in a tile's context menu** — no file dialog to wade through:
-  tick it on the tile, tick again to remove. Entries added this way start **the way
-  the tile does**: arguments, start-in folder and administrator flag all come from
-  the tile and follow later edits. If the tile is deleted the entry keeps working
-  from the snapshot taken when it was added. Only offered on executable tiles
-- **Relative tile targets** — a target like `tools\app.exe` is resolved against the
-  folder containing `KTile.exe`, not the current working directory: launching from a
-  shortcut, a scheduled task or an arbitrary folder all resolve the same way.
-  Launching, icons, type inference and "open file location" share one resolver
-- Fixed: labels in the item editor were clipped in English; the layout now measures
-  the current language instead of assuming four Chinese characters
+- **Window topmost hotkey** — a new "Extra tools" settings page: click the
+  recorder box, press any combo (e.g. Ctrl+Shift+T) and that key pins the
+  focused window on top or unpins it; Backspace clears to disable. Replaces
+  third-party always-on-top utilities with zero resident cost. Pinned windows
+  get an orange border drawn by KTile itself, anchored just above its own
+  window — with several windows pinned, a buried border is occluded like any
+  window, not painted on top
+- **The wheel hub opens the panel** — the four-square hub in the middle is no
+  longer decoration: drag back into it and release to open the main panel,
+  no need to dismiss the wheel first
+- **Plain right-drag summons the wheel** — the default trigger no longer
+  requires Ctrl; Ctrl becomes the suppression key for the native context menu
+  and for gesture tools. Existing configs are unaffected; legacy configs that
+  pin `modifier: "ctrl"` without a suppression list no longer fail validation
+  when the new default suppression key collides
+- **Selection-aware wheel** — plugin actions may declare
+  `"when": "selection" / "noselection"`; the bundled explorer and desktop
+  plugins ship two action sets each, resolved through a Shell COM snapshot
+  taken the moment the wheel opens
+- **WeChat's built-in browser** — `WeChatAppEx.exe` joins the browser wheel.
+  An article pane embedded in the chat window is a cross-process child window,
+  so the wheel target is now resolved from the deepest window under the
+  cursor: over the article you get the browser wheel, over the chat area the
+  generic one; a detached article window matches as a whole
+- **Processes scoped by window class** — `processes` entries accept a
+  `process@class` suffix (`explorer.exe@CabinetWClass`), so Explorer's file
+  windows and the desktop carry different wheels
+- Fixed: the tray icon vanished after Explorer restarted, and hovering it
+  showed an empty box; the wheel flashed the previous app's menu on first
+  summon; preloaded wheel labels showed raw keys like `action.copy` instead of
+  translations; item-editor labels clipped in English
+
+v1.3.1 added launch-with-KTile — attach programs in Settings or tick it on a
+tile's context menu, entries start the way the tile does and dedupe against
+app-execution aliases — and relative tile targets resolved against the folder
+containing `KTile.exe`.
 
 v1.3.0 brought wheel plugins (`slugin/`), the bilingual UI, a single general wheel
 plus a process blacklist, and modifier suppression keys. The full list is in
@@ -140,9 +159,13 @@ package — Weather and System Monitor — installable and removable in Settings
 
 ### 3. Wheel menu: one per app, blind-operable once you are fluent
 
-Hold `Ctrl` and drag the right button: a radial menu opens at the cursor, drag
-towards a sector and release to run it — no confirm click in between. Four, six or
-eight sectors; both the trigger and the modifier are configurable.
+Drag the right button: a radial menu opens at the cursor, drag towards a sector
+and release to run it — no confirm click in between. For the native context menu,
+hold `Ctrl` while right-clicking; `Ctrl` is the suppression key. Four, six or eight
+sectors, and the trigger, modifier and suppression keys are all configurable.
+
+The four-square hub in the middle is a way back to the panel: drag back into it
+and release, and the main panel opens — no need to dismiss the wheel first.
 
 - **One wheel per application** — adding a folder under `slugin/` adds an app:
   `radial.json` lists the process names it applies to and the sector actions. Switch
@@ -157,9 +180,11 @@ eight sectors; both the trigger and the modifier are configurable.
   few days it is muscle memory, and a drag is faster than hunting through a menu
 - **Legible when it is new** — every sector carries an icon and a name, so you can
   look before you choose instead of memorising anything
-- **Coexists with gesture software** — a modifier is required by default, so plain
-  right-click is never hijacked; suppression keys let `Alt+Tab`, `Alt+arrow` and
-  friends through, and individual processes can be blacklisted entirely
+- **Coexists with gesture software** — while a suppression key is held (`Ctrl` by
+  default) the wheel steps aside and the right-click event goes to the system and to
+  other tools untouched; the suppression key can be changed to `Alt` to let
+  `Alt+Tab`, `Alt+arrow` and friends through, and individual processes can be
+  blacklisted entirely
 
 In my own use it has replaced mouse gestures: gestures have to be memorised stroke
 by stroke, while the wheel keeps every candidate in view — and if you drift towards
@@ -243,7 +268,8 @@ under [Data and configuration](#data-and-configuration).
 | Typing | Filter tiles by name |
 | `Esc` | Clear the search / hide the panel |
 | `Ctrl+Tab` / `Ctrl+1..9` | Switch tabs |
-| `Ctrl` + right-drag (default, configurable) | Open the wheel menu, release to run the highlighted sector |
+| Right-drag (default, configurable) | Open the wheel menu, release to run the highlighted sector |
+| Drag back into the hub and release | Open the main panel |
 | Dragging a tile | Reorder (the others make room) |
 | Right-clicking a tile | Run, edit, resize, move/copy to another page… |
 

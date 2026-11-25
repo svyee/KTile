@@ -224,6 +224,8 @@ static void testTriggerModifierKey() {
 static void testSuppressionConflict() {
     RadialTriggerConfig trigger;
     trigger.modifier = RadialTriggerModifier::Ctrl;
+    // 默认抑制键是 Ctrl（与默认触发方式配套），这里从「没有抑制键」起测
+    trigger.suppressWhileHeld.clear();
 
     // 没有抑制键 → 不冲突
     CHECK(!suppressionConflictsTrigger(trigger));

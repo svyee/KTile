@@ -68,6 +68,7 @@ WindowTarget targetForWindow(HWND window) {
     }
     target.window = window;
     target.processName = processNameForWindow(window);
+    target.rootProcessName = target.processName;
     target.windowClass = classNameToLower(window);
     return target;
 }
@@ -99,7 +100,18 @@ WindowTarget radialTargetWindow() {
         HWND hit = WindowFromPoint(point);
         HWND root = (hit != nullptr) ? GetAncestor(hit, GA_ROOT) : nullptr;
         if (isEligibleTarget(root)) {
-            return targetForWindow(root);
+            WindowTarget target = targetForWindow(root);
+            // 光标落在别的进程的子窗口上：按最深那层定进程。微信 4.x 的
+            // 公众号文章就是这么嵌在主窗右侧的（子窗口属于 WeChatAppEx），
+            // 只看根窗口会一律算成 weixin.exe，浏览器轮盘永远轮不到。
+            // 类名仍取根窗口，explorer 的 @CabinetWClass 之类写法不受影响。
+            if (hit != root) {
+                const std::wstring hitProcess = processNameForWindow(hit);
+                if (!hitProcess.empty() && hitProcess != target.processName) {
+                    target.processName = hitProcess;
+                }
+            }
+            return target;
         }
     }
     // 光标位置取不到（多屏边界等）或命中的是覆盖层：回退前台窗口。

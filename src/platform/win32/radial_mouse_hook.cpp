@@ -261,11 +261,19 @@ bool RadialMouseHook::foregroundBlocked() const noexcept {
         return false;  // 常见情况，连进程都不查
     }
     // 按下瞬间前台可能还没切到刚点中的窗口，按鼠标所在窗口判。
-    const std::wstring process = radialTargetWindow().processName;
-    if (process.empty()) {
+    // 子窗口与根窗口的进程都认：拉黑 weixin.exe 时，微信文章区（子窗口
+    // 属于 wechatappex.exe）也不该漏网。
+    const WindowTarget target = radialTargetWindow();
+    if (target.processName.empty()) {
         return false;  // 查不到就按「不拉黑」处理，别让功能静默失效
     }
-    return core::isProcessBlockedBy(blacklist_, base::wideToUtf8Lossy(process));
+    if (core::isProcessBlockedBy(blacklist_,
+                                 base::wideToUtf8Lossy(target.processName))) {
+        return true;
+    }
+    return !target.rootProcessName.empty() &&
+           core::isProcessBlockedBy(blacklist_,
+                                    base::wideToUtf8Lossy(target.rootProcessName));
 }
 
 void RadialMouseHook::reinjectClick() const {

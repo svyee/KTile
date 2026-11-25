@@ -357,6 +357,14 @@ app/            组装与生命周期
     不产生 `EVENT_OBJECT_LOCATIONCHANGE`，只能靠定时器定期重插（PowerToys 的
     always-on-top 模块同样是 100ms 轮询）。见 `topmost_indicator.cpp`。
 
+22. **插件匹配的进程归属要取光标下「最深那层」窗口**：宿主窗口里可以嵌别的
+    进程的子窗口（微信 4.x 把公众号文章作为 `WeChatAppEx.exe` 的
+    `Chrome_WidgetWin_0` 塞进 `Weixin.exe` 主窗右侧）。只看 `GA_ROOT` 的进程，
+    文章区和聊天区无法区分，浏览器轮盘永远轮不到；用 `WindowFromPoint` 的结果
+    定进程名、根窗口定类名，既分得开又不破坏 `explorer.exe@CabinetWClass`
+    这类写法（`foreground_process.cpp`）。注意键盘焦点**不能**当判据：Qt 宿主
+    不建 per-widget HWND，点了跨进程子窗口后 `hwndFocus` 仍是宿主自己。
+
 ## 12. 关键文件导航
 
 | 文件 | 作用 |

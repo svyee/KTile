@@ -30,6 +30,10 @@ std::wstring foregroundWindowClass();
 struct WindowTarget {
     std::wstring processName;
     std::wstring windowClass;
+    // 根窗口自己的进程名。光标落在跨进程子窗口上时 processName 是子窗口
+    // 那一方（如微信文章区的 wechatappex.exe），而窗口本身属于 rootProcessName
+    // （weixin.exe）。黑名单要两个都认，否则「拉黑微信」对文章区不生效。
+    std::wstring rootProcessName;
     HWND window = nullptr;
 };
 
@@ -37,6 +41,11 @@ struct WindowTarget {
 // 不可见 / 最小化 / 属于本进程（自己的覆盖层）时回退前台窗口。
 // 悬停不改变前台，只看 GetForegroundWindow 会把轮盘配给错误的窗口，
 // 双窗口场景（此电脑 + 浏览器）尤其明显。
+//
+// 进程归属取光标下最深的子窗口：宿主窗口里嵌着别的进程时（微信 4.x 把
+// 公众号文章作为 WeChatAppEx.exe 的子窗口塞进主窗），光标在文章区与在
+// 聊天区会给出不同的进程名，插件才分得清。窗口类名一律取根窗口，保证
+// `进程名@窗口类名` 的写法不会因为命中子控件而失配。
 WindowTarget radialTargetWindow();
 
 }  // namespace win32
