@@ -8,6 +8,11 @@ namespace platform {
 namespace win32 {
 namespace {
 
+// 老 SDK（Win7 时代）的 shellapi.h 没有这个标志，自己补一份。
+#ifndef NIF_SHOWTIP
+#define NIF_SHOWTIP 0x00000080
+#endif
+
 // 托盘图标的唯一 ID（单实例场景下只需一个）
 constexpr UINT kTrayIconId = 1;
 
@@ -32,7 +37,7 @@ NOTIFYICONDATAW TrayIcon::makeIconData() const {
     data.cbSize = notifyIconSize();
     data.hWnd = window_;
     data.uID = kTrayIconId;
-    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = callbackMessage_;
     data.hIcon = icon_;
 
@@ -76,6 +81,12 @@ Win32Status TrayIcon::create(HWND window,
     data.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &data);
 
+    // VERSION_4 下不设 NIF_SHOWTIP 时，shell 把悬停交回应用自绘 tooltip，
+    // 不自绘就只剩一个空白黑框（Win11 实测）。ADD 时的标志不一定被采纳，
+    // 补一次 MODIFY 让标志和文本一起落地。
+    data.uFlags = NIF_TIP | NIF_SHOWTIP;
+    Shell_NotifyIconW(NIM_MODIFY, &data);
+
     created_ = true;
     return {};
 }
@@ -86,7 +97,7 @@ Win32Status TrayIcon::setTooltip(const std::wstring& tooltip) {
         return {};
     }
     NOTIFYICONDATAW data = makeIconData();
-    data.uFlags = NIF_TIP;
+    data.uFlags = NIF_TIP | NIF_SHOWTIP;
     if (Shell_NotifyIconW(NIM_MODIFY, &data) == FALSE) {
         return base::makeUnexpected(
             lastError(infrastructure::i18n::tr("error.trayTooltip")));

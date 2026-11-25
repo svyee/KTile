@@ -152,6 +152,8 @@ public:
     void onPluginVisibleTick();
     // 休眠恢复：钩子链顺序可能被电源事件打乱，重装保险一次
     void onPowerResume();
+    // Explorer 重启后重新注册托盘图标（TaskbarCreated 广播的响应）
+    void recreateTrayIcon();
 
     // ---- 轮盘菜单（由消息窗口过程调用） ----
     void onRadialShow(POINT startPoint);

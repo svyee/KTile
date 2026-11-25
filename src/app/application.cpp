@@ -300,6 +300,7 @@ LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT message,
         if (self != nullptr) {
             self->reinstallGestureHotkey("Explorer 重启（TaskbarCreated）");
             self->reinstallRadialHook("Explorer 重启（TaskbarCreated）");
+            self->recreateTrayIcon();
         }
         return 0;
     }
@@ -2867,6 +2868,9 @@ bool Application::initializeTray() {
     if (!status) {
         return false;
     }
+    // 悬停提示是 shell 画的，出问题只能从注册时的文本查起，记一份便于排查
+    infrastructure::applog::info(
+        "托盘图标已注册，提示文字: " + base::wideToUtf8Lossy(tooltip));
 
     // 图标所有权转移给 TrayIcon（它用 get() 持有，销毁时通知系统移除）。
     // HICON 要活到菜单显示期间，用全局变量持有。
@@ -2880,6 +2884,23 @@ void Application::updateTrayTooltip() {
     const std::wstring tooltip = L"KTile - " +
         platform::win32::formatHotkey(config_.activation.hotkey) + infrastructure::i18n::trw("app.tray.tooltipSuffix");
     tray_.setTooltip(tooltip);
+}
+
+void Application::recreateTrayIcon() {
+    // Explorer 重启只清掉 shell 侧的托盘注册，进程内的 HICON 仍有效，
+    // 重新 NIM_ADD 即可；托盘挂着也就丢了热键以外的一个入口，失败只记日志，
+    // 下次 Explorer 再重启时还有机会补上。
+    if (g_trayIconForMenu == nullptr || messageWindow_ == nullptr) {
+        return;
+    }
+    const std::wstring tooltip = L"KTile - " +
+        platform::win32::formatHotkey(config_.activation.hotkey) + infrastructure::i18n::trw("app.tray.tooltipSuffix");
+    const auto status = tray_.create(
+        messageWindow_, WM_TRAYICON_CALLBACK, tooltip, g_trayIconForMenu);
+    if (!status) {
+        infrastructure::applog::error(
+            "托盘图标重建失败: " + status.error().message);
+    }
 }
 
 bool Application::initializeHotkey() {
